@@ -1,22 +1,25 @@
-# PR: Slice 2 — first breach pressure
+# PR: Slice 3 — vault air pressure
 
 ## Summary
 
-This change extends Vault Tycoon's original Godot 4.7.2 desktop colony-survival prototype with its first external pressure event. A new game still starts paused with four residents in a sealed underground chamber, and the player still excavates rock, recovers salvage, builds fixtures, assigns work permissions, and balances meals, rest, lighting mood, and electrical load. At exactly 60 simulation seconds, one deterministic maintenance hatch reports a pressure breach, pauses the simulation, resets speed to 1×, and focuses the incident.
+This change extends Vault Tycoon's Godot 4.7.2 desktop colony-survival prototype with one shared, vault-wide oxygen percentage. A new wing starts at 100% oxygen. Each living resident consumes 0.08 percentage points per simulation second, while each powered Air Recycler restores 0.8 points per second. The new fixture costs 14 salvage, draws 3 power, and receives the highest power-grid priority so life support is served before lumens, Nutrient Stations, and Grow Trays during overload.
 
-The breach has a 20-second grace period. Its urgent automatic response uses the existing work model: a resident with Haul enabled delivers 4 salvage, then a resident with Craft enabled completes an 8-second patch. If the grace period expires first, the open breach damages every living resident by 2 health per simulation second until sealed. The right HUD exposes pressure, patch progress, exact blockers, and a focus action. There is no new toolbar tool, combat system, or full atmosphere simulation.
+The existing deterministic hatch timing and response remain intact: the warning fires at exactly 60 simulation seconds, the hatch opens at exactly 80 seconds if still unsealed, and the urgent automatic patch requires 4 salvage plus 8 seconds of Craft work. An open hatch now vents 2.5 oxygen points per second instead of directly damaging residents. The atmosphere HUD raises a low warning at or below 35%; at or below 15%, every living resident takes 4 health damage per second. Day-seven victory requires at least one survivor, a sealed hatch, and breathable oxygen at or above 15%.
 
-This branch is stacked on `feat/first-playable-vault-wing`. The new PR targets `main` as requested, so its comparison includes PR #1 until that first-playable branch lands; after PR #1 merges, the comparison narrows to this breach-pressure change.
+This remains a focused resource layer, not a spatial or full gas simulation. There are no room volumes, gas cells, diffusion, oxygen networks, multiple gases, or sealed-door/room graph. The `feat/vault-air-pressure` branch starts directly from the published Slice 2 commit `ae3aa711`; the Slice 3 PR targets `main` as requested and is not merged by this work. These notes do not claim an export or store package.
 
 ## Focused scope
 
-- One deterministic maintenance-hatch breach at exactly 60 simulation seconds, with first-warning auto-pause, 1× reset, and camera focus
-- A 20-second no-damage grace period followed by 2 health damage per simulation second to every living resident while the breach remains open
-- Urgent automatic breach jobs that consume 4 salvage through Haul, then require 8 seconds of Craft work to seal the hatch
-- A visible, selectable hatch marker; pressure/progress/blocker readouts; breach-first alerts; focused warning action; and a scroll-safe permission rail at 1280×720
-- Day-seven victory gated on both survival and a sealed hatch, while the existing unmanaged starvation loss remains intact
-- Version-1 snapshot compatibility with strict breach-state validation, deterministic in-flight emergency hauling, accumulator reset, and crash-recoverable file replacement
-- Focused README, review notes, and deterministic headless coverage; no export or store-package work
+- One vault-wide oxygen value that starts at 100% and remains clamped between 0% and 100%
+- Consumption of 0.08 oxygen points per second for each living resident, immediately reflecting deaths
+- A buildable Air Recycler costing 14 salvage, using 3 power, restoring 0.8 oxygen points per second while powered, and receiving the highest consumer priority
+- A low-air warning at or below 35%, plus 4 health damage per second to every living resident while oxygen is at or below 15%
+- Existing hatch timing preserved: warning and first-focus interruption at 60 seconds, opening at 80 seconds, and a 4-salvage/8-second urgent patch
+- A 2.5-point-per-second vault oxygen leak while the hatch is open, ending immediately when the hatch is sealed
+- A right-HUD atmosphere percentage, net-rate and source breakdown, severity color, breach leak readout, alerts, and a stabilization-checklist entry for a powered recycler
+- Day-seven victory gated on survival, a sealed hatch, and oxygen at or above the 15% breathable threshold
+- Optional oxygen data inside the existing version-1 snapshot; compatible version-1 saves without it load at the safe 100% full-air default
+- Focused documentation and verification coverage only; no export, mobile, store-package, final-art, or final-audio work
 
 ## How to review
 
@@ -28,24 +31,26 @@ godot --editor --path .
 
 Run the project with **F5**, select **BEGIN SHIFT**, then exercise this route:
 
-1. Keep at least 4 salvage and at least one living resident with Haul and Craft enabled, then advance to exactly 60 simulation seconds. Confirm the maintenance-hatch warning pauses immediately, resets speed to 1×, focuses the hatch, and shows a 20-second grace countdown without adding a toolbar tool.
-2. Resume and confirm an urgent Haul job delivers 4 salvage before an urgent Craft job performs the 8-second patch. Verify pressure and patch progress remain visible and the sealed confirmation clears the active danger.
-3. Select a resident during the response. Confirm the right rail brings all four work permissions into view and the breach remains reachable through its focus action.
-4. In separate runs, disable Haul, disable Craft, spend below 4 salvage, or make the hatch unreachable; confirm the HUD names the applicable blocker.
-5. Leave the breach open beyond the grace period and confirm each living resident loses 2 health per simulation second only while it remains open. Seal it and confirm damage stops immediately.
-6. Save and load during the in-flight Haul and partial Craft stages. Confirm the carrier, salvage, patch progress, clock, and other simulation state resume without duplication or loss. Also load a compatible schema-version-1 snapshot without breach data and confirm safe defaults.
-7. Continue until day seven; verify victory waits for both a living resident and a sealed hatch. An untouched wing should still lose from starvation after automatically containing the breach.
+1. On the opening briefing, confirm the stabilization checklist includes **Power an air recycler**. Begin the shift and verify **VAULT ATMOSPHERE** starts at 100%; with four living residents and no powered recycler, its use and net rate should both reflect 0.32 points per second of consumption.
+2. Excavate enough salvage, build a Charge Node, select **AIR $14**, and place an Air Recycler blueprint on carved floor. Confirm normal Haul/Craft work supplies 14 salvage and assembles it, then verify the powered fixture draws 3 power and adds 0.8 points per second of recycling. With four residents, a sealed hatch, and one powered recycler, the net rate is +0.48 points per second until the 100% cap.
+3. Create a power overload and confirm the Air Recycler is served before the lumen, Nutrient Station, and Grow Tray. Remove or restore sufficient supply and confirm recycler output and the displayed net oxygen rate update with its powered state.
+4. Keep at least 4 salvage and at least one living resident with Haul and Craft enabled, then advance to exactly 60 simulation seconds. Confirm the maintenance-hatch warning pauses immediately, resets speed to 1×, focuses the hatch, and shows the remaining grace period without adding a breach toolbar tool.
+5. In one run, let the hatch reach exactly 80 seconds unsealed. Confirm it changes to open and the atmosphere readout adds a 2.5-point-per-second leak until the patch completes. In another run, confirm an urgent Haul job delivers 4 salvage before an urgent Craft job performs the 8-second patch, and that sealing stops the leak immediately.
+6. Exercise the exact oxygen boundaries: at or below 35%, confirm the low warning; at or below 15%, confirm every living resident takes 4 health damage per second. Above 15%, oxygen alone must not damage residents. Confirm a resident death reduces subsequent consumption by 0.08 points per second.
+7. Select a resident during the hatch response and confirm all work permissions remain reachable. In separate runs, disable Haul, disable Craft, spend below 4 salvage, or make the hatch unreachable; confirm the breach HUD names the applicable blocker.
+8. Save and load with non-default oxygen, an in-flight hatch Haul, and partial Craft progress. Confirm oxygen, carrier, salvage, patch progress, clock, powered-recycler state, and other simulation state resume without duplication or loss. Also load a compatible schema-version-1 snapshot without an oxygen payload and confirm it receives the 100% full-air default; a missing optional breach payload should continue to receive its existing safe defaults.
+9. Continue until day seven and test the gates independently. Victory must wait while the hatch is open or oxygen is below 15%, then become available once at least one resident remains alive, the hatch is sealed, and oxygen is at least 15%.
 
-For a quicker approach to the trigger, use 3× speed. The first warning must still pause at the exact threshold and reset speed to 1× before the grace period can advance. A complete survival playthrough still requires active resource and job management.
+For a quicker approach to the trigger and oxygen thresholds, use 3× speed. The first warning must still pause at the exact 60-second threshold and reset speed to 1×; the hatch must remain in its warning phase through 79.9 seconds and open at 80 seconds. A complete survival playthrough still requires active resource, power, and job management.
 
 ## Testing status
 
 - Godot 4.7.2 completed a headless editor import/parse and a five-frame runtime boot without script or runtime errors.
-- The native suite passes **19 cases / 296 assertions**. It retains the first-slice coverage and adds hatch reservation, exact 59.9/60/79.9/80-second boundaries, one-shot pause/focus interruption, breach-first alerts, urgent-job ordering and blockers, exact patch work, prepared no-damage containment, open-breach damage, immediate damage stop, clock-consistent state validation, legacy hatch-fixture compatibility, deterministic in-flight hauling, active and legacy save/load, interrupted-write recovery, preserved unmanaged loss, and the sealed-only day-seven win gate.
-- An Xvfb/OpenGL smoke rendered the warning, focused Resume action, visible hatch marker, compound breach alerts, active Haul response, and the selected-resident permission rail at 1280×720 through Mesa llvmpipe. The rail scrolls and automatically reveals all four work permissions without overlapping the map or bottom toolbar.
-- No export, store package, signing, notarization, mobile package, network service, analytics, ad SDK, or payment SDK was introduced or exercised.
+- The native suite passes **24 cases / 390 assertions**. Slice 3 coverage includes oxygen initialization and clamping; per-living-resident consumption; powered and unpowered recycler output; highest-priority power allocation; exact low/critical threshold behavior and partial-step suffocation accounting; exact 60/80-second hatch boundaries, including a patch completed at 80 seconds; open-hatch oxygen loss and immediate stop on seal; active, malformed, and legacy oxygen snapshots; saved-win invariant rejection; and player-order plus managed day-seven survival plans.
+- A 1280×720 Xvfb/OpenGL smoke rendered the opening briefing, vault-atmosphere meter and rates, right-rail oxygen and breach readouts, and the complete two-row toolbar with **AIR $14**, Save, and Load visible. Mesa llvmpipe was used; missing host audio correctly fell back to Godot's dummy driver.
+- No export, store package, signing, notarization, mobile package, network service, analytics, ad SDK, payment SDK, or final art/audio validation was performed.
 
-Reproduction commands (the workspace download is shown; use `godot` if 4.7.2 is installed on `PATH`):
+Reproduction commands (an example local binary path is shown; use `godot` if 4.7.2 is installed on `PATH`):
 
 ```bash
 GODOT_BIN=/tmp/godot-4.7.2/Godot_v4.7.2-stable_linux.x86_64
@@ -53,20 +58,22 @@ GODOT_BIN=/tmp/godot-4.7.2/Godot_v4.7.2-stable_linux.x86_64
 scripts/check.sh "$GODOT_BIN"
 ```
 
+An extended interactive smoke can additionally exercise low/critical severity colors, the powered-recycler checklist transition, overload changes, hatch focus, and the independent day-seven gates.
+
 ## Known limitations
 
-- Placeholder geometry and colors stand in for final breach art, animation, sound, and effects.
-- Breach pressure is one scripted maintenance-hatch incident, not a procedural incident director, combat encounter, spatial pressure model, oxygen network, or room-sealing simulation.
+- Oxygen is one aggregate percentage for the entire vault. It has no spatial cells, room volumes, diffusion, multiple gases, pressure zones, oxygen network, or sealed-door/room graph.
+- The pressure event remains one scripted maintenance-hatch incident rather than a procedural incident director or combat encounter.
+- Placeholder geometry and colors remain; final art, animation, sound, and effects are not part of this slice.
 - Job control is permission-based rather than a full priority matrix, schedule system, or direct-move command system.
 - The single local save slot has no save browser, migration path beyond schema rejection, cloud sync, or conflict recovery.
-- Keyboard and mouse are required. The HUD has not been adapted for touch, handheld safe areas, ultrawide layouts, or small screens.
-- Balance is first-pass and needs observed full-run tuning, especially food timing, salvage recovery, breach workload/damage, and job contention.
+- Keyboard and mouse are required. There is no mobile export or touch/safe-area adaptation.
+- Balance is first-pass and needs observed full-run tuning, especially recycler timing, power contention, oxygen recovery, food timing, salvage recovery, and breach workload.
 
 ## Next steps
 
-1. Run and record a complete interactive Linux day-seven survival smoke plus a partial-patch save/load regression.
-2. Tune breach damage and urgent-job priority from full-run observations so both recovery and failure remain legible.
-3. Add focused coverage for worker death or permission changes during an in-flight patch.
-4. Replace placeholder presentation only when an original art/audio pass is separately scoped.
+1. Record a complete interactive Linux day-seven survival smoke plus oxygen and partial-patch save/load regressions.
+2. Tune oxygen/recycler balance from full-run observations while preserving the fixed Slice 3 rules and scope.
+3. Add focused coverage for power loss during critical-air recovery and worker death during an in-flight patch.
 
-Raiders, enemies, weapons, combat, repeated or procedural incidents, pressure zones, oxygen networks, room-sealing simulation, and any other full atmosphere model remain out of scope. Surface expeditions, caravans, faction diplomacy, research, mods, multiplayer, IAP, ads, analytics SDKs, and store packaging also remain explicitly out of scope for these follow-ups.
+Surface play, caravans, factions, research, mods, multiplayer, IAP, ads, analytics, store packaging, final art/audio, and mobile export remain out of scope. So do raiders, enemies, weapons, combat, repeated/procedural incidents, spatial gas or pressure zones, oxygen networks, multiple-room sealing, a sealed-door graph, and every other form of full atmosphere simulation.

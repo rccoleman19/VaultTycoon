@@ -14,6 +14,7 @@ const BUILD_KIND_BY_TOOL := {
 	"grow": VaultBuilding.Kind.GROW_TRAY,
 	"kitchen": VaultBuilding.Kind.KITCHEN,
 	"stockpile": VaultBuilding.Kind.STOCKPILE,
+	"air": VaultBuilding.Kind.AIR_RECYCLER,
 }
 
 @onready var map_grid: MapGrid = $MapGrid
@@ -22,6 +23,7 @@ const BUILD_KIND_BY_TOOL := {
 @onready var job_system: JobSystem = $JobSystem
 @onready var power_grid: PowerGrid = $PowerGrid
 @onready var food_system: FoodSystem = $FoodSystem
+@onready var oxygen_system: OxygenSystem = $OxygenSystem
 @onready var day_cycle: DayCycle = $DayCycle
 @onready var breach_system: BreachSystem = $BreachSystem
 @onready var save_load: SaveLoad = $SaveLoad
@@ -91,6 +93,7 @@ func new_game(show_tutorial := false) -> void:
 	map_grid.new_wing()
 	job_system.reset()
 	food_system.reset()
+	oxygen_system.reset()
 	day_cycle.reset()
 	breach_system.reset()
 	ended = false
@@ -116,11 +119,12 @@ func new_game(show_tutorial := false) -> void:
 		resident.died.connect(_on_resident_died)
 		residents.append(resident)
 	power_grid.recalculate(buildings)
+	oxygen_system.refresh_rates(residents, buildings, false)
 	world_camera.position = map_grid.cell_to_world(map_grid.get_chamber_center())
 	world_camera.zoom = Vector2.ONE
 	tutorial_open = show_tutorial
 	user_paused = true
-	status_message = "Wing initialized. Stabilize supplies and monitor the pressure hatch."
+	status_message = "Wing initialized. Stabilize supplies, oxygen, and the pressure hatch."
 	status_message_left = 5.0
 	player_orders.show_briefing(show_tutorial)
 	player_orders.show_breach_warning(
@@ -134,7 +138,7 @@ func begin_shift() -> void:
 	tutorial_open = false
 	user_paused = false
 	player_orders.show_briefing(false)
-	status_message = "Shift running. Dig, furnish, power, feed, and watch the seal monitor."
+	status_message = "Shift running. Dig, furnish, power life support, feed, and watch the seal monitor."
 	status_message_left = 5.0
 
 
@@ -155,7 +159,24 @@ func _simulation_step(delta_seconds: float) -> void:
 		DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE,
 	)
 	var phase_before_step := breach_system.phase
-	breach_system.advance(delta_seconds, next_elapsed)
+	var open_boundary := BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS
+	var opening_at_step_end := (
+		phase_before_step == BreachSystem.Phase.WARNING
+		and next_elapsed >= open_boundary
+	)
+	# Give patch work performed during 79.9-80.0 its complete interval before
+	# deciding whether the hatch is still unsealed at the opening boundary.
+	var breach_elapsed := open_boundary - 0.000001 if opening_at_step_end else next_elapsed
+	breach_system.advance(delta_seconds, breach_elapsed)
+	# A hatch that reaches the OPEN boundary at the end of this fixed tick only
+	# starts venting on the following tick. This preserves the exact 80-second
+	# grace boundary while keeping oxygen loss deterministic.
+	oxygen_system.advance(
+		delta_seconds,
+		residents,
+		buildings,
+		phase_before_step == BreachSystem.Phase.OPEN,
+	)
 	if get_alive_count() <= 0:
 		_finish_loss()
 		return
@@ -168,10 +189,13 @@ func _simulation_step(delta_seconds: float) -> void:
 		day_cycle.advance(delta_seconds)
 		return
 	job_system.advance(delta_seconds)
+	if opening_at_step_end:
+		breach_system.advance(0.0, next_elapsed)
 	food_system.advance(delta_seconds, buildings)
 	power_grid.recalculate(buildings)
+	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	day_cycle.advance(delta_seconds)
-	if day_cycle.completed and breach_system.is_sealed():
+	if day_cycle.completed and breach_system.is_sealed() and oxygen_system.is_breathable():
 		_finish_win()
 
 
@@ -204,7 +228,7 @@ func set_speed(speed: int) -> void:
 
 
 func set_tool(tool: String) -> void:
-	active_tool = tool if tool in ["select", "dig", "cancel", "bed", "lamp", "generator", "grow", "kitchen", "stockpile"] else "select"
+	active_tool = tool if tool in ["select", "dig", "cancel", "bed", "lamp", "generator", "grow", "kitchen", "stockpile", "air"] else "select"
 	status_message = _tool_help(active_tool)
 	status_message_left = 4.0
 	map_grid.preview_tool = active_tool
@@ -385,6 +409,7 @@ func create_snapshot() -> Dictionary:
 		"buildings": building_data,
 		"residents": resident_data,
 		"food": food_system.serialize(),
+		"oxygen": oxygen_system.serialize(),
 		"day": day_cycle.serialize(),
 		"breach": breach_system.serialize(),
 		"jobs": job_system.serialize(),
@@ -424,6 +449,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	if residents.is_empty():
 		return false
 	food_system.deserialize(snapshot.get("food", {}))
+	oxygen_system.deserialize(snapshot.get("oxygen", {}))
 	day_cycle.deserialize(snapshot.get("day", {}))
 	breach_system.deserialize(snapshot.get("breach", {}), day_cycle.elapsed_seconds)
 	next_building_id = int(snapshot.get("next_building_id", 1))
@@ -435,6 +461,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 		world_camera.zoom = Vector2.ONE * clampf(float(camera_data[2]), 0.75, 1.8)
 	job_system.rebuild_from_state(snapshot.get("jobs", {}))
 	power_grid.recalculate(buildings)
+	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	selected_resident_id = -1
 	selected_building_id = -1
 	selected_breach = false
@@ -456,31 +483,63 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	var map_data: Variant = snapshot.get("map")
 	var resident_data: Variant = snapshot.get("residents")
 	var building_data: Variant = snapshot.get("buildings")
+	var day_data: Variant = snapshot.get("day", {})
 	var breach_data: Variant = snapshot.get("breach", {})
+	var oxygen_data: Variant = snapshot.get("oxygen", {})
 	var jobs_data: Variant = snapshot.get("jobs", {})
 	if not map_data is Dictionary or not resident_data is Array or not building_data is Array:
 		return false
+	if snapshot.has("ended") and typeof(snapshot.ended) != TYPE_BOOL:
+		return false
+	if snapshot.has("outcome") and typeof(snapshot.outcome) != TYPE_STRING:
+		return false
 	if snapshot.has("breach"):
-		var day_data: Variant = snapshot.get("day")
 		if not day_data is Dictionary:
 			return false
 		if not breach_system.is_serialized_data_valid(breach_data, day_data.get("elapsed_seconds")):
 			return false
+	if snapshot.has("oxygen") and not oxygen_system.is_serialized_data_valid(oxygen_data):
+		return false
 	if resident_data.is_empty() or resident_data.size() > 5:
 		return false
 	var saved_cells: Variant = map_data.get("cells")
 	if not saved_cells is Array or saved_cells.size() != MapGrid.WIDTH * MapGrid.HEIGHT:
 		return false
+	var living_residents := 0
 	for entry: Variant in resident_data:
 		if not entry is Dictionary or not entry.get("position") is Array or not entry.get("needs") is Dictionary:
 			return false
 		if entry.position.size() < 2:
 			return false
+		if bool(entry.get("alive", true)):
+			living_residents += 1
 	for entry: Variant in building_data:
 		if not entry is Dictionary or not entry.get("cell") is Array or entry.cell.size() < 2:
 			return false
 	if not job_system.is_serialized_breach_data_valid(jobs_data, breach_data, resident_data):
 		return false
+
+	var saved_ended := bool(snapshot.get("ended", false))
+	var saved_outcome := str(snapshot.get("outcome", ""))
+	if saved_ended != (saved_outcome in ["win", "loss"]):
+		return false
+	if saved_outcome == "loss" and living_residents > 0:
+		return false
+	if saved_outcome == "win":
+		if living_residents <= 0 or not day_data is Dictionary:
+			return false
+		var elapsed_value: Variant = day_data.get("elapsed_seconds")
+		if typeof(elapsed_value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(elapsed_value)):
+			return false
+		if float(elapsed_value) < DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE:
+			return false
+		if snapshot.has("breach") and int(breach_data.phase) != BreachSystem.Phase.SEALED:
+			return false
+		var saved_oxygen := OxygenSystem.STARTING_OXYGEN
+		if snapshot.has("oxygen"):
+			saved_oxygen = float(oxygen_data.oxygen)
+		if saved_oxygen < OxygenSystem.CRITICAL_OXYGEN_THRESHOLD:
+			return false
 	return true
 
 
@@ -657,19 +716,19 @@ func _on_breach_warning_started() -> void:
 	map_grid.preview_tool = active_tool
 	focus_breach()
 	player_orders.show_breach_warning(true)
-	status_message = "PRESSURE WARNING: shift paused at 1x. Four salvage and Haul/Craft response required."
+	status_message = "PRESSURE WARNING: patch the hatch before it starts venting vault oxygen."
 	status_message_left = BreachSystem.GRACE_SECONDS
 
 
 func _on_breach_opened() -> void:
 	player_orders.show_breach_warning(false)
-	status_message = "BREACH OPEN: health is draining until the hatch is patched."
+	status_message = "BREACH OPEN: vault oxygen is venting until the hatch is patched."
 	status_message_left = 12.0
 
 
 func _on_breach_sealed() -> void:
 	player_orders.show_breach_warning(false)
-	status_message = "FIRST BREACH CONTAINED: pressure hatch is stable."
+	status_message = "FIRST BREACH CONTAINED: oxygen loss stopped; verify life support recovery."
 	status_message_left = 8.0
 
 
@@ -705,4 +764,5 @@ func _tool_help(tool: String) -> String:
 		"grow": return "GROW TRAY: produces raw food when powered (12 salvage, 3 power)."
 		"kitchen": return "NUTRIENT STATION: cooks %d raw food into %d meal (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
 		"stockpile": return "SALVAGE BAY: hauling destination (4 salvage)."
+		"air": return "AIR RECYCLER: restores vault oxygen when powered (14 salvage, 3 power)."
 	return ""

@@ -46,13 +46,13 @@ func get_status_text() -> String:
 
 func _consumer_before(a: VaultBuilding, b: VaultBuilding) -> bool:
 	var priorities := {
-		VaultBuilding.Kind.LAMP: 0,
-		VaultBuilding.Kind.KITCHEN: 1,
-		VaultBuilding.Kind.GROW_TRAY: 2,
+		VaultBuilding.Kind.AIR_RECYCLER: 0,
+		VaultBuilding.Kind.LAMP: 1,
+		VaultBuilding.Kind.KITCHEN: 2,
+		VaultBuilding.Kind.GROW_TRAY: 3,
 	}
 	var a_priority: int = priorities.get(a.kind, 10)
 	var b_priority: int = priorities.get(b.kind, 10)
 	if a_priority == b_priority:
 		return a.building_id < b.building_id
 	return a_priority < b_priority
-

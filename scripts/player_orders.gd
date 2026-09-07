@@ -9,6 +9,8 @@ var power_label: Label
 var pause_button: Button
 var objective_label: Label
 var alert_label: Label
+var oxygen_label: Label
+var oxygen_bar: ProgressBar
 var breach_label: Label
 var breach_bar: ProgressBar
 var breach_focus_button: Button
@@ -110,7 +112,7 @@ func _build_interface() -> void:
 	side.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right_scroll.add_child(side)
 	objective_label = Label.new()
-	objective_label.text = "OBJECTIVE // SURVIVE 7 DAYS + SEAL"
+	objective_label.text = "OBJECTIVE // 7 DAYS · SEAL · O2"
 	objective_label.add_theme_color_override("font_color", Color("efc56b"))
 	objective_label.add_theme_font_size_override("font_size", 16)
 	side.add_child(objective_label)
@@ -118,6 +120,20 @@ func _build_interface() -> void:
 	alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	alert_label.custom_minimum_size.y = 38
 	side.add_child(alert_label)
+	var oxygen_header := Label.new()
+	oxygen_header.text = "VAULT ATMOSPHERE"
+	oxygen_header.add_theme_color_override("font_color", Color("8faeb7"))
+	side.add_child(oxygen_header)
+	oxygen_label = Label.new()
+	oxygen_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	oxygen_label.custom_minimum_size.y = 38
+	side.add_child(oxygen_label)
+	oxygen_bar = ProgressBar.new()
+	oxygen_bar.min_value = 0.0
+	oxygen_bar.max_value = OxygenSystem.MAX_OXYGEN
+	oxygen_bar.show_percentage = false
+	oxygen_bar.custom_minimum_size.y = 10
+	side.add_child(oxygen_bar)
 	var breach_header := Label.new()
 	breach_header.text = "PRESSURE HATCH"
 	breach_header.add_theme_color_override("font_color", Color("8faeb7"))
@@ -192,7 +208,7 @@ func _build_interface() -> void:
 	bottom_panel.set_anchor(SIDE_BOTTOM, 1.0)
 	bottom_panel.offset_left = 8.0
 	bottom_panel.offset_right = -VaultGame.RIGHT_PANEL_WIDTH - 8.0
-	bottom_panel.offset_top = -86.0
+	bottom_panel.offset_top = -126.0
 	bottom_panel.offset_bottom = -8.0
 	bottom_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	bottom_panel.add_theme_stylebox_override("panel", _panel_style(Color("121b21"), Color("45616a")))
@@ -204,9 +220,11 @@ func _build_interface() -> void:
 	tool_status.text = "SELECT"
 	tool_status.add_theme_color_override("font_color", Color("efc56b"))
 	bottom_content.add_child(tool_status)
-	var command_row := HBoxContainer.new()
-	command_row.add_theme_constant_override("separation", 4)
-	bottom_content.add_child(command_row)
+	var command_grid := GridContainer.new()
+	command_grid.columns = 6
+	command_grid.add_theme_constant_override("h_separation", 5)
+	command_grid.add_theme_constant_override("v_separation", 4)
+	bottom_content.add_child(command_grid)
 	var tools := [
 		["select", "SELECT", "Inspect residents and fixtures; Esc returns here", 76],
 		["dig", "DIG [E]", "Mark rock for excavation", 68],
@@ -217,6 +235,7 @@ func _build_interface() -> void:
 		["grow", "GROW $12", "3 power; yields raw food", 90],
 		["kitchen", "NUTRI $10", "Nutrient Station: 2 power; cooks meals", 96],
 		["stockpile", "BAY $4", "Salvage Bay: hauling destination", 64],
+		["air", "AIR $14", "Air Recycler: 3 power; restores vault oxygen", 86],
 	]
 	for definition in tools:
 		var button := Button.new()
@@ -226,19 +245,19 @@ func _build_interface() -> void:
 		button.clip_text = true
 		button.pressed.connect(_on_tool_pressed.bind(definition[0]))
 		command_buttons[definition[0]] = button
-		command_row.add_child(button)
+		command_grid.add_child(button)
 	var save_button := Button.new()
 	save_button.text = "SAVE"
 	save_button.tooltip_text = "Save one local wing slot"
 	save_button.custom_minimum_size = Vector2(56, 36)
 	save_button.pressed.connect(func() -> void: game.save_game())
-	command_row.add_child(save_button)
+	command_grid.add_child(save_button)
 	var load_button := Button.new()
 	load_button.text = "LOAD"
 	load_button.tooltip_text = "Load the local wing slot"
 	load_button.custom_minimum_size = Vector2(56, 36)
 	load_button.pressed.connect(func() -> void: game.load_game())
-	command_row.add_child(load_button)
+	command_grid.add_child(load_button)
 
 	_build_briefing()
 	_build_breach_warning()
@@ -266,7 +285,7 @@ func _build_briefing() -> void:
 	title.add_theme_color_override("font_color", Color("75d4b4"))
 	content.add_child(title)
 	var intro := Label.new()
-	intro.text = "Four residents are sealed below ground with emergency rations and a failing core. Stabilize food, rest, light, and power before the maintenance hatch pressure test. When its warning interrupts the shift, Haul four salvage and keep Craft enabled to patch it before decompression."
+	intro.text = "Four residents share one finite vault atmosphere. Build and power an Air Recycler while stabilizing food, rest, light, and power. When the hatch warning interrupts the shift, Haul four salvage and keep Craft enabled: an open breach rapidly vents oxygen, and critically low air causes suffocation."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	intro.custom_minimum_size.y = 78
 	content.add_child(intro)
@@ -358,7 +377,7 @@ func _build_breach_warning() -> void:
 	title.add_theme_color_override("font_color", Color("fff1ba"))
 	content.add_child(title)
 	var body := Label.new()
-	body.text = "The east maintenance hatch is beginning to fail. The shift is paused at 1× and the hatch is focused. Keep 4 salvage available and enable HAUL and CRAFT: residents will deliver an emergency patch, then reinforce it before the 20-second grace period expires."
+	body.text = "The east maintenance hatch is beginning to fail. The shift is paused at 1× and the hatch is focused. Keep 4 salvage available and enable HAUL and CRAFT: residents will deliver an emergency patch, then reinforce it before the 20-second grace period expires and vault oxygen begins venting."
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.custom_minimum_size.y = 100
 	content.add_child(body)
@@ -395,6 +414,7 @@ func refresh() -> void:
 		button.disabled = game.tutorial_open or game.ended
 		button.modulate = Color("efc56b") if key == game.active_tool else Color.WHITE
 	_refresh_roster()
+	_refresh_oxygen()
 	_refresh_breach()
 	_refresh_inspector()
 	_refresh_alerts()
@@ -404,7 +424,14 @@ func refresh() -> void:
 func _refresh_roster() -> void:
 	var parts: Array[String] = []
 	for resident in game.residents:
-		parts.append("%d:%d:%d:%s" % [resident.resident_id, floori(resident.needs.food), floori(resident.needs.rest), resident.state])
+		parts.append("%d:%d:%d:%d:%d:%s" % [
+			resident.resident_id,
+			floori(resident.needs.food),
+			floori(resident.needs.rest),
+			floori(resident.needs.light_mood),
+			floori(resident.needs.health),
+			resident.state,
+		])
 	var signature := "|".join(parts)
 	if signature == _last_roster_signature:
 		return
@@ -445,18 +472,19 @@ func _refresh_inspector() -> void:
 		inspector_title.text = "MAINTENANCE HATCH"
 		match game.breach_system.phase:
 			BreachSystem.Phase.WARNING:
-				inspector_state.text = "Pressure warning · %d%%\nDamage in %s\n%s" % [
+				inspector_state.text = "Seal load · %d%%\nO2 venting in %s\n%s" % [
 					roundi(game.breach_system.get_pressure_percent()),
 					_format_seconds(game.breach_system.get_time_to_open()),
 					game.job_system.get_breach_response_status(),
 				]
 			BreachSystem.Phase.OPEN:
-				inspector_state.text = "BREACH OPEN · WING-WIDE HEALTH DRAIN\nPatch work remaining: %.1fs\n%s" % [
+				inspector_state.text = "BREACH OPEN · O2 -%.1f%%/s\nPatch work remaining: %.1fs\n%s" % [
+					OxygenSystem.OPEN_BREACH_LOSS_PER_SECOND,
 					game.breach_system.patch_work_left,
 					game.job_system.get_breach_response_status(),
 				]
 			BreachSystem.Phase.SEALED:
-				inspector_state.text = "CONTAINED · Patch complete\nNo further pressure damage."
+				inspector_state.text = "CONTAINED · Patch complete\nNo further breach oxygen loss."
 			_:
 				inspector_state.text = "Seal monitor nominal."
 		_hide_needs_and_work()
@@ -471,6 +499,8 @@ func _refresh_inspector() -> void:
 				inspector_state.text += "\nGrowth: %d%% · yields 1 raw" % floori(building.production_progress / FoodSystem.GROW_SECONDS * 100.0)
 			elif building.kind == VaultBuilding.Kind.KITCHEN:
 				inspector_state.text += "\nRecipe: %d raw -> %d meal" % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
+			elif building.kind == VaultBuilding.Kind.AIR_RECYCLER:
+				inspector_state.text += "\nO2 recovery: +%.1f%%/s" % OxygenSystem.RECYCLER_OUTPUT_PER_SECOND
 		else:
 			inspector_state.text = "Blueprint · Salvage %d/%d\nAssembly remaining: %.1fs" % [building.delivered, building.get_cost(), building.construction_left]
 		_hide_needs_and_work()
@@ -482,8 +512,12 @@ func _refresh_inspector() -> void:
 
 func _refresh_alerts() -> void:
 	var alerts: Array[String] = []
+	if game.oxygen_system.is_critical():
+		alerts.append("OXYGEN CRITICAL")
+	elif game.oxygen_system.is_low():
+		alerts.append("OXYGEN LOW")
 	if game.breach_system.phase == BreachSystem.Phase.OPEN:
-		alerts.append("BREACH OPEN · HEALTH DRAIN")
+		alerts.append("BREACH OPEN · O2 VENTING")
 	elif game.breach_system.phase == BreachSystem.Phase.WARNING:
 		alerts.append("SEAL WARNING · %s" % _format_seconds(game.breach_system.get_time_to_open()))
 	if game.food_system.meals < game.get_alive_count():
@@ -506,6 +540,27 @@ func _refresh_alerts() -> void:
 	alert_label.add_theme_color_override("font_color", Color("75d4b4") if alerts.is_empty() else Color("ef6860"))
 
 
+func _refresh_oxygen() -> void:
+	var oxygen := game.oxygen_system
+	var rate_prefix := "+" if oxygen.net_rate > 0.0001 else ""
+	oxygen_label.text = "O2 %d%% · %s%.2f%%/s\nUSE %.2f · RECYCLE %.2f" % [
+		roundi(oxygen.oxygen),
+		rate_prefix,
+		oxygen.net_rate,
+		oxygen.consumption_rate,
+		oxygen.recycler_output_rate,
+	]
+	if oxygen.breach_loss_rate > 0.0:
+		oxygen_label.text += " · LEAK %.1f" % oxygen.breach_loss_rate
+	oxygen_bar.value = oxygen.oxygen
+	if oxygen.is_critical():
+		oxygen_bar.modulate = Color("ef6860")
+	elif oxygen.is_low():
+		oxygen_bar.modulate = Color("efc56b")
+	else:
+		oxygen_bar.modulate = Color("75d4b4")
+
+
 func _refresh_breach() -> void:
 	var breach := game.breach_system
 	breach_focus_button.visible = breach.phase != BreachSystem.Phase.DORMANT
@@ -515,7 +570,7 @@ func _refresh_breach() -> void:
 			breach_bar.value = 0.0
 			breach_bar.modulate = Color("8faeb7")
 		BreachSystem.Phase.WARNING:
-			breach_label.text = "WARNING · PRESSURE %d%% · %s\nPATCH %d/%d\n%s" % [
+			breach_label.text = "WARNING · SEAL LOAD %d%% · %s\nPATCH %d/%d\n%s" % [
 				roundi(breach.get_pressure_percent()),
 				_format_seconds(breach.get_time_to_open()),
 				breach.patch_delivered,
@@ -525,8 +580,8 @@ func _refresh_breach() -> void:
 			breach_bar.value = breach.get_pressure_percent()
 			breach_bar.modulate = Color("efc56b")
 		BreachSystem.Phase.OPEN:
-			breach_label.text = "BREACH OPEN · HEALTH -%.0f/s\nPATCH %d/%d · WORK %.1fs\n%s" % [
-				BreachSystem.OPEN_DAMAGE_PER_SECOND,
+			breach_label.text = "BREACH OPEN · O2 -%.1f%%/s\nPATCH %d/%d · WORK %.1fs\n%s" % [
+				OxygenSystem.OPEN_BREACH_LOSS_PER_SECOND,
 				breach.patch_delivered,
 				BreachSystem.PATCH_COST,
 				breach.patch_work_left,
@@ -535,7 +590,7 @@ func _refresh_breach() -> void:
 			breach_bar.value = 100.0
 			breach_bar.modulate = Color("ef6860")
 		BreachSystem.Phase.SEALED:
-			breach_label.text = "CONTAINED · PATCH COMPLETE\nHATCH STABLE · NO HEALTH DRAIN"
+			breach_label.text = "CONTAINED · PATCH COMPLETE\nHATCH STABLE · NO ACTIVE LEAK"
 			breach_bar.value = 0.0
 			breach_bar.modulate = Color("75d4b4")
 
@@ -549,6 +604,7 @@ func _refresh_checklist() -> void:
 		[game.map_grid.get_floor_cells().size() >= initial_floor_count + 6, "Complete six excavations"],
 		[game.get_completed_building_count(VaultBuilding.Kind.BED) >= 2, "Assemble at least two bunks"],
 		[game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) >= 1, "Add a charge node"],
+		[game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) >= 1, "Power an air recycler"],
 		[game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) >= 1, "Power a grow tray"],
 		[game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) >= 1, "Assemble a nutrient station"],
 		[game.breach_system.is_sealed(), "Contain the first pressure breach"],
@@ -593,11 +649,11 @@ func show_outcome(won: bool, survivors: int) -> void:
 	if won:
 		outcome_title.text = "SEAL STABILIZED"
 		outcome_title.add_theme_color_override("font_color", Color("75d4b4"))
-		outcome_text.text = "The pressure breach was contained and the wing remained inhabited through seven full days. %d resident%s survived. Your local victory state has been saved." % [survivors, "" if survivors == 1 else "s"]
+		outcome_text.text = "The pressure breach was contained, breathable air was restored, and the wing remained inhabited through seven full days. %d resident%s survived. Your local victory state has been saved." % [survivors, "" if survivors == 1 else "s"]
 	else:
 		outcome_title.text = "WING LOST"
 		outcome_title.add_theme_color_override("font_color", Color("ef6860"))
-		outcome_text.text = "No residents remain alive. Reopen the last daily checkpoint or initialize a new wing and stabilize supplies, power, and the pressure hatch sooner."
+		outcome_text.text = "No residents remain alive. Reopen the last daily checkpoint or initialize a new wing and stabilize supplies, powered air recycling, and the pressure hatch sooner."
 
 
 func hide_outcome() -> void:

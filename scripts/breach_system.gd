@@ -12,7 +12,6 @@ const PATCH_COST := 4
 const PATCH_WORK_SECONDS := 8.0
 const WARNING_AT_SECONDS := 60.0
 const GRACE_SECONDS := 20.0
-const OPEN_DAMAGE_PER_SECOND := 2.0
 
 const _OPEN_AT_SECONDS := WARNING_AT_SECONDS + GRACE_SECONDS
 
@@ -48,22 +47,16 @@ func reset() -> void:
 	queue_redraw()
 
 
-func advance(delta_seconds: float, elapsed_seconds: float) -> void:
-	var safe_delta := _finite_nonnegative(delta_seconds)
+func advance(_delta_seconds: float, elapsed_seconds: float) -> void:
+	# Slice 3 moves the open-hatch consequence into OxygenSystem, which owns
+	# both air loss and suffocation damage.
 	var step_end := _finite_nonnegative(elapsed_seconds)
-	var step_start := maxf(0.0, step_end - safe_delta)
 	_elapsed_seconds = step_end
 
 	if phase == Phase.DORMANT and step_end >= WARNING_AT_SECONDS:
 		_enter_warning(true)
 	if phase == Phase.WARNING and step_end >= _OPEN_AT_SECONDS:
 		_enter_open(true)
-
-	if phase == Phase.OPEN:
-		# A coarse/manual step may straddle the exact opening boundary. Only
-		# its post-grace portion is dangerous, matching fixed 0.1-second ticks.
-		var open_seconds := maxf(0.0, step_end - maxf(step_start, _OPEN_AT_SECONDS))
-		_damage_living_residents(open_seconds * OPEN_DAMAGE_PER_SECOND)
 
 	if phase != Phase.DORMANT:
 		queue_redraw()
@@ -75,6 +68,10 @@ func is_response_active() -> bool:
 
 func is_sealed() -> bool:
 	return phase == Phase.SEALED
+
+
+func is_open() -> bool:
+	return phase == Phase.OPEN
 
 
 func needs_supply() -> bool:
@@ -308,17 +305,6 @@ func _enter_sealed(emit_event: bool) -> void:
 		_sealed_emitted = true
 		breach_sealed.emit()
 	queue_redraw()
-
-
-func _damage_living_residents(amount: float) -> void:
-	if amount <= 0.0 or game == null:
-		return
-	var residents_value: Variant = game.get("residents")
-	if not residents_value is Array:
-		return
-	for resident: Variant in residents_value:
-		if resident is VaultResident and resident.alive:
-			resident.apply_damage(amount)
 
 
 func _is_number(value: Variant) -> bool:

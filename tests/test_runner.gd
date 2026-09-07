@@ -3,6 +3,7 @@ extends SceneTree
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 const SAVE_TEST_PATH := "user://headless_round_trip.json"
 const BREACH_SAVE_TEST_PATH := "user://headless_breach_round_trip.json"
+const OXYGEN_SAVE_TEST_PATH := "user://headless_oxygen_round_trip.json"
 const ATOMIC_SAVE_TEST_PATH := "user://headless_atomic_save.json"
 
 var _assertion_count := 0
@@ -23,17 +24,22 @@ func _run() -> void:
 	_run_case("blueprints are supplied and constructed", _test_blueprint_build)
 	_run_case("cancel previews and powered checklist match their actions", _test_order_preview_and_checklist)
 	_run_case("power is allocated by supply and priority", _test_power_allocation)
+	_run_case("living residents consume shared oxygen within hard bounds", _test_oxygen_consumption_and_clamping)
+	_run_case("air recyclers require power and retain life-support priority", _test_air_recycler_power_and_rates)
+	_run_case("critical oxygen damages only for exact exposure time", _test_oxygen_threshold_damage)
 	_run_case("powered kitchens cook at the starting meal stock", _test_cooking_at_starting_stock)
 	_run_case("breach warning triggers exactly once and pauses the shift", _test_breach_warning_interrupt)
 	_run_case("breach blockers and urgent jobs drive the patch sequence", _test_breach_response_jobs)
 	_run_case("a prepared response seals during grace without damage", _test_prepared_breach_survival)
-	_run_case("an open breach damages residents only until sealed", _test_breach_damage_and_seal)
+	_run_case("a patch completed at 80 seconds prevents the hatch opening", _test_exact_open_boundary_patch)
+	_run_case("an open breach drains shared oxygen only until sealed", _test_breach_oxygen_drain_and_seal)
 	_run_case("active and legacy breach snapshots load safely", _test_breach_save_load_compatibility)
+	_run_case("active, malformed, and legacy oxygen snapshots load safely", _test_oxygen_save_load_compatibility)
 	_run_case("day seven completes only at the exact boundary", _test_exact_day_boundary)
-	_run_case("day-seven victory waits for the pressure hatch seal", _test_day_seven_requires_sealed_breach)
+	_run_case("day-seven victory requires a sealed breathable wing", _test_day_seven_requires_sealed_breathable_wing)
 	_run_case("save and load preserve a deterministic simulation", _test_save_load_round_trip)
 	_run_case("interrupted save writes preserve the prior slot", _test_atomic_save_recovery)
-	_run_case("an unmanaged wing starves before day seven", _test_unmanaged_loss)
+	_run_case("an unmanaged wing fails before day seven", _test_unmanaged_loss)
 	_run_case("player-issued dig and build orders sustain the wing", _test_player_order_survival_plan)
 	_run_case("a managed wing survives to the day-seven win", _test_managed_day_seven_win)
 
@@ -72,11 +78,13 @@ func _test_scene_boot_and_initial_state() -> void:
 	_assert_true(game.is_inside_tree(), "main scene entered the SceneTree")
 	_assert_true(game.get_node_or_null("MapGrid") != null, "MapGrid exists")
 	_assert_true(game.get_node_or_null("BreachSystem") != null, "fixed pressure-hatch system exists")
+	_assert_true(game.get_node_or_null("OxygenSystem") != null, "global vault oxygen system exists")
 	_assert_true(game.get_node_or_null("JobSystem") != null, "JobSystem exists")
 	_assert_true(game.get_node_or_null("PlayerOrders/Interface") != null, "player-order UI was built")
 	_assert_equal(game.residents.size(), 4, "exactly four starting residents")
 	_assert_equal(game.get_alive_count(), 4, "all starting residents are alive")
 	_assert_equal(game.buildings.size(), 3, "three emergency fixtures are present")
+	_assert_approximately(game.oxygen_system.oxygen, OxygenSystem.STARTING_OXYGEN, 0.0001, "new wing starts with full oxygen")
 	_assert_true(game.tutorial_open, "opening briefing is visible")
 	_assert_true(game.is_simulation_paused(), "new wing starts paused")
 
@@ -234,6 +242,95 @@ func _test_power_allocation() -> void:
 	_assert_equal(game.power_grid.supply, 9, "charge node and core supplies combine")
 	_assert_equal(game.power_grid.served, 6, "all demand is served after adding charge capacity")
 	_assert_true(lamp.powered and kitchen.powered and grow_tray.powered, "all consumers are powered")
+	_dispose(game)
+
+
+func _test_oxygen_consumption_and_clamping() -> void:
+	var game := _spawn_game()
+	var oxygen := game.oxygen_system
+	_assert_approximately(OxygenSystem.MAX_OXYGEN, 100.0, 0.0001, "oxygen maximum is one hundred percent")
+	_assert_equal(oxygen.living_resident_count, 4, "oxygen rates count all four living residents")
+	_assert_approximately(oxygen.consumption_rate, 0.32, 0.0001, "four residents consume 0.08 oxygen each per second")
+	_assert_approximately(oxygen.recycler_output_rate, 0.0, 0.0001, "a wing without a recycler has no oxygen recovery")
+	_assert_approximately(oxygen.breach_loss_rate, 0.0, 0.0001, "a closed hatch contributes no oxygen loss")
+	_assert_approximately(oxygen.net_rate, -0.32, 0.0001, "closed starting wing reports its global oxygen rate")
+
+	game._process(5.0)
+	_assert_approximately(oxygen.oxygen, OxygenSystem.STARTING_OXYGEN, 0.0001, "tutorial pause freezes oxygen with the rest of the simulation")
+	game.begin_shift()
+	game.step_simulation(10.0)
+	_assert_approximately(oxygen.oxygen, 96.8, 0.0002, "ten simulated seconds consume deterministic shared oxygen")
+
+	game.residents[3].alive = false
+	oxygen.refresh_rates(game.residents, game.buildings, false)
+	_assert_equal(oxygen.living_resident_count, 3, "dead residents stop consuming oxygen")
+	_assert_approximately(oxygen.consumption_rate, 0.24, 0.0001, "only living residents contribute to consumption")
+	game.residents[3].alive = true
+
+	oxygen.oxygen = 0.1
+	oxygen.advance(1.0, game.residents, game.buildings, false)
+	_assert_approximately(oxygen.oxygen, 0.0, 0.0001, "oxygen clamps at zero instead of becoming negative")
+	var recycler := _add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(18, 12))
+	recycler.powered = true
+	oxygen.oxygen = 99.9
+	oxygen.advance(1.0, game.residents, game.buildings, false)
+	_assert_approximately(oxygen.oxygen, OxygenSystem.MAX_OXYGEN, 0.0001, "net recovery clamps oxygen at its maximum")
+	_dispose(game)
+
+
+func _test_air_recycler_power_and_rates() -> void:
+	var game := _spawn_game()
+	var lamp: VaultBuilding = game.get_building_at(Vector2i(22, 14))
+	var recycler := _add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(18, 12))
+	game.power_grid.recalculate(game.buildings)
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+
+	_assert_equal(recycler.get_power_demand(), 3, "completed air recycler demands three power")
+	_assert_false(recycler.powered, "two emergency power cannot run the three-power recycler")
+	_assert_true(lamp != null and lamp.powered, "an unaffordable recycler does not strand usable lamp power")
+	_assert_equal(game.oxygen_system.powered_recycler_count, 0, "unpowered recycler is excluded from oxygen production")
+	_assert_approximately(game.oxygen_system.recycler_output_rate, 0.0, 0.0001, "unpowered recycler produces no oxygen")
+
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(19, 12))
+	var first_grow := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(20, 12))
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(21, 12))
+	var second_grow := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
+	game.power_grid.recalculate(game.buildings)
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+
+	_assert_equal(game.power_grid.supply, 9, "charge node and emergency core provide nine power")
+	_assert_equal(game.power_grid.demand, 12, "overloaded fixture set reports all demand")
+	_assert_equal(game.power_grid.served, 9, "priority allocation uses all available power")
+	_assert_true(recycler.powered, "life-support recycler retains first power priority during overload")
+	_assert_true(lamp != null and lamp.powered and kitchen.powered and first_grow.powered, "higher-priority consumers fit within remaining power")
+	_assert_false(second_grow.powered, "lower-priority grow tray remains offline during overload")
+	_assert_equal(game.oxygen_system.powered_recycler_count, 1, "one powered completed recycler is counted")
+	_assert_approximately(game.oxygen_system.recycler_output_rate, 0.8, 0.0001, "powered recycler restores 0.8 oxygen per second")
+	_assert_approximately(game.oxygen_system.net_rate, 0.48, 0.0001, "recycler output offsets global resident consumption")
+	_dispose(game)
+
+
+func _test_oxygen_threshold_damage() -> void:
+	var game := _spawn_game()
+	var oxygen := game.oxygen_system
+	for resident: VaultResident in game.residents:
+		resident.needs.health = 100.0
+
+	oxygen.oxygen = OxygenSystem.LOW_OXYGEN_THRESHOLD
+	_assert_true(oxygen.is_low(), "oxygen is low exactly at the 35 percent threshold")
+	_assert_false(oxygen.is_critical(), "the low threshold is not yet critical")
+	oxygen.oxygen = OxygenSystem.CRITICAL_OXYGEN_THRESHOLD + 0.32
+	oxygen.advance(2.0, game.residents, game.buildings, false)
+
+	_assert_approximately(oxygen.oxygen, OxygenSystem.CRITICAL_OXYGEN_THRESHOLD - 0.32, 0.0001, "two-second step crosses the critical threshold at its midpoint")
+	_assert_true(oxygen.is_critical(), "oxygen is critical at or below fifteen percent")
+	for resident: VaultResident in game.residents:
+		_assert_approximately(
+			resident.needs.health,
+			96.0,
+			0.0001,
+			"%s takes four damage for exactly one critical second" % resident.resident_name,
+		)
 	_dispose(game)
 
 
@@ -441,10 +538,51 @@ func _test_prepared_breach_survival() -> void:
 	_dispose(game)
 
 
-func _test_breach_damage_and_seal() -> void:
+func _test_exact_open_boundary_patch() -> void:
 	var game := _spawn_game()
+	game.begin_shift()
+	for index in game.residents.size():
+		var resident: VaultResident = game.residents[index]
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.light_mood = 100.0
+		resident.work_allowed.dig = false
+		resident.work_allowed.haul = false
+		resident.work_allowed.craft = index == 0
+		resident.work_allowed.cook = false
+	game.residents[0].position = game.map_grid.cell_to_world(BreachSystem.HATCH_CELL)
+	var opening_signals := {"count": 0}
+	game.breach_system.breach_opened.connect(func() -> void:
+		opening_signals["count"] = int(opening_signals["count"]) + 1
+	)
+	var just_before_open := BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS - VaultGame.SIMULATION_TICK
+	game.day_cycle.deserialize({"elapsed_seconds": just_before_open, "current_day": 2, "completed": false})
+	game.breach_system.advance(0.0, just_before_open)
+	game.breach_system.patch_delivered = BreachSystem.PATCH_COST
+	game.breach_system.patch_work_left = VaultGame.SIMULATION_TICK
+	game.job_system.rebuild_from_state()
+
+	game._simulation_step(VaultGame.SIMULATION_TICK)
+
+	_assert_approximately(game.day_cycle.elapsed_seconds, BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS, 0.0001, "boundary step reaches exactly 80 seconds")
+	_assert_true(game.breach_system.is_sealed(), "the final 0.1 seconds of patch work completes at the boundary")
+	_assert_equal(opening_signals["count"], 0, "a patch completed at 80 seconds does not emit a spurious open event")
+	_assert_approximately(game.oxygen_system.breach_loss_rate, 0.0, 0.0001, "boundary containment never activates the oxygen leak")
+	_dispose(game)
+
+
+func _test_breach_oxygen_drain_and_seal() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.food_system.salvage = 0
 	for resident: VaultResident in game.residents:
 		resident.needs.health = 100.0
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.light_mood = 100.0
+		resident.work_allowed.haul = false
+		resident.work_allowed.craft = false
+	game.oxygen_system.oxygen = 50.0
 	game.breach_system.advance(
 		0.0,
 		BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS - VaultGame.SIMULATION_TICK,
@@ -460,20 +598,22 @@ func _test_breach_damage_and_seal() -> void:
 	)
 	_assert_equal(game.breach_system.phase, BreachSystem.Phase.OPEN, "breach opens at the end of its 20-second grace period")
 	for resident: VaultResident in game.residents:
-		_assert_approximately(resident.needs.health, 100.0, 0.0001, "opening boundary itself applies no early damage to %s" % resident.resident_name)
+		_assert_approximately(resident.needs.health, 100.0, 0.0001, "opening the hatch does not directly damage %s" % resident.resident_name)
+	_assert_approximately(game.oxygen_system.oxygen, 50.0, 0.0001, "opening the hatch does not bypass the oxygen simulation")
 
-	game.breach_system.advance(1.0, BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS + 1.0)
+	game._simulation_step(1.0)
+	_assert_approximately(game.oxygen_system.breach_loss_rate, 2.5, 0.0001, "open hatch contributes its global breach-loss rate")
+	_assert_approximately(game.oxygen_system.oxygen, 47.18, 0.0001, "open hatch and four residents drain shared oxygen for one second")
 	for resident: VaultResident in game.residents:
-		_assert_approximately(resident.needs.health, 98.0, 0.0001, "open breach applies exactly two health damage per second to %s" % resident.resident_name)
+		_assert_approximately(resident.needs.health, 100.0, 0.0001, "breach causes no direct health damage above critical oxygen for %s" % resident.resident_name)
 
 	_assert_equal(game.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "open breach accepts the four-salvage patch")
 	_assert_true(game.breach_system.apply_patch_work(BreachSystem.PATCH_WORK_SECONDS), "supplied eight-second patch seals the open breach")
-	var health_after_seal: Array[float] = []
-	for resident: VaultResident in game.residents:
-		health_after_seal.append(resident.needs.health)
-	game.breach_system.advance(5.0, BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS + 6.0)
+	game._simulation_step(5.0)
+	_assert_approximately(game.oxygen_system.breach_loss_rate, 0.0, 0.0001, "sealed hatch removes the breach-loss rate immediately")
+	_assert_approximately(game.oxygen_system.oxygen, 45.58, 0.0001, "after sealing only resident consumption continues")
 	for index in game.residents.size():
-		_assert_approximately(game.residents[index].needs.health, health_after_seal[index], 0.0001, "sealed breach stops damage immediately for resident %d" % index)
+		_assert_approximately(game.residents[index].needs.health, 100.0, 0.0001, "healthy oxygen leaves resident %d unharmed after sealing" % index)
 	_dispose(game)
 
 
@@ -588,6 +728,92 @@ func _test_breach_save_load_compatibility() -> void:
 	_remove_test_save(BREACH_SAVE_TEST_PATH)
 
 
+func _test_oxygen_save_load_compatibility() -> void:
+	_remove_test_save(OXYGEN_SAVE_TEST_PATH)
+	var original := _spawn_game()
+	original.oxygen_system.oxygen = 27.25
+	var active_snapshot := original.create_snapshot()
+	_assert_variants_equal(active_snapshot.oxygen, {"oxygen": 27.25}, "active snapshot stores the global oxygen field")
+	_assert_true(original.save_game(false, OXYGEN_SAVE_TEST_PATH), "active oxygen snapshot writes to the isolated save")
+
+	var loaded := _spawn_game()
+	_assert_true(loaded.load_game(OXYGEN_SAVE_TEST_PATH), "fresh game loads the active oxygen snapshot")
+	_assert_approximately(loaded.oxygen_system.oxygen, 27.25, 0.0001, "active oxygen value survives the round trip")
+	_assert_true(loaded.oxygen_system.is_low(), "restored oxygen also restores its low-air state")
+	_assert_true(loaded.user_paused, "loading oxygen state returns the simulation paused")
+
+	var stable_snapshot := loaded.create_snapshot()
+	var empty_snapshot: Dictionary = stable_snapshot.duplicate(true)
+	empty_snapshot.oxygen = {}
+	_assert_false(loaded.apply_snapshot(empty_snapshot), "an explicitly empty oxygen payload is rejected")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected empty oxygen payload is atomic")
+	var nonnumeric_snapshot: Dictionary = stable_snapshot.duplicate(true)
+	nonnumeric_snapshot.oxygen = {"oxygen": "thin"}
+	_assert_false(loaded.apply_snapshot(nonnumeric_snapshot), "nonnumeric oxygen payload is rejected")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected oxygen type leaves the wing unchanged")
+	var out_of_range_snapshot: Dictionary = stable_snapshot.duplicate(true)
+	out_of_range_snapshot.oxygen = {"oxygen": OxygenSystem.MAX_OXYGEN + 0.1}
+	_assert_false(loaded.apply_snapshot(out_of_range_snapshot), "out-of-range oxygen payload is rejected")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected oxygen range is atomic")
+	var extra_field_snapshot: Dictionary = stable_snapshot.duplicate(true)
+	extra_field_snapshot.oxygen = {"oxygen": 27.25, "rooms": []}
+	_assert_false(loaded.apply_snapshot(extra_field_snapshot), "multi-room gas payload is outside the scalar oxygen schema")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected expanded gas payload is atomic")
+
+	var forged_win: Dictionary = stable_snapshot.duplicate(true)
+	forged_win.day = {
+		"elapsed_seconds": DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE,
+		"current_day": DayCycle.DAYS_TO_SURVIVE,
+		"completed": true,
+	}
+	forged_win.breach = {
+		"phase": int(BreachSystem.Phase.SEALED),
+		"patch_delivered": BreachSystem.PATCH_COST,
+		"patch_work_left": 0.0,
+		"warning_acknowledged": true,
+		"warning_emitted": true,
+		"open_emitted": false,
+		"sealed_emitted": true,
+	}
+	forged_win.oxygen = {"oxygen": 0.0}
+	forged_win.ended = true
+	forged_win.outcome = "win"
+	_assert_false(loaded.apply_snapshot(forged_win), "saved victory cannot bypass the breathable-oxygen gate")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected unbreathable saved victory is atomic")
+	forged_win.oxygen = {"oxygen": OxygenSystem.STARTING_OXYGEN}
+	forged_win.breach = {
+		"phase": int(BreachSystem.Phase.OPEN),
+		"patch_delivered": 0,
+		"patch_work_left": BreachSystem.PATCH_WORK_SECONDS,
+		"warning_acknowledged": true,
+		"warning_emitted": true,
+		"open_emitted": true,
+		"sealed_emitted": false,
+	}
+	_assert_false(loaded.apply_snapshot(forged_win), "saved victory cannot bypass the sealed-hatch gate")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected open-hatch saved victory is atomic")
+	forged_win.breach.phase = int(BreachSystem.Phase.SEALED)
+	forged_win.breach.patch_delivered = BreachSystem.PATCH_COST
+	forged_win.breach.patch_work_left = 0.0
+	forged_win.breach.open_emitted = false
+	forged_win.breach.sealed_emitted = true
+	forged_win.day.elapsed_seconds = DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE - VaultGame.SIMULATION_TICK
+	forged_win.day.current_day = DayCycle.DAYS_TO_SURVIVE
+	forged_win.day.completed = false
+	_assert_false(loaded.apply_snapshot(forged_win), "saved victory cannot bypass the seven-day gate")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected early saved victory is atomic")
+
+	var legacy_snapshot: Dictionary = active_snapshot.duplicate(true)
+	legacy_snapshot.erase("oxygen")
+	_assert_true(loaded.apply_snapshot(legacy_snapshot), "legacy snapshot without oxygen data loads safely")
+	_assert_approximately(loaded.oxygen_system.oxygen, OxygenSystem.STARTING_OXYGEN, 0.0001, "legacy snapshot defaults to full oxygen")
+	_assert_true(loaded.oxygen_system.is_breathable(), "legacy oxygen default is immediately breathable")
+
+	_dispose(loaded)
+	_dispose(original)
+	_remove_test_save(OXYGEN_SAVE_TEST_PATH)
+
+
 func _test_exact_day_boundary() -> void:
 	var day_cycle := DayCycle.new()
 	root.add_child(day_cycle)
@@ -615,7 +841,7 @@ func _test_exact_day_boundary() -> void:
 	_dispose(day_cycle)
 
 
-func _test_day_seven_requires_sealed_breach() -> void:
+func _test_day_seven_requires_sealed_breathable_wing() -> void:
 	var game := _spawn_game()
 	game.begin_shift()
 	for resident: VaultResident in game.residents:
@@ -634,10 +860,17 @@ func _test_day_seven_requires_sealed_breach() -> void:
 
 	_assert_equal(game.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "late response accepts its four salvage")
 	_assert_true(game.breach_system.apply_patch_work(BreachSystem.PATCH_WORK_SECONDS), "late eight-second patch seals the hatch")
+	game.oxygen_system.oxygen = 0.0
 	_assert_false(game.ended, "sealing waits for the next simulation evaluation before declaring victory")
 	game._simulation_step(VaultGame.SIMULATION_TICK)
+	_assert_false(game.ended, "sealed day-seven wing cannot win with unbreathable oxygen")
+	_assert_equal(game.outcome, "", "unbreathable completed wing has no premature outcome")
+	_assert_true(game.get_alive_count() > 0, "oxygen victory gate is evaluated before suffocation becomes colony loss")
+
+	game.oxygen_system.oxygen = OxygenSystem.STARTING_OXYGEN
+	game._simulation_step(VaultGame.SIMULATION_TICK)
 	_assert_true(game.ended, "sealed day-seven wing reaches an outcome")
-	_assert_equal(game.outcome, "win", "sealed hatch unlocks day-seven victory")
+	_assert_equal(game.outcome, "win", "sealed hatch and breathable oxygen unlock day-seven victory")
 	_dispose(game)
 
 
@@ -715,9 +948,9 @@ func _test_unmanaged_loss() -> void:
 	game.step_simulation(DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE)
 
 	_assert_true(game.ended, "untouched starting wing reaches an outcome")
-	_assert_equal(game.outcome, "loss", "starting rations alone end in starvation")
+	_assert_equal(game.outcome, "loss", "starting supplies and finite oxygen cannot sustain an unmanaged wing")
 	_assert_equal(game.get_alive_count(), 0, "all unmanaged residents eventually die")
-	_assert_true(game.breach_system.is_sealed(), "unmanaged loss remains starvation after the automatic breach response")
+	_assert_true(game.breach_system.is_sealed(), "unmanaged workers still contain the scripted breach before colony loss")
 	_assert_false(game.day_cycle.completed, "colony fails before completing seven days")
 	_assert_true(
 		game.day_cycle.elapsed_seconds < DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE,
@@ -731,30 +964,32 @@ func _test_player_order_survival_plan() -> void:
 	game.begin_shift()
 	game.set_tool("dig")
 	var dig_cells: Array[Vector2i] = []
-	for x in [16, 15, 14]:
+	for x in [16, 15, 14, 13, 12]:
 		for y in [14, 15, 16]:
 			dig_cells.append(Vector2i(x, y))
-	dig_cells.append(Vector2i(13, 15))
 	for cell: Vector2i in dig_cells:
 		_assert_true(game.issue_order(cell), "planned expansion accepts dig designation at %s" % cell)
 	var plans := [
 		[VaultBuilding.Kind.BED, Vector2i(18, 12)],
 		[VaultBuilding.Kind.BED, Vector2i(19, 12)],
 		[VaultBuilding.Kind.GENERATOR, Vector2i(20, 12)],
-		[VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12)],
-		[VaultBuilding.Kind.KITCHEN, Vector2i(22, 12)],
+		[VaultBuilding.Kind.AIR_RECYCLER, Vector2i(21, 12)],
+		[VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12)],
+		[VaultBuilding.Kind.KITCHEN, Vector2i(23, 12)],
 	]
 	for plan in plans:
 		_assert_true(game.place_blueprint(int(plan[0]), plan[1]), "survival fixture blueprint is accepted")
 
-	game.step_simulation(120.0)
+	game.step_simulation(160.0)
 	for cell: Vector2i in dig_cells:
 		_assert_equal(game.map_grid.get_tile(cell), MapGrid.Tile.FLOOR, "planned expansion tile was excavated")
 	for plan in plans:
 		var building: VaultBuilding = game.get_building_at(plan[1])
-		_assert_true(building != null and building.complete, "survival fixture was supplied and assembled")
+		_assert_true(building != null and building.complete, "survival fixture at %s was supplied and assembled" % plan[1])
 	_assert_true(game.food_system.salvage >= 0, "ordered construction never overdraws salvage")
 	_assert_true(game.breach_system.is_sealed(), "player-order plan automatically contains the first breach")
+	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER), 1, "player-order plan powers its air recycler")
+	_assert_true(game.oxygen_system.net_rate > 0.0, "ordered life support recovers oxygen after resident consumption")
 
 	var remaining := DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE - game.day_cycle.elapsed_seconds
 	game.step_simulation(remaining + VaultGame.SIMULATION_TICK)
@@ -776,17 +1011,21 @@ func _test_managed_day_seven_win() -> void:
 	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(25, 12))
 	var grow_tray := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(26, 12))
 	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(27, 12))
+	var recycler := _add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(24, 12))
 	game.power_grid.recalculate(game.buildings)
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
 	game.begin_shift()
 
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 4, "managed wing has one bunk per resident")
-	_assert_true(grow_tray.powered and kitchen.powered, "food production fixtures start powered")
+	_assert_true(grow_tray.powered and kitchen.powered and recycler.powered, "food and oxygen production fixtures start powered")
+	_assert_true(game.oxygen_system.net_rate > 0.0, "managed recycler exceeds resident oxygen demand")
 	game.step_simulation(DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE + VaultGame.SIMULATION_TICK)
 
 	_assert_true(game.ended, "managed simulation reaches an outcome")
 	_assert_equal(game.outcome, "win", "managed wing reaches the win state")
 	_assert_true(game.day_cycle.completed, "seven-day clock is complete")
 	_assert_true(game.breach_system.is_sealed(), "managed wing contains the first breach before victory")
+	_assert_true(game.oxygen_system.is_breathable(), "managed wing remains breathable at victory")
 	_assert_true(game.get_alive_count() >= 1, "at least one resident survives")
 	_assert_true(game.food_system.meals > 0 or game.food_system.raw_food > 0, "food loop remains productive")
 	_dispose(game)

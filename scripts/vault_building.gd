@@ -1,7 +1,7 @@
 class_name VaultBuilding
 extends Node2D
 
-enum Kind { BED, LAMP, GENERATOR, GROW_TRAY, KITCHEN, STOCKPILE }
+enum Kind { BED, LAMP, GENERATOR, GROW_TRAY, KITCHEN, STOCKPILE, AIR_RECYCLER }
 
 const KIND_NAMES := {
 	Kind.BED: "Bunk",
@@ -10,6 +10,7 @@ const KIND_NAMES := {
 	Kind.GROW_TRAY: "Grow Tray",
 	Kind.KITCHEN: "Nutrient Station",
 	Kind.STOCKPILE: "Salvage Bay",
+	Kind.AIR_RECYCLER: "Air Recycler",
 }
 const COSTS := {
 	Kind.BED: 8,
@@ -18,6 +19,7 @@ const COSTS := {
 	Kind.GROW_TRAY: 12,
 	Kind.KITCHEN: 10,
 	Kind.STOCKPILE: 4,
+	Kind.AIR_RECYCLER: 14,
 }
 const POWER_DEMAND := {
 	Kind.BED: 0,
@@ -26,6 +28,7 @@ const POWER_DEMAND := {
 	Kind.GROW_TRAY: 3,
 	Kind.KITCHEN: 2,
 	Kind.STOCKPILE: 0,
+	Kind.AIR_RECYCLER: 3,
 }
 
 var building_id := 0
@@ -161,6 +164,11 @@ func _draw() -> void:
 		Kind.STOCKPILE:
 			draw_rect(Rect2(-8, -7, 7, 6), Color("b78b52"))
 			draw_rect(Rect2(1, 1, 7, 6), Color("b78b52"))
+		Kind.AIR_RECYCLER:
+			draw_circle(Vector2.ZERO, 8.0, Color("8fcbd3"))
+			draw_circle(Vector2.ZERO, 3.0, Color("24434a"))
+			for direction in [Vector2.UP, Vector2.RIGHT, Vector2.DOWN, Vector2.LEFT]:
+				draw_line(direction * 3.0, direction * 7.0, Color("24434a"), 2.0)
 	if get_power_demand() > 0 and not powered:
 		draw_line(Vector2(-7, -7), Vector2(7, 7), Color("ef5a54"), 2.0)
 		draw_line(Vector2(7, -7), Vector2(-7, 7), Color("ef5a54"), 2.0)
@@ -174,5 +182,5 @@ func _kind_color() -> Color:
 		Kind.GROW_TRAY: return Color("74b76c")
 		Kind.KITCHEN: return Color("d5d9d7")
 		Kind.STOCKPILE: return Color("b78b52")
+		Kind.AIR_RECYCLER: return Color("8fcbd3")
 	return Color.WHITE
-

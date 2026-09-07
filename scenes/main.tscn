@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3]
+[gd_scene load_steps=11 format=3]
 
 [ext_resource path="res://scripts/game.gd" type="Script" id="1_game"]
 [ext_resource path="res://scripts/map_grid.gd" type="Script" id="2_map"]
@@ -9,6 +9,7 @@
 [ext_resource path="res://scripts/save_load.gd" type="Script" id="7_save"]
 [ext_resource path="res://scripts/player_orders.gd" type="Script" id="8_ui"]
 [ext_resource path="res://scripts/breach_system.gd" type="Script" id="9_breach"]
+[ext_resource path="res://scripts/oxygen_system.gd" type="Script" id="10_oxygen"]
 
 [node name="Game" type="Node2D"]
 script = ExtResource("1_game")
@@ -32,6 +33,9 @@ script = ExtResource("4_power")
 
 [node name="FoodSystem" type="Node" parent="."]
 script = ExtResource("5_food")
+
+[node name="OxygenSystem" type="Node" parent="."]
+script = ExtResource("10_oxygen")
 
 [node name="DayCycle" type="Node" parent="."]
 script = ExtResource("6_day")
