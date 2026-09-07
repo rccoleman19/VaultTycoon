@@ -2,6 +2,8 @@ extends SceneTree
 
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 const SAVE_TEST_PATH := "user://headless_round_trip.json"
+const BREACH_SAVE_TEST_PATH := "user://headless_breach_round_trip.json"
+const ATOMIC_SAVE_TEST_PATH := "user://headless_atomic_save.json"
 
 var _assertion_count := 0
 var _failure_count := 0
@@ -22,8 +24,15 @@ func _run() -> void:
 	_run_case("cancel previews and powered checklist match their actions", _test_order_preview_and_checklist)
 	_run_case("power is allocated by supply and priority", _test_power_allocation)
 	_run_case("powered kitchens cook at the starting meal stock", _test_cooking_at_starting_stock)
+	_run_case("breach warning triggers exactly once and pauses the shift", _test_breach_warning_interrupt)
+	_run_case("breach blockers and urgent jobs drive the patch sequence", _test_breach_response_jobs)
+	_run_case("a prepared response seals during grace without damage", _test_prepared_breach_survival)
+	_run_case("an open breach damages residents only until sealed", _test_breach_damage_and_seal)
+	_run_case("active and legacy breach snapshots load safely", _test_breach_save_load_compatibility)
 	_run_case("day seven completes only at the exact boundary", _test_exact_day_boundary)
+	_run_case("day-seven victory waits for the pressure hatch seal", _test_day_seven_requires_sealed_breach)
 	_run_case("save and load preserve a deterministic simulation", _test_save_load_round_trip)
+	_run_case("interrupted save writes preserve the prior slot", _test_atomic_save_recovery)
 	_run_case("an unmanaged wing starves before day seven", _test_unmanaged_loss)
 	_run_case("player-issued dig and build orders sustain the wing", _test_player_order_survival_plan)
 	_run_case("a managed wing survives to the day-seven win", _test_managed_day_seven_win)
@@ -62,6 +71,7 @@ func _test_scene_boot_and_initial_state() -> void:
 
 	_assert_true(game.is_inside_tree(), "main scene entered the SceneTree")
 	_assert_true(game.get_node_or_null("MapGrid") != null, "MapGrid exists")
+	_assert_true(game.get_node_or_null("BreachSystem") != null, "fixed pressure-hatch system exists")
 	_assert_true(game.get_node_or_null("JobSystem") != null, "JobSystem exists")
 	_assert_true(game.get_node_or_null("PlayerOrders/Interface") != null, "player-order UI was built")
 	_assert_equal(game.residents.size(), 4, "exactly four starting residents")
@@ -81,6 +91,11 @@ func _test_scene_boot_and_initial_state() -> void:
 	)
 	_assert_equal(game.map_grid.get_tile(Vector2i.ZERO), MapGrid.Tile.ROCK, "map boundary remains rock")
 	_assert_equal(game.map_grid.dig_marks.size(), 0, "new wing has no dig designations")
+	_assert_equal(BreachSystem.HATCH_CELL, Vector2i(28, 15), "pressure hatch occupies its fixed chamber cell")
+	_assert_true(game.map_grid.is_walkable(BreachSystem.HATCH_CELL), "pressure hatch is reachable across carved floor")
+	_assert_true(game.get_building_at(BreachSystem.HATCH_CELL) == null, "pressure hatch is not a removable fixture")
+	game.begin_shift()
+	_assert_false(game.place_blueprint(VaultBuilding.Kind.BED, BreachSystem.HATCH_CELL), "pressure hatch rejects fixture blueprints")
 	_dispose(game)
 
 
@@ -171,6 +186,8 @@ func _test_order_preview_and_checklist() -> void:
 	var game := _spawn_game()
 	game.begin_shift()
 	var blueprint_cell := Vector2i(18, 12)
+	_assert_false(game.map_grid.is_preview_valid("bed", BreachSystem.HATCH_CELL), "reserved pressure hatch has an invalid build preview")
+	_assert_false(game.place_blueprint(VaultBuilding.Kind.BED, BreachSystem.HATCH_CELL), "reserved pressure hatch rejects blueprints")
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, blueprint_cell), "cancel-preview fixture is placed")
 	_assert_true(game.map_grid.is_preview_valid("cancel", blueprint_cell), "unfinished blueprint has a valid Cancel preview")
 	game.set_tool("cancel")
@@ -236,6 +253,341 @@ func _test_cooking_at_starting_stock() -> void:
 	_dispose(game)
 
 
+func _test_breach_warning_interrupt() -> void:
+	var game := _spawn_game()
+	var warning_signals := {"count": 0}
+	var initial_health: Array[float] = []
+	for resident: VaultResident in game.residents:
+		initial_health.append(resident.needs.health)
+	game.breach_system.warning_started.connect(func() -> void:
+		warning_signals["count"] = int(warning_signals["count"]) + 1
+	)
+	game.begin_shift()
+	game.set_speed(3)
+	game.set_tool("dig")
+	game.food_system.salvage = 0
+	for resident: VaultResident in game.residents:
+		resident.work_allowed.haul = false
+		resident.work_allowed.craft = false
+
+	game.step_simulation(BreachSystem.WARNING_AT_SECONDS - VaultGame.SIMULATION_TICK)
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.DORMANT, "breach remains dormant one tick before 60 seconds")
+	_assert_equal(warning_signals["count"], 0, "warning has not fired before the exact threshold")
+	_assert_false(game.user_paused, "shift is still running before the warning")
+	for index in game.residents.size():
+		_assert_approximately(game.residents[index].needs.health, initial_health[index], 0.0001, "dormant hatch causes no early damage to resident %d" % index)
+
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	game.player_orders.refresh()
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.WARNING, "breach warning begins at exactly 60 seconds")
+	_assert_equal(warning_signals["count"], 1, "warning fires once at the threshold")
+	_assert_true(game.user_paused, "first warning automatically pauses the shift")
+	_assert_equal(game.simulation_speed, 1, "first warning resets simulation speed to 1x")
+	_assert_true(game.selected_breach, "first warning selects the pressure hatch")
+	_assert_equal(game.active_tool, "select", "first warning returns to Select mode")
+	_assert_equal(game.world_camera.position, game.map_grid.cell_to_world(BreachSystem.HATCH_CELL), "first warning focuses the hatch")
+	_assert_equal(game.job_system.get_breach_response_status(), "BLOCKED · ENABLE HAUL", "weak wing reports its first response blocker")
+	_assert_true(game.player_orders.breach_warning_panel.visible, "first warning opens the priority incident card")
+	_assert_true(game.player_orders.breach_resume_button.has_focus(), "priority incident focuses its Resume action")
+	_assert_true("SEAL WARNING" in game.player_orders.alert_label.text, "warning overrides nominal wing status")
+	_assert_approximately(game.breach_system.get_pressure_percent(), 0.0, 0.0001, "pressure starts at zero percent at the warning boundary")
+	for index in game.residents.size():
+		_assert_approximately(game.residents[index].needs.health, initial_health[index], 0.0001, "warning boundary causes no early damage to resident %d" % index)
+
+	var elapsed_while_paused := game.day_cycle.elapsed_seconds
+	var pressure_while_paused := game.breach_system.get_pressure_percent()
+	var health_while_paused: Array[float] = []
+	for resident: VaultResident in game.residents:
+		health_while_paused.append(resident.needs.health)
+	game._process(5.0)
+	_assert_approximately(game.day_cycle.elapsed_seconds, elapsed_while_paused, 0.0001, "paused processing does not advance the simulation clock")
+	_assert_approximately(game.breach_system.get_pressure_percent(), pressure_while_paused, 0.0001, "paused processing does not advance breach pressure")
+	for index in game.residents.size():
+		_assert_approximately(game.residents[index].needs.health, health_while_paused[index], 0.0001, "paused processing does not apply breach damage to resident %d" % index)
+
+	game.breach_system.advance(0.0, BreachSystem.WARNING_AT_SECONDS)
+	_assert_equal(warning_signals["count"], 1, "warning does not retrigger after the shift resumes")
+	game.acknowledge_breach_warning(true)
+	_assert_false(game.user_paused, "resuming clears the one-time warning pause")
+	_assert_false(game.player_orders.breach_warning_panel.visible, "resuming dismisses the priority incident card")
+	game.breach_system.advance(
+		BreachSystem.GRACE_SECONDS - VaultGame.SIMULATION_TICK,
+		BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS - VaultGame.SIMULATION_TICK,
+	)
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.WARNING, "hatch remains in warning through 79.9 seconds")
+	for index in game.residents.size():
+		_assert_approximately(game.residents[index].needs.health, initial_health[index], 0.0001, "warning grace causes no damage to resident %d" % index)
+	game.breach_system.advance(
+		VaultGame.SIMULATION_TICK,
+		BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS,
+	)
+	game.player_orders.refresh()
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.OPEN, "unanswered hatch opens at exactly 80 seconds")
+	_assert_false(game.user_paused, "opening does not grant a second automatic pause")
+	_assert_equal(warning_signals["count"], 1, "opening does not replay the warning interrupt")
+	_assert_true("BREACH OPEN" in game.player_orders.alert_label.text, "open breach remains visible in compound alerts")
+	_dispose(game)
+
+
+func _test_breach_response_jobs() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	var ordinary_dig := MapGrid.CHAMBER.position + Vector2i.LEFT
+	_assert_true(game.map_grid.queue_dig(ordinary_dig), "competing ordinary dig can be queued")
+	game.job_system.queue_dig(ordinary_dig)
+	var competing_blueprint_cell := Vector2i(18, 12)
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, competing_blueprint_cell), "competing blueprint can be queued")
+	var competing_blueprint := game.get_building_at(competing_blueprint_cell)
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.light_mood = 100.0
+		resident.work_allowed.haul = false
+		resident.work_allowed.craft = false
+
+	game.breach_system.advance(0.0, BreachSystem.WARNING_AT_SECONDS)
+	_assert_equal(game.job_system.get_breach_response_status(), "BLOCKED · ENABLE HAUL", "Haul permission is the first reported blocker")
+
+	game.residents[0].work_allowed.haul = true
+	game.food_system.salvage = 0
+	_assert_equal(game.job_system.get_breach_response_status(), "BLOCKED · NEEDS 4 SALVAGE", "missing patch salvage is reported after Haul is enabled")
+
+	game.food_system.salvage = BreachSystem.PATCH_COST
+	game.residents[1].work_allowed.haul = true
+	game.job_system.advance(VaultGame.SIMULATION_TICK)
+	_assert_equal(game.residents[0].current_job_type, JobSystem.JobType.SUPPLY_BREACH, "urgent breach supply outranks an ordinary Dig job")
+	_assert_equal(game.food_system.salvage, BreachSystem.PATCH_COST, "emergency salvage remains reserved while its hauler approaches")
+	_assert_equal(competing_blueprint.delivered, 0, "a second hauler cannot divert the four reserved salvage")
+	_assert_true(game.residents[1].current_job_type != JobSystem.JobType.SUPPLY_BUILD, "ordinary blueprint supply waits behind the breach reserve")
+	for _index in 80:
+		if game.breach_system.is_supplied():
+			break
+		game.job_system.advance(VaultGame.SIMULATION_TICK)
+	_assert_equal(game.breach_system.patch_delivered, BreachSystem.PATCH_COST, "Haul response delivers exactly four salvage")
+	_assert_equal(game.food_system.salvage, 0, "breach supply consumes the four salvage")
+	_assert_approximately(game.breach_system.patch_work_left, BreachSystem.PATCH_WORK_SECONDS, 0.0001, "Craft work waits for all four salvage")
+	_assert_equal(game.job_system.get_breach_response_status(), "BLOCKED · ENABLE CRAFT", "Craft permission is reported after supplies arrive")
+
+	game.residents[0].work_allowed.craft = true
+	game.job_system.advance(VaultGame.SIMULATION_TICK)
+	_assert_equal(game.residents[0].current_job_type, JobSystem.JobType.PATCH_BREACH, "urgent Craft job follows the Haul response")
+	for _index in 78:
+		game.job_system.advance(VaultGame.SIMULATION_TICK)
+	_assert_false(game.breach_system.is_sealed(), "pressure hatch remains unsealed one work tick before the eight-second patch completes")
+	_assert_approximately(game.breach_system.patch_work_left, VaultGame.SIMULATION_TICK, 0.0002, "exactly one patch tick remains after 7.9 seconds of Craft work")
+	game.job_system.advance(VaultGame.SIMULATION_TICK)
+	_assert_true(game.breach_system.is_sealed(), "eight seconds of urgent Craft work seals the breach")
+	_assert_approximately(game.breach_system.patch_work_left, 0.0, 0.0001, "completed patch has no work remaining")
+	_dispose(game)
+
+
+func _test_prepared_breach_survival() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.food_system.salvage = BreachSystem.PATCH_COST
+	var initial_health: Array[float] = []
+	for index in game.residents.size():
+		var resident: VaultResident = game.residents[index]
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.light_mood = 100.0
+		resident.needs.health = 100.0
+		resident.work_allowed.dig = false
+		resident.work_allowed.haul = index == 0
+		resident.work_allowed.craft = index == 1
+		resident.work_allowed.cook = false
+		initial_health.append(resident.needs.health)
+	game.residents[0].position = game.map_grid.cell_to_world(Vector2i(19, 17))
+	game.residents[1].position = game.map_grid.cell_to_world(BreachSystem.HATCH_CELL)
+
+	game.step_simulation(BreachSystem.WARNING_AT_SECONDS)
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.WARNING, "prepared wing receives the deterministic 60-second warning")
+	_assert_true(game.user_paused, "prepared response waits for the one-time player resume")
+	_assert_equal(game.food_system.salvage, BreachSystem.PATCH_COST, "paused warning has not started the emergency haul")
+	var competing_blueprint_cell := Vector2i(18, 12)
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, competing_blueprint_cell), "prepared fixture adds competing Craft work during the pause")
+	var competing_blueprint := game.get_building_at(competing_blueprint_cell)
+	game.job_system.cancel_building(competing_blueprint.building_id)
+	competing_blueprint.delivered = competing_blueprint.get_cost()
+	game.job_system.queue_building(competing_blueprint)
+	game.acknowledge_breach_warning(true)
+	game._simulation_step(VaultGame.SIMULATION_TICK)
+	_assert_equal(game.residents[1].current_job_type, JobSystem.JobType.BUILD, "Craft worker may continue ordinary work while patch supplies travel")
+
+	var saw_patch_preemption := false
+	for _index in floori(BreachSystem.GRACE_SECONDS / VaultGame.SIMULATION_TICK):
+		if game.breach_system.is_sealed():
+			break
+		game._simulation_step(VaultGame.SIMULATION_TICK)
+		if game.residents[1].current_job_type == JobSystem.JobType.PATCH_BREACH:
+			saw_patch_preemption = true
+
+	_assert_true(game.breach_system.is_sealed(), "automatic Haul then Craft response seals during the grace period")
+	_assert_true(saw_patch_preemption, "ready patch work preempts the resident's ordinary Craft job")
+	_assert_true(
+		game.day_cycle.elapsed_seconds < BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS,
+		"prepared response finishes before the 80-second opening boundary",
+	)
+	_assert_equal(game.breach_system.patch_delivered, BreachSystem.PATCH_COST, "prepared response delivers exactly four salvage")
+	_assert_equal(game.food_system.salvage, 0, "prepared response consumes only the four patch salvage")
+	_assert_approximately(game.breach_system.patch_work_left, 0.0, 0.0001, "prepared response completes all eight seconds of patch work")
+	var emergency_job_left := false
+	for job: Dictionary in game.job_system.jobs:
+		if int(job.type) in [JobSystem.JobType.SUPPLY_BREACH, JobSystem.JobType.PATCH_BREACH] and not bool(job.get("done", false)):
+			emergency_job_left = true
+	_assert_false(emergency_job_left, "sealed response leaves no emergency job behind")
+	for index in game.residents.size():
+		_assert_approximately(game.residents[index].needs.health, initial_health[index], 0.0001, "prepared grace response prevents damage to resident %d" % index)
+	_dispose(game)
+
+
+func _test_breach_damage_and_seal() -> void:
+	var game := _spawn_game()
+	for resident: VaultResident in game.residents:
+		resident.needs.health = 100.0
+	game.breach_system.advance(
+		0.0,
+		BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS - VaultGame.SIMULATION_TICK,
+	)
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.WARNING, "blocked breach remains in warning one tick before 80 seconds")
+	_assert_equal(game.breach_system.patch_delivered, 0, "blocked breach has no emergency salvage delivered")
+	for resident: VaultResident in game.residents:
+		_assert_approximately(resident.needs.health, 100.0, 0.0001, "warning remains harmless through 79.9 seconds for %s" % resident.resident_name)
+
+	game.breach_system.advance(
+		VaultGame.SIMULATION_TICK,
+		BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS,
+	)
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.OPEN, "breach opens at the end of its 20-second grace period")
+	for resident: VaultResident in game.residents:
+		_assert_approximately(resident.needs.health, 100.0, 0.0001, "opening boundary itself applies no early damage to %s" % resident.resident_name)
+
+	game.breach_system.advance(1.0, BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS + 1.0)
+	for resident: VaultResident in game.residents:
+		_assert_approximately(resident.needs.health, 98.0, 0.0001, "open breach applies exactly two health damage per second to %s" % resident.resident_name)
+
+	_assert_equal(game.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "open breach accepts the four-salvage patch")
+	_assert_true(game.breach_system.apply_patch_work(BreachSystem.PATCH_WORK_SECONDS), "supplied eight-second patch seals the open breach")
+	var health_after_seal: Array[float] = []
+	for resident: VaultResident in game.residents:
+		health_after_seal.append(resident.needs.health)
+	game.breach_system.advance(5.0, BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS + 6.0)
+	for index in game.residents.size():
+		_assert_approximately(game.residents[index].needs.health, health_after_seal[index], 0.0001, "sealed breach stops damage immediately for resident %d" % index)
+	_dispose(game)
+
+
+func _test_breach_save_load_compatibility() -> void:
+	_remove_test_save(BREACH_SAVE_TEST_PATH)
+	var original := _spawn_game()
+	for resident: VaultResident in original.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.light_mood = 100.0
+	original.food_system.salvage = BreachSystem.PATCH_COST
+	original.day_cycle.advance(BreachSystem.WARNING_AT_SECONDS + 5.0)
+	original.breach_system.advance(0.0, original.day_cycle.elapsed_seconds)
+	for _index in 20:
+		original.job_system.advance(VaultGame.SIMULATION_TICK)
+		var saved_supply: Array = original.job_system.serialize().breach_supply
+		if saved_supply.size() >= 2 and int(saved_supply[1]) == BreachSystem.PATCH_COST:
+			break
+	var snapshot_before := original.create_snapshot()
+	_assert_equal(original.breach_system.phase, BreachSystem.Phase.WARNING, "round-trip snapshot captures an active warning")
+	_assert_approximately(original.breach_system.get_pressure_percent(), 25.0, 0.0001, "round-trip snapshot captures active grace progress")
+	_assert_equal(snapshot_before.jobs.breach_supply[1], BreachSystem.PATCH_COST, "round-trip snapshot captures four patch salvage in transit")
+	_assert_true(int(snapshot_before.jobs.breach_supply[2]) > 0, "round-trip snapshot records the emergency hauler")
+
+	_assert_true(original.save_game(false, BREACH_SAVE_TEST_PATH), "active breach snapshot writes to the isolated save")
+	var loaded := _spawn_game()
+	_assert_true(loaded.load_game(BREACH_SAVE_TEST_PATH), "fresh game loads the active breach snapshot")
+	_assert_variants_equal(snapshot_before, loaded.create_snapshot(), "active breach snapshot round trip")
+	_assert_true(loaded.user_paused, "loading an active breach returns paused")
+	_assert_equal(
+		loaded.residents[int(snapshot_before.jobs.breach_supply[2]) - 1].carrying,
+		BreachSystem.PATCH_COST,
+		"loaded emergency hauler still carries the in-flight salvage",
+	)
+	original.step_simulation(14.0)
+	loaded.step_simulation(14.0)
+	_assert_true(original.breach_system.is_sealed(), "original mid-haul response completes after the snapshot")
+	_assert_true(loaded.breach_system.is_sealed(), "loaded mid-haul response completes without losing salvage")
+	_assert_variants_equal(original.create_snapshot(), loaded.create_snapshot(), "loaded emergency response remains deterministic")
+
+	var stable_snapshot := loaded.create_snapshot()
+	var impossible_clock: Dictionary = snapshot_before.duplicate(true)
+	impossible_clock.day.elapsed_seconds = 0.0
+	_assert_false(loaded.apply_snapshot(impossible_clock), "warning state before its clock threshold is rejected")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected breach clock mismatch is atomic")
+	var malformed_breach_job: Dictionary = snapshot_before.duplicate(true)
+	malformed_breach_job.jobs.breach_supply = [BreachSystem.PATCH_COST, "four", 1]
+	_assert_false(loaded.apply_snapshot(malformed_breach_job), "non-numeric in-flight breach salvage is rejected")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected breach job payload is atomic")
+	var unknown_carrier: Dictionary = snapshot_before.duplicate(true)
+	unknown_carrier.jobs.breach_supply[2] = 999
+	_assert_false(loaded.apply_snapshot(unknown_carrier), "unknown emergency-haul carrier is rejected")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected carrier identity leaves the wing unchanged")
+	var malformed_snapshot: Dictionary = stable_snapshot.duplicate(true)
+	malformed_snapshot.breach.patch_delivered = BreachSystem.PATCH_COST + 1
+	_assert_false(loaded.apply_snapshot(malformed_snapshot), "malformed optional breach state is rejected")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected breach state does not mutate the active wing")
+	var partial_snapshot: Dictionary = stable_snapshot.duplicate(true)
+	partial_snapshot.breach = {"patch_delivered": BreachSystem.PATCH_COST}
+	_assert_false(loaded.apply_snapshot(partial_snapshot), "partial breach state cannot synthesize free patch materials")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected partial breach state is atomic")
+	loaded._simulation_accumulator = 0.09
+	_assert_true(loaded.apply_snapshot(stable_snapshot), "valid state can replace a running in-memory wing")
+	_assert_approximately(loaded._simulation_accumulator, 0.0, 0.0001, "successful restore clears pre-load simulation backlog")
+
+	var legacy_snapshot: Dictionary = snapshot_before.duplicate(true)
+	legacy_snapshot.erase("breach")
+	var legacy_jobs: Dictionary = legacy_snapshot.get("jobs", {})
+	legacy_jobs.erase("breach_supply")
+	legacy_snapshot.jobs = legacy_jobs
+	legacy_snapshot.food.salvage = int(legacy_snapshot.food.salvage) + BreachSystem.PATCH_COST
+	var legacy_write: Dictionary = original.save_load.save_snapshot(legacy_snapshot, BREACH_SAVE_TEST_PATH)
+	_assert_true(bool(legacy_write.ok), "compatible version-one snapshot without breach data writes successfully")
+	var legacy_loaded := _spawn_game()
+	var restored_warning_signals := {"count": 0}
+	legacy_loaded.breach_system.warning_started.connect(func() -> void:
+		restored_warning_signals["count"] = int(restored_warning_signals["count"]) + 1
+	)
+	_assert_true(legacy_loaded.load_game(BREACH_SAVE_TEST_PATH), "version-one snapshot without breach data loads safely")
+	_assert_equal(legacy_loaded.breach_system.phase, BreachSystem.Phase.WARNING, "legacy load derives the safe breach phase from elapsed time")
+	_assert_approximately(legacy_loaded.breach_system.get_pressure_percent(), 25.0, 0.0001, "legacy load derives the grace progress from elapsed time")
+	_assert_equal(legacy_loaded.breach_system.patch_delivered, 0, "legacy load defaults patch supplies safely")
+	_assert_approximately(legacy_loaded.breach_system.patch_work_left, BreachSystem.PATCH_WORK_SECONDS, 0.0001, "legacy load defaults patch work safely")
+	_assert_equal(restored_warning_signals["count"], 0, "legacy restore does not replay the warning interrupt")
+
+	var collision_snapshot: Dictionary = legacy_snapshot.duplicate(true)
+	collision_snapshot.buildings.append({
+		"id": 900,
+		"kind": int(VaultBuilding.Kind.BED),
+		"cell": [BreachSystem.HATCH_CELL.x, BreachSystem.HATCH_CELL.y],
+		"complete": true,
+		"delivered": 8,
+		"construction_left": 0.0,
+		"powered": false,
+		"is_emergency_core": false,
+		"production_progress": 0.0,
+	})
+	collision_snapshot.next_building_id = 901
+	var collision_loaded := _spawn_game()
+	_assert_true(collision_loaded.apply_snapshot(collision_snapshot), "legacy hatch fixture loads without destructive migration")
+	collision_loaded.begin_shift()
+	_assert_true(collision_loaded.issue_order(BreachSystem.HATCH_CELL), "legacy hatch fixture remains selectable")
+	_assert_equal(collision_loaded.selected_building_id, 900, "hatch selection preserves access to the legacy fixture")
+	collision_loaded.focus_breach()
+	_assert_true(collision_loaded.selected_breach, "dedicated focus still opens the overlaid breach inspector")
+	_assert_true(collision_loaded.get_building_by_id(900) != null, "legacy hatch fixture remains intact after breach focus")
+
+	_dispose(collision_loaded)
+	_dispose(legacy_loaded)
+	_dispose(loaded)
+	_dispose(original)
+	_remove_test_save(BREACH_SAVE_TEST_PATH)
+
+
 func _test_exact_day_boundary() -> void:
 	var day_cycle := DayCycle.new()
 	root.add_child(day_cycle)
@@ -261,6 +613,32 @@ func _test_exact_day_boundary() -> void:
 	_assert_approximately(day_cycle.elapsed_seconds, completion_boundary, 0.0001, "completed clock does not advance")
 	_assert_equal(completed_signals["count"], 1, "completion signal remains single-shot")
 	_dispose(day_cycle)
+
+
+func _test_day_seven_requires_sealed_breach() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	for resident: VaultResident in game.residents:
+		resident.work_allowed.haul = false
+		resident.work_allowed.craft = false
+	var completion_boundary := DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE
+	game.day_cycle.advance(completion_boundary - VaultGame.SIMULATION_TICK)
+	game.breach_system.advance(0.0, completion_boundary - VaultGame.SIMULATION_TICK)
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.OPEN, "unanswered pressure hatch is open before day seven completes")
+
+	game._simulation_step(VaultGame.SIMULATION_TICK)
+	_assert_true(game.day_cycle.completed, "seven-day clock can complete while the hatch remains open")
+	_assert_false(game.ended, "completed clock does not win while the hatch remains unsealed")
+	_assert_equal(game.outcome, "", "unsealed completed wing has no premature outcome")
+	_assert_true(game.get_alive_count() > 0, "victory gate is the hatch rather than colony loss")
+
+	_assert_equal(game.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "late response accepts its four salvage")
+	_assert_true(game.breach_system.apply_patch_work(BreachSystem.PATCH_WORK_SECONDS), "late eight-second patch seals the hatch")
+	_assert_false(game.ended, "sealing waits for the next simulation evaluation before declaring victory")
+	game._simulation_step(VaultGame.SIMULATION_TICK)
+	_assert_true(game.ended, "sealed day-seven wing reaches an outcome")
+	_assert_equal(game.outcome, "win", "sealed hatch unlocks day-seven victory")
+	_dispose(game)
 
 
 func _test_save_load_round_trip() -> void:
@@ -299,6 +677,38 @@ func _test_save_load_round_trip() -> void:
 	_remove_test_save()
 
 
+func _test_atomic_save_recovery() -> void:
+	_remove_test_save(ATOMIC_SAVE_TEST_PATH)
+	var save_load := SaveLoad.new()
+	root.add_child(save_load)
+	var stable_snapshot := {"marker": "stable"}
+	var replacement_snapshot := {"marker": "replacement"}
+	_assert_true(bool(save_load.save_snapshot(stable_snapshot, ATOMIC_SAVE_TEST_PATH).ok), "initial save writes successfully")
+
+	var temporary_absolute := ProjectSettings.globalize_path(ATOMIC_SAVE_TEST_PATH + ".tmp")
+	_assert_equal(DirAccess.make_dir_absolute(temporary_absolute), OK, "test blocks the temporary file with a directory")
+	var interrupted := save_load.save_snapshot(replacement_snapshot, ATOMIC_SAVE_TEST_PATH)
+	_assert_false(bool(interrupted.ok), "failed temporary write is reported")
+	var preserved := save_load.load_snapshot(ATOMIC_SAVE_TEST_PATH)
+	_assert_true(bool(preserved.ok), "prior slot still loads after a failed replacement")
+	_assert_equal(preserved.snapshot.marker, "stable", "failed replacement preserves the prior snapshot")
+	DirAccess.remove_absolute(temporary_absolute)
+
+	var target_absolute := ProjectSettings.globalize_path(ATOMIC_SAVE_TEST_PATH)
+	var backup_absolute := ProjectSettings.globalize_path(ATOMIC_SAVE_TEST_PATH + ".bak")
+	_assert_equal(DirAccess.rename_absolute(target_absolute, backup_absolute), OK, "test simulates an interrupted promotion")
+	var recovered := save_load.load_snapshot(ATOMIC_SAVE_TEST_PATH)
+	_assert_true(bool(recovered.ok), "orphaned intact backup is recoverable")
+	_assert_equal(recovered.snapshot.marker, "stable", "backup recovery returns the prior snapshot")
+	_assert_true(bool(save_load.save_snapshot(replacement_snapshot, ATOMIC_SAVE_TEST_PATH).ok), "next save completes from the recovered state")
+	_assert_false(FileAccess.file_exists(ATOMIC_SAVE_TEST_PATH + ".bak"), "successful promotion removes the backup")
+	var replaced := save_load.load_snapshot(ATOMIC_SAVE_TEST_PATH)
+	_assert_equal(replaced.snapshot.marker, "replacement", "successful replacement becomes the active slot")
+
+	_dispose(save_load)
+	_remove_test_save(ATOMIC_SAVE_TEST_PATH)
+
+
 func _test_unmanaged_loss() -> void:
 	var game := _spawn_game()
 	game.begin_shift()
@@ -307,6 +717,7 @@ func _test_unmanaged_loss() -> void:
 	_assert_true(game.ended, "untouched starting wing reaches an outcome")
 	_assert_equal(game.outcome, "loss", "starting rations alone end in starvation")
 	_assert_equal(game.get_alive_count(), 0, "all unmanaged residents eventually die")
+	_assert_true(game.breach_system.is_sealed(), "unmanaged loss remains starvation after the automatic breach response")
 	_assert_false(game.day_cycle.completed, "colony fails before completing seven days")
 	_assert_true(
 		game.day_cycle.elapsed_seconds < DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE,
@@ -323,6 +734,7 @@ func _test_player_order_survival_plan() -> void:
 	for x in [16, 15, 14]:
 		for y in [14, 15, 16]:
 			dig_cells.append(Vector2i(x, y))
+	dig_cells.append(Vector2i(13, 15))
 	for cell: Vector2i in dig_cells:
 		_assert_true(game.issue_order(cell), "planned expansion accepts dig designation at %s" % cell)
 	var plans := [
@@ -342,6 +754,7 @@ func _test_player_order_survival_plan() -> void:
 		var building: VaultBuilding = game.get_building_at(plan[1])
 		_assert_true(building != null and building.complete, "survival fixture was supplied and assembled")
 	_assert_true(game.food_system.salvage >= 0, "ordered construction never overdraws salvage")
+	_assert_true(game.breach_system.is_sealed(), "player-order plan automatically contains the first breach")
 
 	var remaining := DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE - game.day_cycle.elapsed_seconds
 	game.step_simulation(remaining + VaultGame.SIMULATION_TICK)
@@ -373,6 +786,7 @@ func _test_managed_day_seven_win() -> void:
 	_assert_true(game.ended, "managed simulation reaches an outcome")
 	_assert_equal(game.outcome, "win", "managed wing reaches the win state")
 	_assert_true(game.day_cycle.completed, "seven-day clock is complete")
+	_assert_true(game.breach_system.is_sealed(), "managed wing contains the first breach before victory")
 	_assert_true(game.get_alive_count() >= 1, "at least one resident survives")
 	_assert_true(game.food_system.meals > 0 or game.food_system.raw_food > 0, "food loop remains productive")
 	_dispose(game)
@@ -399,10 +813,9 @@ func _dispose(node: Node) -> void:
 		node.free()
 
 
-func _remove_test_save() -> void:
-	var absolute_path := ProjectSettings.globalize_path(SAVE_TEST_PATH)
-	if FileAccess.file_exists(SAVE_TEST_PATH):
-		DirAccess.remove_absolute(absolute_path)
+func _remove_test_save(path := SAVE_TEST_PATH) -> void:
+	for suffix in ["", ".tmp", ".bak"]:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path + suffix))
 
 
 func _action_has_physical_key(action: StringName, physical_keycode: Key) -> bool:

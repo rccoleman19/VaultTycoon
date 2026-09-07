@@ -23,6 +23,7 @@ const BUILD_KIND_BY_TOOL := {
 @onready var power_grid: PowerGrid = $PowerGrid
 @onready var food_system: FoodSystem = $FoodSystem
 @onready var day_cycle: DayCycle = $DayCycle
+@onready var breach_system: BreachSystem = $BreachSystem
 @onready var save_load: SaveLoad = $SaveLoad
 @onready var world_camera: Camera2D = $Camera2D
 @onready var player_orders: PlayerOrders = $PlayerOrders
@@ -33,6 +34,7 @@ var next_building_id := 1
 var active_tool := "select"
 var selected_resident_id := -1
 var selected_building_id := -1
+var selected_breach := false
 var simulation_speed := 1
 var user_paused := true
 var tutorial_open := true
@@ -46,11 +48,18 @@ var _dragging_camera := false
 
 
 func _ready() -> void:
-	map_grid.setup(Callable(self, "_has_cancelable_blueprint_at"))
+	map_grid.setup(
+		Callable(self, "_has_cancelable_blueprint_at"),
+		Callable(self, "_is_reserved_cell"),
+	)
+	breach_system.setup(self)
 	job_system.setup(self)
 	map_grid.rubble_created.connect(_on_rubble_created)
 	map_grid.dig_orders_removed.connect(_on_dig_orders_removed)
 	day_cycle.day_started.connect(_on_day_started)
+	breach_system.warning_started.connect(_on_breach_warning_started)
+	breach_system.breach_opened.connect(_on_breach_opened)
+	breach_system.breach_sealed.connect(_on_breach_sealed)
 	player_orders.setup(self)
 	new_game(true)
 
@@ -65,6 +74,9 @@ func _process(delta: float) -> void:
 			_simulation_step(SIMULATION_TICK)
 			_simulation_accumulator -= SIMULATION_TICK
 			steps += 1
+			if is_simulation_paused():
+				_simulation_accumulator = 0.0
+				break
 	player_orders.refresh()
 
 
@@ -80,11 +92,13 @@ func new_game(show_tutorial := false) -> void:
 	job_system.reset()
 	food_system.reset()
 	day_cycle.reset()
+	breach_system.reset()
 	ended = false
 	outcome = ""
 	active_tool = "select"
 	selected_resident_id = -1
 	selected_building_id = -1
+	selected_breach = false
 	_simulation_accumulator = 0.0
 	_spawn_starting_fixture(VaultBuilding.Kind.GENERATOR, Vector2i(24, 15), true)
 	_spawn_starting_fixture(VaultBuilding.Kind.LAMP, Vector2i(22, 14), false)
@@ -106,9 +120,12 @@ func new_game(show_tutorial := false) -> void:
 	world_camera.zoom = Vector2.ONE
 	tutorial_open = show_tutorial
 	user_paused = true
-	status_message = "Wing initialized. Stabilize it through seven full days."
+	status_message = "Wing initialized. Stabilize supplies and monitor the pressure hatch."
 	status_message_left = 5.0
 	player_orders.show_briefing(show_tutorial)
+	player_orders.show_breach_warning(
+		breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged
+	)
 	player_orders.hide_outcome()
 	game_started.emit()
 
@@ -117,7 +134,7 @@ func begin_shift() -> void:
 	tutorial_open = false
 	user_paused = false
 	player_orders.show_briefing(false)
-	status_message = "Shift running. Dig, furnish, power, and feed the wing."
+	status_message = "Shift running. Dig, furnish, power, feed, and watch the seal monitor."
 	status_message_left = 5.0
 
 
@@ -133,14 +150,28 @@ func _simulation_step(delta_seconds: float) -> void:
 		var assigned_bed := get_building_by_id(resident.bed_id)
 		var in_bed := assigned_bed != null and assigned_bed.complete and resident_cell == assigned_bed.cell
 		resident.advance_needs(delta_seconds / DayCycle.SECONDS_PER_DAY, lit, in_bed)
-	job_system.advance(delta_seconds)
-	food_system.advance(delta_seconds, buildings)
-	power_grid.recalculate(buildings)
+	var next_elapsed := minf(
+		day_cycle.elapsed_seconds + delta_seconds,
+		DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE,
+	)
+	var phase_before_step := breach_system.phase
+	breach_system.advance(delta_seconds, next_elapsed)
 	if get_alive_count() <= 0:
 		_finish_loss()
 		return
+	var warning_paused_this_step := (
+		phase_before_step == BreachSystem.Phase.DORMANT
+		and breach_system.phase == BreachSystem.Phase.WARNING
+		and user_paused
+	)
+	if warning_paused_this_step:
+		day_cycle.advance(delta_seconds)
+		return
+	job_system.advance(delta_seconds)
+	food_system.advance(delta_seconds, buildings)
+	power_grid.recalculate(buildings)
 	day_cycle.advance(delta_seconds)
-	if day_cycle.completed:
+	if day_cycle.completed and breach_system.is_sealed():
 		_finish_win()
 
 
@@ -157,12 +188,18 @@ func is_simulation_paused() -> bool:
 func toggle_pause() -> void:
 	if tutorial_open or ended:
 		return
+	if user_paused and breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged:
+		acknowledge_breach_warning(true)
+		return
 	user_paused = not user_paused
 
 
 func set_speed(speed: int) -> void:
 	simulation_speed = clampi(speed, 1, 3)
 	if not tutorial_open and not ended:
+		if breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged:
+			breach_system.warning_acknowledged = true
+			player_orders.show_breach_warning(false)
 		user_paused = false
 
 
@@ -212,6 +249,10 @@ func issue_order(cell: Vector2i) -> bool:
 
 
 func place_blueprint(kind: int, cell: Vector2i) -> bool:
+	if cell == BreachSystem.HATCH_CELL:
+		status_message = "Keep the marked pressure hatch clear for emergency access."
+		status_message_left = 3.0
+		return false
 	if not map_grid.is_walkable(cell):
 		status_message = "Carve this tile before placing a fixture."
 		status_message_left = 3.0
@@ -263,6 +304,8 @@ func get_resident_by_id(resident_id: int) -> VaultResident:
 func select_resident(resident_id: int) -> void:
 	selected_resident_id = resident_id
 	selected_building_id = -1
+	selected_breach = false
+	breach_system.queue_redraw()
 	for resident in residents:
 		resident.selected = resident.resident_id == resident_id
 		resident.queue_redraw()
@@ -271,6 +314,8 @@ func select_resident(resident_id: int) -> void:
 func select_building(building_id: int) -> void:
 	selected_building_id = building_id
 	selected_resident_id = -1
+	selected_breach = false
+	breach_system.queue_redraw()
 	for resident in residents:
 		resident.selected = false
 		resident.queue_redraw()
@@ -341,6 +386,7 @@ func create_snapshot() -> Dictionary:
 		"residents": resident_data,
 		"food": food_system.serialize(),
 		"day": day_cycle.serialize(),
+		"breach": breach_system.serialize(),
 		"jobs": job_system.serialize(),
 		"next_building_id": next_building_id,
 		"camera": [world_camera.position.x, world_camera.position.y, world_camera.zoom.x],
@@ -379,6 +425,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 		return false
 	food_system.deserialize(snapshot.get("food", {}))
 	day_cycle.deserialize(snapshot.get("day", {}))
+	breach_system.deserialize(snapshot.get("breach", {}), day_cycle.elapsed_seconds)
 	next_building_id = int(snapshot.get("next_building_id", 1))
 	ended = bool(snapshot.get("ended", false))
 	outcome = str(snapshot.get("outcome", ""))
@@ -390,7 +437,13 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	power_grid.recalculate(buildings)
 	selected_resident_id = -1
 	selected_building_id = -1
+	selected_breach = false
+	breach_system.queue_redraw()
 	active_tool = "select"
+	_simulation_accumulator = 0.0
+	player_orders.show_breach_warning(
+		breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged
+	)
 	if ended:
 		if outcome == "win":
 			player_orders.show_outcome(true, get_alive_count())
@@ -403,8 +456,16 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	var map_data: Variant = snapshot.get("map")
 	var resident_data: Variant = snapshot.get("residents")
 	var building_data: Variant = snapshot.get("buildings")
+	var breach_data: Variant = snapshot.get("breach", {})
+	var jobs_data: Variant = snapshot.get("jobs", {})
 	if not map_data is Dictionary or not resident_data is Array or not building_data is Array:
 		return false
+	if snapshot.has("breach"):
+		var day_data: Variant = snapshot.get("day")
+		if not day_data is Dictionary:
+			return false
+		if not breach_system.is_serialized_data_valid(breach_data, day_data.get("elapsed_seconds")):
+			return false
 	if resident_data.is_empty() or resident_data.size() > 5:
 		return false
 	var saved_cells: Variant = map_data.get("cells")
@@ -418,6 +479,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	for entry: Variant in building_data:
 		if not entry is Dictionary or not entry.get("cell") is Array or entry.cell.size() < 2:
 			return false
+	if not job_system.is_serialized_breach_data_valid(jobs_data, breach_data, resident_data):
+		return false
 	return true
 
 
@@ -432,6 +495,23 @@ func _spawn_starting_fixture(kind: int, cell: Vector2i, core: bool) -> void:
 
 
 func _select_at(cell: Vector2i) -> bool:
+	if cell == BreachSystem.HATCH_CELL:
+		# Version-one saves could legally contain a fixture here. Preserve and
+		# keep that fixture selectable; the dedicated focus control still opens
+		# the breach inspector.
+		var legacy_hatch_building := get_building_at(cell)
+		if legacy_hatch_building != null:
+			select_building(legacy_hatch_building.building_id)
+			return true
+	if cell == BreachSystem.HATCH_CELL and breach_system.phase != BreachSystem.Phase.DORMANT:
+		selected_resident_id = -1
+		selected_building_id = -1
+		selected_breach = true
+		for resident in residents:
+			resident.selected = false
+			resident.queue_redraw()
+		breach_system.queue_redraw()
+		return true
 	for resident in residents:
 		if resident.alive and resident.get_cell(map_grid) == cell:
 			select_resident(resident.resident_id)
@@ -442,6 +522,8 @@ func _select_at(cell: Vector2i) -> bool:
 		return true
 	selected_resident_id = -1
 	selected_building_id = -1
+	selected_breach = false
+	breach_system.queue_redraw()
 	for resident in residents:
 		resident.selected = false
 		resident.queue_redraw()
@@ -497,7 +579,31 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func recenter_camera() -> void:
 	var selected := get_resident_by_id(selected_resident_id)
-	world_camera.position = selected.position if selected != null else map_grid.cell_to_world(map_grid.get_chamber_center())
+	if selected != null:
+		world_camera.position = selected.position
+	elif selected_breach:
+		world_camera.position = map_grid.cell_to_world(BreachSystem.HATCH_CELL)
+	else:
+		world_camera.position = map_grid.cell_to_world(map_grid.get_chamber_center())
+
+
+func focus_breach() -> void:
+	selected_resident_id = -1
+	selected_building_id = -1
+	selected_breach = true
+	for resident in residents:
+		resident.selected = false
+		resident.queue_redraw()
+	breach_system.queue_redraw()
+	world_camera.position = map_grid.cell_to_world(BreachSystem.HATCH_CELL)
+
+
+func acknowledge_breach_warning(resume_response: bool) -> void:
+	breach_system.warning_acknowledged = true
+	player_orders.show_breach_warning(false)
+	focus_breach()
+	if resume_response and not tutorial_open and not ended:
+		user_paused = false
 
 
 func _update_camera(delta: float) -> void:
@@ -521,6 +627,10 @@ func _has_cancelable_blueprint_at(cell: Vector2i) -> bool:
 	return building != null and not building.complete
 
 
+func _is_reserved_cell(cell: Vector2i) -> bool:
+	return cell == BreachSystem.HATCH_CELL
+
+
 func _on_resident_died(resident: VaultResident) -> void:
 	job_system.release_resident(resident)
 	user_paused = true
@@ -533,8 +643,34 @@ func _on_resident_died(resident: VaultResident) -> void:
 func _on_day_started(_day: int) -> void:
 	if not ended:
 		save_game(false)
+		if breach_system.is_response_active() or (breach_system.is_sealed() and status_message_left > 0.0):
+			return
 		status_message = "Cycle checkpoint saved locally."
 		status_message_left = 3.0
+
+
+func _on_breach_warning_started() -> void:
+	job_system.start_breach_response()
+	simulation_speed = 1
+	user_paused = true
+	active_tool = "select"
+	map_grid.preview_tool = active_tool
+	focus_breach()
+	player_orders.show_breach_warning(true)
+	status_message = "PRESSURE WARNING: shift paused at 1x. Four salvage and Haul/Craft response required."
+	status_message_left = BreachSystem.GRACE_SECONDS
+
+
+func _on_breach_opened() -> void:
+	player_orders.show_breach_warning(false)
+	status_message = "BREACH OPEN: health is draining until the hatch is patched."
+	status_message_left = 12.0
+
+
+func _on_breach_sealed() -> void:
+	player_orders.show_breach_warning(false)
+	status_message = "FIRST BREACH CONTAINED: pressure hatch is stable."
+	status_message_left = 8.0
 
 
 func _finish_win() -> void:

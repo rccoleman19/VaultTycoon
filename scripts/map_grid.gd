@@ -18,6 +18,7 @@ var dig_progress: Dictionary = {}
 var hover_cell := Vector2i(-1, -1)
 var preview_tool := "select"
 var cancel_preview_check := Callable()
+var reserved_cell_check := Callable()
 
 
 func _ready() -> void:
@@ -25,8 +26,9 @@ func _ready() -> void:
 		new_wing()
 
 
-func setup(cancel_check: Callable) -> void:
+func setup(cancel_check: Callable, reserved_check := Callable()) -> void:
 	cancel_preview_check = cancel_check
+	reserved_cell_check = reserved_check
 
 
 func new_wing() -> void:
@@ -120,7 +122,7 @@ func is_preview_valid(tool: String, cell: Vector2i) -> bool:
 		return can_queue_dig(cell)
 	if tool == "cancel":
 		return dig_marks.has(cell) or (cancel_preview_check.is_valid() and bool(cancel_preview_check.call(cell)))
-	return is_walkable(cell)
+	return is_walkable(cell) and not (reserved_cell_check.is_valid() and bool(reserved_cell_check.call(cell)))
 
 
 func nearest_walkable_neighbor(cell: Vector2i, from_cell: Vector2i) -> Vector2i:

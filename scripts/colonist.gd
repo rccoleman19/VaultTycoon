@@ -47,6 +47,15 @@ func advance_needs(day_fraction: float, lit: bool, in_bed: bool) -> void:
 	queue_redraw()
 
 
+func apply_damage(amount: float) -> void:
+	if not alive or amount <= 0.0:
+		return
+	needs.health = clampf(needs.health - amount, 0.0, 100.0)
+	if needs.health <= 0.0:
+		kill()
+	queue_redraw()
+
+
 func get_work_multiplier() -> float:
 	var multiplier := 1.0
 	if needs.food < 30.0:
