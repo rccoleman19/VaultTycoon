@@ -8,7 +8,7 @@ var health := 100.0
 
 
 func advance(day_fraction: float, is_lit: bool, sleeping: bool, in_bed: bool) -> void:
-	food = clampf(food - 36.0 * day_fraction, 0.0, 100.0)
+	food = clampf(food - 60.0 * day_fraction, 0.0, 100.0)
 	if sleeping:
 		var recovery := 96.0 if in_bed else 48.0
 		rest = clampf(rest + recovery * day_fraction, 0.0, 100.0)
@@ -17,7 +17,7 @@ func advance(day_fraction: float, is_lit: bool, sleeping: bool, in_bed: bool) ->
 	var mood_delta := 0.0 if sleeping else (42.0 if is_lit else -30.0)
 	light_mood = clampf(light_mood + mood_delta * day_fraction, 0.0, 100.0)
 	if food <= 0.0:
-		health -= 58.0 * day_fraction
+		health -= 160.0 * day_fraction
 	if rest <= 0.0:
 		health -= 30.0 * day_fraction
 	if light_mood <= 5.0:
@@ -26,7 +26,7 @@ func advance(day_fraction: float, is_lit: bool, sleeping: bool, in_bed: bool) ->
 
 
 func eat() -> void:
-	food = minf(100.0, food + 42.0)
+	food = minf(100.0, food + 60.0)
 
 
 func serialize() -> Dictionary:

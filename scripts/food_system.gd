@@ -3,20 +3,20 @@ extends Node
 
 signal inventory_changed
 
-const GROW_SECONDS := 46.0
-const GROW_YIELD := 6
-const COOK_INPUT := 2
-const COOK_OUTPUT := 4
+const GROW_SECONDS := 9.0
+const GROW_YIELD := 1
+const COOK_INPUT := 1
+const COOK_OUTPUT := 1
 
-var meals := 10
-var raw_food := 6
-var salvage := 52
+var meals := 8
+var raw_food := 2
+var salvage := 30
 
 
 func reset() -> void:
-	meals = 10
-	raw_food = 6
-	salvage = 52
+	meals = 8
+	raw_food = 2
+	salvage = 30
 	inventory_changed.emit()
 
 
@@ -74,8 +74,7 @@ func serialize() -> Dictionary:
 
 
 func deserialize(data: Dictionary) -> void:
-	meals = maxi(0, int(data.get("meals", 10)))
-	raw_food = maxi(0, int(data.get("raw_food", 6)))
-	salvage = maxi(0, int(data.get("salvage", 52)))
+	meals = maxi(0, int(data.get("meals", 8)))
+	raw_food = maxi(0, int(data.get("raw_food", 2)))
+	salvage = maxi(0, int(data.get("salvage", 30)))
 	inventory_changed.emit()
-

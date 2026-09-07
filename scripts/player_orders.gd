@@ -358,9 +358,9 @@ func _refresh_inspector() -> void:
 			var power_text := "Powered" if building.get_power_demand() == 0 or building.powered else "UNPOWERED"
 			inspector_state.text = "Online · %s\nPower: %d use / %d output" % [power_text, building.get_power_demand(), building.get_power_output()]
 			if building.kind == VaultBuilding.Kind.GROW_TRAY:
-				inspector_state.text += "\nGrowth: %d%% · yields 6 raw" % floori(building.production_progress / FoodSystem.GROW_SECONDS * 100.0)
+				inspector_state.text += "\nGrowth: %d%% · yields 1 raw" % floori(building.production_progress / FoodSystem.GROW_SECONDS * 100.0)
 			elif building.kind == VaultBuilding.Kind.KITCHEN:
-				inspector_state.text += "\nRecipe: 2 raw -> 4 meals"
+				inspector_state.text += "\nRecipe: 1 raw -> 1 meal"
 		else:
 			inspector_state.text = "Blueprint · Salvage %d/%d\nAssembly remaining: %.1fs" % [building.delivered, building.get_cost(), building.construction_left]
 		_hide_needs_and_work()
@@ -398,7 +398,7 @@ func _refresh_checklist() -> void:
 	var initial_floor_count := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
 	var checks := [
 		[game.selected_resident_id >= 0, "Select a resident"],
-		[game.map_grid.get_floor_cells().size() > initial_floor_count, "Complete one excavation"],
+		[game.map_grid.get_floor_cells().size() >= initial_floor_count + 6, "Complete six excavations"],
 		[game.get_completed_building_count(VaultBuilding.Kind.BED) >= 2, "Assemble at least two bunks"],
 		[game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) >= 1, "Add a charge node"],
 		[game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY) >= 1, "Power a grow tray"],

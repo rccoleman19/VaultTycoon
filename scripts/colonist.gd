@@ -38,10 +38,10 @@ func get_cell(map_grid: MapGrid) -> Vector2i:
 	return map_grid.world_to_cell(position)
 
 
-func advance_needs(day_fraction: float, lit: bool) -> void:
+func advance_needs(day_fraction: float, lit: bool, in_bed: bool) -> void:
 	if not alive:
 		return
-	needs.advance(day_fraction, lit, sleeping, bed_id >= 0)
+	needs.advance(day_fraction, lit, sleeping, in_bed)
 	if needs.health <= 0.0:
 		kill()
 	queue_redraw()

@@ -89,8 +89,8 @@ func new_game(show_tutorial := false) -> void:
 	_spawn_starting_fixture(VaultBuilding.Kind.STOCKPILE, Vector2i(19, 17), false)
 	var names := ["Ari", "Bo", "Cyra", "Dax"]
 	var cells := [Vector2i(20, 15), Vector2i(21, 16), Vector2i(22, 17), Vector2i(23, 18)]
-	var starting_food := [84.0, 90.0, 76.0, 96.0]
-	var starting_rest := [62.0, 74.0, 84.0, 92.0]
+	var starting_food := [65.0, 72.0, 79.0, 86.0]
+	var starting_rest := [55.0, 70.0, 82.0, 94.0]
 	for index in names.size():
 		var resident := VaultResident.new()
 		resident_root.add_child(resident)
@@ -126,8 +126,11 @@ func _simulation_step(delta_seconds: float) -> void:
 	for resident in residents:
 		if not resident.alive:
 			continue
-		var lit := power_grid.is_cell_lit(resident.get_cell(map_grid), buildings)
-		resident.advance_needs(delta_seconds / DayCycle.SECONDS_PER_DAY, lit)
+		var resident_cell := resident.get_cell(map_grid)
+		var lit := power_grid.is_cell_lit(resident_cell, buildings)
+		var assigned_bed := get_building_by_id(resident.bed_id)
+		var in_bed := assigned_bed != null and assigned_bed.complete and resident_cell == assigned_bed.cell
+		resident.advance_needs(delta_seconds / DayCycle.SECONDS_PER_DAY, lit, in_bed)
 	job_system.advance(delta_seconds)
 	food_system.advance(delta_seconds, buildings)
 	power_grid.recalculate(buildings)
@@ -335,7 +338,7 @@ func create_snapshot() -> Dictionary:
 
 
 func apply_snapshot(snapshot: Dictionary) -> bool:
-	if not snapshot.has("map") or not snapshot.has("residents") or not snapshot.has("buildings"):
+	if not _is_snapshot_shape_valid(snapshot):
 		return false
 	if not map_grid.deserialize(snapshot.map):
 		return false
@@ -381,6 +384,28 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 			player_orders.show_outcome(true, get_alive_count())
 		else:
 			player_orders.show_outcome(false, 0)
+	return true
+
+
+func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
+	var map_data: Variant = snapshot.get("map")
+	var resident_data: Variant = snapshot.get("residents")
+	var building_data: Variant = snapshot.get("buildings")
+	if not map_data is Dictionary or not resident_data is Array or not building_data is Array:
+		return false
+	if resident_data.is_empty() or resident_data.size() > 5:
+		return false
+	var saved_cells: Variant = map_data.get("cells")
+	if not saved_cells is Array or saved_cells.size() != MapGrid.WIDTH * MapGrid.HEIGHT:
+		return false
+	for entry: Variant in resident_data:
+		if not entry is Dictionary or not entry.get("position") is Array or not entry.get("needs") is Dictionary:
+			return false
+		if entry.position.size() < 2:
+			return false
+	for entry: Variant in building_data:
+		if not entry is Dictionary or not entry.get("cell") is Array or entry.cell.size() < 2:
+			return false
 	return true
 
 

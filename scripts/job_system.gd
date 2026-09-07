@@ -58,6 +58,9 @@ func release_resident(resident: VaultResident) -> void:
 	if resident.current_job_id >= 0:
 		var job := _find_job(resident.current_job_id)
 		if not job.is_empty():
+			if int(job.type) == JobType.SUPPLY_BUILD and int(job.get("in_transit", 0)) > 0:
+				food.add_salvage(int(job.in_transit))
+				job.in_transit = 0
 			job.reserved_by = -1
 	resident.carrying = 0
 	resident.clear_job()
@@ -82,6 +85,14 @@ func rebuild_from_state(saved_data: Dictionary = {}) -> void:
 	for entry: Variant in saved_data.get("rubble", []):
 		if entry is Array and entry.size() >= 3:
 			queue_rubble(Vector2i(int(entry[0]), int(entry[1])), int(entry[2]))
+	for entry: Variant in saved_data.get("supplies", []):
+		if entry is Array and entry.size() >= 5:
+			var target := Vector2i(int(entry[1]), int(entry[2]))
+			_add_job(JobType.SUPPLY_BUILD, target, int(entry[0]), int(entry[3]))
+			for job: Dictionary in jobs:
+				if int(job.type) == JobType.SUPPLY_BUILD and int(job.building_id) == int(entry[0]):
+					job.in_transit = int(entry[4])
+					break
 	for cell: Vector2i in map_grid.dig_marks:
 		queue_dig(cell)
 	for building: VaultBuilding in game.buildings:
@@ -91,11 +102,15 @@ func rebuild_from_state(saved_data: Dictionary = {}) -> void:
 
 func serialize() -> Dictionary:
 	var rubble: Array = []
+	var supplies: Array = []
 	for job: Dictionary in jobs:
 		if int(job.type) == JobType.HAUL_RUBBLE and not bool(job.get("done", false)):
 			var target: Vector2i = job.target
 			rubble.append([target.x, target.y, int(job.amount)])
-	return {"rubble": rubble}
+		elif int(job.type) == JobType.SUPPLY_BUILD and not bool(job.get("done", false)):
+			var target: Vector2i = job.target
+			supplies.append([int(job.building_id), target.x, target.y, int(job.amount), int(job.get("in_transit", 0))])
+	return {"rubble": rubble, "supplies": supplies}
 
 
 func get_queued_count() -> int:
@@ -114,12 +129,12 @@ func _ensure_state_jobs() -> void:
 			_add_job(JobType.SUPPLY_BUILD, building.cell, building.building_id, building.get_cost() - building.delivered)
 		elif not building.complete:
 			_add_job(JobType.BUILD, building.cell, building.building_id)
-		elif building.kind == VaultBuilding.Kind.KITCHEN and food.can_cook() and food.meals < 16:
+		elif building.kind == VaultBuilding.Kind.KITCHEN and building.powered and food.can_cook() and food.meals < 8:
 			_add_job(JobType.COOK, building.cell, building.building_id)
 
 
 func _handle_survival(resident: VaultResident, delta_seconds: float) -> bool:
-	if resident.needs.food <= 66.0 and food.consume_meal():
+	if resident.needs.food <= 35.0 and food.consume_meal():
 		release_resident(resident)
 		resident.needs.eat()
 		resident.state = "Eating ration"
@@ -133,17 +148,28 @@ func _handle_survival(resident: VaultResident, delta_seconds: float) -> bool:
 			resident.state = "Going to bunk"
 		else:
 			resident.state = "Sleeping"
-		if resident.needs.rest >= 86.0:
+		var wake_threshold := 86.0 if resident.bed_id >= 0 else 44.0
+		if resident.needs.rest >= wake_threshold:
+			if resident.bed_id < 0:
+				resident.needs.light_mood = maxf(0.0, resident.needs.light_mood - 12.0)
 			resident.sleeping = false
 			resident.bed_id = -1
 			resident.state = "Idle"
 			resident.clear_path()
 		return true
 	if resident.needs.rest <= 28.0:
+		var available_bed := _find_free_bed(resident)
+		if available_bed >= 0:
+			release_resident(resident)
+			resident.sleeping = true
+			resident.bed_id = available_bed
+			resident.state = "Seeking rest"
+			return true
+	if resident.needs.rest <= 0.0:
 		release_resident(resident)
 		resident.sleeping = true
-		resident.bed_id = _find_free_bed(resident)
-		resident.state = "Seeking rest"
+		resident.bed_id = -1
+		resident.state = "Collapsed on floor"
 		return true
 	if resident.stress_break_left > 0.0:
 		resident.stress_break_left = maxf(0.0, resident.stress_break_left - delta_seconds)
@@ -201,6 +227,9 @@ func _claim_best_job(resident: VaultResident) -> void:
 	resident.current_job_id = int(job.id)
 	resident.current_job_type = int(job.type)
 	resident.job_phase = "pickup" if int(job.type) == JobType.SUPPLY_BUILD else "target"
+	if int(job.type) == JobType.SUPPLY_BUILD and int(job.get("in_transit", 0)) > 0:
+		resident.job_phase = "target"
+		resident.carrying = int(job.in_transit)
 	resident.work_accumulator = 0.0
 	resident.state = str(JOB_NAMES.get(int(job.type), "Working"))
 
@@ -222,7 +251,7 @@ func _job_available(resident: VaultResident, job: Dictionary) -> bool:
 	if type == JobType.BUILD:
 		return not building.complete and building.is_supplied()
 	if type == JobType.COOK:
-		return building.complete and building.kind == VaultBuilding.Kind.KITCHEN and food.can_cook()
+		return building.complete and building.kind == VaultBuilding.Kind.KITCHEN and building.powered and food.can_cook()
 	return false
 
 
@@ -263,14 +292,14 @@ func _process_job(resident: VaultResident, delta_seconds: float) -> void:
 			resident.state = "Walking to nutrient station"
 			return
 		if not building.powered:
-			resident.state = "Waiting: station unpowered"
+			_finish_job(job, resident)
 			return
 		if not food.can_cook():
 			_finish_job(job, resident)
 			return
 		resident.state = "Preparing meals"
 		resident.work_accumulator += delta_seconds * resident.get_work_multiplier()
-		if resident.work_accumulator >= 5.0:
+		if resident.work_accumulator >= 4.0:
 			food.finish_cooking()
 			_finish_job(job, resident)
 
@@ -297,18 +326,19 @@ func _process_supply_job(resident: VaultResident, job: Dictionary, building: Vau
 		if not resident.move_to(_stockpile_cell(), map_grid, delta_seconds):
 			resident.state = "Collecting salvage"
 			return
-		resident.carrying = mini(building.get_cost() - building.delivered, food.salvage)
+		resident.carrying = food.take_salvage(building.get_cost() - building.delivered)
 		if resident.carrying <= 0:
 			job.reserved_by = -1
 			resident.clear_job()
 			return
+		job.in_transit = resident.carrying
 		resident.job_phase = "target"
 		resident.clear_path()
 	if not resident.move_to(building.cell, map_grid, delta_seconds):
 		resident.state = "Supplying %s" % building.get_display_name()
 		return
-	var delivered := food.take_salvage(resident.carrying)
-	building.add_delivery(delivered)
+	building.add_delivery(resident.carrying)
+	job.in_transit = 0
 	resident.carrying = 0
 	if building.needs_supply():
 		job.amount = building.get_cost() - building.delivered
@@ -364,6 +394,7 @@ func _add_job(type: int, target: Vector2i, building_id := -1, amount := 0) -> vo
 		"building_id": building_id,
 		"amount": amount,
 		"reserved_by": -1,
+		"in_transit": 0,
 		"done": false,
 	})
 	next_job_id += 1
@@ -389,7 +420,6 @@ func _cancel_matching(predicate: Callable) -> void:
 			continue
 		var resident: VaultResident = game.get_resident_by_id(int(job.reserved_by))
 		if resident != null:
-			resident.carrying = 0
-			resident.clear_job()
+			release_resident(resident)
 		job.done = true
 	jobs = jobs.filter(func(job: Dictionary) -> bool: return not bool(job.get("done", false)))
