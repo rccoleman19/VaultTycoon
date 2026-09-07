@@ -35,7 +35,7 @@ If your installation exposes `godot4` or an absolute executable path instead of 
 The game opens paused on the seal-stabilization briefing. Select **BEGIN SHIFT**, then:
 
 1. Select a resident from the map or roster and verify their work permissions.
-2. Choose **DIG** or press **D**, then click or drag across rock connected to the chamber. Residents with Dig enabled excavate reachable designations.
+2. Choose **DIG** or press **E**, then click or drag across rock connected to carved floor by adjacent dig designations. Residents with Dig enabled excavate the reachable front of that chain.
 3. Excavated rubble becomes salvage after a resident hauls it to the Salvage Bay.
 4. Place blueprints only on carved floor. Residents with Haul and Craft enabled supply and assemble them.
 5. Build bunks for rest and a Charge Node before adding a powered Grow Tray and Nutrient Station. The emergency core alone cannot sustain the full food-and-light loop.
@@ -52,9 +52,9 @@ The simulation starts with 8 meals, 2 raw food, 30 salvage, an emergency core, o
 | Left-drag | Paint Dig or Cancel orders across multiple tiles |
 | Right click | Return to Select mode |
 | `Esc` | Return to Select mode |
-| `D` | Activate Dig |
+| `E` | Activate Dig |
 | `X` | Activate Cancel Designation |
-| `W` `A` `S` `D` / arrow keys | Pan the camera (when no conflicting tool hotkey is newly pressed) |
+| `W` `A` `S` `D` / arrow keys | Pan the camera |
 | Middle-drag | Pan the camera |
 | Mouse wheel | Zoom between the supported map limits |
 | `F` or `Home` | Center on the selected resident, or on the sealed chamber |

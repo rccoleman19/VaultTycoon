@@ -176,7 +176,7 @@ func _build_interface() -> void:
 	bottom_content.add_child(command_row)
 	var tools := [
 		["select", "SELECT [Esc]", "Inspect residents and fixtures"],
-		["dig", "DIG [D]", "Mark rock for excavation"],
+		["dig", "DIG [E]", "Mark rock for excavation"],
 		["cancel", "CANCEL [X]", "Remove orders and blueprints"],
 		["bed", "BUNK $8", "Rest fixture"],
 		["lamp", "LUMEN $5", "1 power; lights nearby tiles"],
@@ -360,7 +360,7 @@ func _refresh_inspector() -> void:
 			if building.kind == VaultBuilding.Kind.GROW_TRAY:
 				inspector_state.text += "\nGrowth: %d%% · yields 1 raw" % floori(building.production_progress / FoodSystem.GROW_SECONDS * 100.0)
 			elif building.kind == VaultBuilding.Kind.KITCHEN:
-				inspector_state.text += "\nRecipe: 1 raw -> 1 meal"
+				inspector_state.text += "\nRecipe: %d raw -> %d meal" % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
 		else:
 			inspector_state.text = "Blueprint · Salvage %d/%d\nAssembly remaining: %.1fs" % [building.delivered, building.get_cost(), building.construction_left]
 		_hide_needs_and_work()
@@ -401,7 +401,7 @@ func _refresh_checklist() -> void:
 		[game.map_grid.get_floor_cells().size() >= initial_floor_count + 6, "Complete six excavations"],
 		[game.get_completed_building_count(VaultBuilding.Kind.BED) >= 2, "Assemble at least two bunks"],
 		[game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) >= 1, "Add a charge node"],
-		[game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY) >= 1, "Power a grow tray"],
+		[game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) >= 1, "Power a grow tray"],
 		[game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) >= 1, "Assemble a nutrient station"],
 		[game.day_cycle.completed, "Survive seven full days"],
 	]

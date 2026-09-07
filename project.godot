@@ -42,6 +42,10 @@ camera_down={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"physical_keycode":83), Object(InputEventKey,"physical_keycode":4194322)]
 }
+tool_dig={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":69)]
+}
 pause_game={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"physical_keycode":32)]
@@ -50,4 +54,3 @@ cancel_order={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"physical_keycode":4194305)]
 }
-

@@ -16,9 +16,12 @@ func _init() -> void:
 
 func _run() -> void:
 	_run_case("main scene boots with a sealed four-resident wing", _test_scene_boot_and_initial_state)
+	_run_case("tool hotkeys and help match the documented controls", _test_tool_hotkeys_and_help)
 	_run_case("dig orders complete through the job system", _test_dig_completion)
 	_run_case("blueprints are supplied and constructed", _test_blueprint_build)
+	_run_case("cancel previews and powered checklist match their actions", _test_order_preview_and_checklist)
 	_run_case("power is allocated by supply and priority", _test_power_allocation)
+	_run_case("powered kitchens cook at the starting meal stock", _test_cooking_at_starting_stock)
 	_run_case("day seven completes only at the exact boundary", _test_exact_day_boundary)
 	_run_case("save and load preserve a deterministic simulation", _test_save_load_round_trip)
 	_run_case("an unmanaged wing starves before day seven", _test_unmanaged_loss)
@@ -81,23 +84,61 @@ func _test_scene_boot_and_initial_state() -> void:
 	_dispose(game)
 
 
+func _test_tool_hotkeys_and_help() -> void:
+	var game := _spawn_game()
+	_assert_true(_action_has_physical_key("tool_dig", KEY_E), "E is configured as the Dig hotkey")
+	for action in ["camera_left", "camera_right", "camera_up", "camera_down"]:
+		_assert_false(_action_has_physical_key(action, KEY_E), "Dig hotkey does not overlap %s" % action)
+
+	var pan_event := InputEventKey.new()
+	pan_event.physical_keycode = KEY_D
+	pan_event.pressed = true
+	game._unhandled_input(pan_event)
+	_assert_equal(game.active_tool, "select", "camera-right D does not select Dig")
+
+	var dig_event := InputEventKey.new()
+	dig_event.physical_keycode = KEY_E
+	dig_event.pressed = true
+	game._unhandled_input(dig_event)
+	_assert_equal(game.active_tool, "dig", "configured E hotkey selects Dig")
+	_assert_equal(
+		game._tool_help("kitchen"),
+		"NUTRIENT STATION: cooks %d raw food into %d meal (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT],
+		"nutrient help is derived from the simulated recipe",
+	)
+	_dispose(game)
+
+
 func _test_dig_completion() -> void:
 	var game := _spawn_game()
 	var target := MapGrid.CHAMBER.position + Vector2i.LEFT
+	var outward_target := target + Vector2i.LEFT
+	var isolated_target := Vector2i(5, 5)
 	var initial_floor_count := game.map_grid.get_floor_cells().size()
 	game.begin_shift()
 	game.set_tool("dig")
 
+	_assert_true(game.map_grid.is_diggable(isolated_target), "isolated test target is ordinary diggable rock")
+	_assert_false(game.map_grid.is_preview_valid("dig", isolated_target), "isolated rock has an invalid Dig preview")
+	_assert_false(game.issue_order(isolated_target), "isolated rock rejects a dig order")
+	_assert_false(game.map_grid.dig_marks.has(isolated_target), "rejected excavation leaves no designation")
+	_assert_equal(game.job_system.get_queued_count(), 0, "rejected excavation leaves no queued job")
+	_assert_true("Connect excavation" in game.status_message, "rejected excavation explains how to connect it")
+	_assert_true(game.map_grid.is_preview_valid("dig", target), "rock beside carved floor has a valid Dig preview")
 	_assert_true(game.issue_order(target), "adjacent rock accepts a dig order")
 	_assert_false(game.issue_order(target), "duplicate dig order is rejected")
 	_assert_true(game.map_grid.dig_marks.has(target), "dig designation is stored")
-	_assert_equal(game.job_system.get_queued_count(), 1, "one excavation job is queued")
+	_assert_true(game.map_grid.is_preview_valid("dig", outward_target), "rock joined to an anchored designation previews valid")
+	_assert_true(game.issue_order(outward_target), "an outward designation connected through the first is accepted")
+	_assert_equal(game.job_system.get_queued_count(), 2, "two connected excavation jobs are queued")
 
-	game.step_simulation(18.0)
+	game.step_simulation(24.0)
 
 	_assert_equal(game.map_grid.get_tile(target), MapGrid.Tile.FLOOR, "excavation converts rock to floor")
+	_assert_equal(game.map_grid.get_tile(outward_target), MapGrid.Tile.FLOOR, "connected outward excavation becomes reachable and completes")
 	_assert_false(game.map_grid.dig_marks.has(target), "completed dig designation is cleared")
-	_assert_equal(game.map_grid.get_floor_cells().size(), initial_floor_count + 1, "excavation adds one floor tile")
+	_assert_false(game.map_grid.dig_marks.has(outward_target), "connected designation clears after completion")
+	_assert_equal(game.map_grid.get_floor_cells().size(), initial_floor_count + 2, "excavation adds both floor tiles")
 	_dispose(game)
 
 
@@ -126,6 +167,32 @@ func _test_blueprint_build() -> void:
 	_dispose(game)
 
 
+func _test_order_preview_and_checklist() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	var blueprint_cell := Vector2i(18, 12)
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, blueprint_cell), "cancel-preview fixture is placed")
+	_assert_true(game.map_grid.is_preview_valid("cancel", blueprint_cell), "unfinished blueprint has a valid Cancel preview")
+	game.set_tool("cancel")
+	_assert_true(game.issue_order(blueprint_cell), "unfinished blueprint is canceled")
+	_assert_true(game.get_building_at(blueprint_cell) == null, "canceled blueprint is removed")
+
+	var grow_tray := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, blueprint_cell)
+	game.power_grid.recalculate(game.buildings)
+	game.player_orders._refresh_checklist()
+	_assert_false(grow_tray.powered, "grow tray is initially unpowered during overload")
+	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY), 0, "unpowered tray does not satisfy the powered count")
+	_assert_true("[    ][/color]  Power a grow tray" in game.player_orders.checklist.text, "checklist leaves an unpowered tray incomplete")
+
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(19, 12))
+	game.power_grid.recalculate(game.buildings)
+	game.player_orders._refresh_checklist()
+	_assert_true(grow_tray.powered, "charge capacity powers the grow tray")
+	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY), 1, "powered tray satisfies the powered count")
+	_assert_true("[DONE][/color]  Power a grow tray" in game.player_orders.checklist.text, "checklist completes only after the tray is powered")
+	_dispose(game)
+
+
 func _test_power_allocation() -> void:
 	var game := _spawn_game()
 	var lamp: VaultBuilding = game.get_building_at(Vector2i(22, 14))
@@ -150,6 +217,22 @@ func _test_power_allocation() -> void:
 	_assert_equal(game.power_grid.supply, 9, "charge node and core supplies combine")
 	_assert_equal(game.power_grid.served, 6, "all demand is served after adding charge capacity")
 	_assert_true(lamp.powered and kitchen.powered and grow_tray.powered, "all consumers are powered")
+	_dispose(game)
+
+
+func _test_cooking_at_starting_stock() -> void:
+	var game := _spawn_game()
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(18, 12))
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, game.residents[0].get_cell(game.map_grid))
+	game.food_system.meals = 8
+	game.food_system.raw_food = FoodSystem.COOK_INPUT
+	game.power_grid.recalculate(game.buildings)
+	game.begin_shift()
+
+	_assert_true(kitchen.powered, "nutrient station is powered")
+	game.step_simulation(4.2)
+	_assert_equal(game.food_system.raw_food, 0, "cooking consumes raw food while meals start at eight")
+	_assert_equal(game.food_system.meals, 8 + FoodSystem.COOK_OUTPUT, "cooking adds a meal above the old silent cap")
 	_dispose(game)
 
 
@@ -320,6 +403,13 @@ func _remove_test_save() -> void:
 	var absolute_path := ProjectSettings.globalize_path(SAVE_TEST_PATH)
 	if FileAccess.file_exists(SAVE_TEST_PATH):
 		DirAccess.remove_absolute(absolute_path)
+
+
+func _action_has_physical_key(action: StringName, physical_keycode: Key) -> bool:
+	for event in InputMap.action_get_events(action):
+		if event is InputEventKey and event.physical_keycode == physical_keycode:
+			return true
+	return false
 
 
 func _assert_true(condition: bool, message: String) -> void:

@@ -46,8 +46,10 @@ var _dragging_camera := false
 
 
 func _ready() -> void:
+	map_grid.setup(Callable(self, "_has_cancelable_blueprint_at"))
 	job_system.setup(self)
 	map_grid.rubble_created.connect(_on_rubble_created)
+	map_grid.dig_orders_removed.connect(_on_dig_orders_removed)
 	day_cycle.day_started.connect(_on_day_started)
 	player_orders.setup(self)
 	new_game(true)
@@ -183,13 +185,15 @@ func issue_order(cell: Vector2i) -> bool:
 			status_message = "Excavation queued. A resident with DIG enabled will claim it."
 			status_message_left = 3.0
 			return true
-		status_message = "Dig orders require uncut rock inside the steel boundary."
+		if map_grid.is_diggable(cell) and not map_grid.dig_marks.has(cell):
+			status_message = "Connect excavation orders to carved floor or an anchored dig chain."
+		else:
+			status_message = "Dig orders require undesignated rock inside the steel boundary."
 		status_message_left = 3.0
 		return false
 	if active_tool == "cancel":
 		if map_grid.cancel_dig(cell):
-			job_system.cancel_dig(cell)
-			status_message = "Excavation order canceled."
+			status_message = "Excavation order canceled. Any disconnected designations were cleared."
 			status_message_left = 2.0
 			return true
 		var blueprint := get_building_at(cell)
@@ -232,6 +236,14 @@ func get_building_at(cell: Vector2i) -> VaultBuilding:
 		if building.cell == cell:
 			return building
 	return null
+
+
+func get_powered_building_count(kind: int) -> int:
+	var count := 0
+	for building in buildings:
+		if building.complete and building.powered and building.kind == kind:
+			count += 1
+	return count
 
 
 func get_building_by_id(building_id: int) -> VaultBuilding:
@@ -444,12 +456,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("cancel_order"):
 		set_tool("select")
 		return
+	if event.is_action_pressed("tool_dig"):
+		set_tool("dig")
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.physical_keycode:
 			KEY_1: set_speed(1)
 			KEY_2: set_speed(2)
 			KEY_3: set_speed(3)
-			KEY_D: set_tool("dig")
 			KEY_X: set_tool("cancel")
 			KEY_HOME, KEY_F: recenter_camera()
 	if event is InputEventMouseButton:
@@ -495,6 +509,16 @@ func _update_camera(delta: float) -> void:
 
 func _on_rubble_created(cell: Vector2i, amount: int) -> void:
 	job_system.queue_rubble(cell, amount)
+
+
+func _on_dig_orders_removed(cells: Array[Vector2i]) -> void:
+	for cell in cells:
+		job_system.cancel_dig(cell)
+
+
+func _has_cancelable_blueprint_at(cell: Vector2i) -> bool:
+	var building := get_building_at(cell)
+	return building != null and not building.complete
 
 
 func _on_resident_died(resident: VaultResident) -> void:
@@ -543,6 +567,6 @@ func _tool_help(tool: String) -> String:
 		"lamp": return "LUMEN: powered light improves mood (5 salvage, 1 power)."
 		"generator": return "CHARGE NODE: adds 7 power (18 salvage)."
 		"grow": return "GROW TRAY: produces raw food when powered (12 salvage, 3 power)."
-		"kitchen": return "NUTRIENT STATION: cooks 2 raw food into 4 meals (10 salvage, 2 power)."
+		"kitchen": return "NUTRIENT STATION: cooks %d raw food into %d meal (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
 		"stockpile": return "SALVAGE BAY: hauling destination (4 salvage)."
 	return ""

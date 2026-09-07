@@ -129,7 +129,7 @@ func _ensure_state_jobs() -> void:
 			_add_job(JobType.SUPPLY_BUILD, building.cell, building.building_id, building.get_cost() - building.delivered)
 		elif not building.complete:
 			_add_job(JobType.BUILD, building.cell, building.building_id)
-		elif building.kind == VaultBuilding.Kind.KITCHEN and building.powered and food.can_cook() and food.meals < 8:
+		elif building.kind == VaultBuilding.Kind.KITCHEN and building.powered and food.can_cook():
 			_add_job(JobType.COOK, building.cell, building.building_id)
 
 

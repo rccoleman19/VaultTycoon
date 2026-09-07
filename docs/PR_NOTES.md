@@ -6,6 +6,15 @@ This change bootstraps Vault Tycoon as an original Godot 4.7.2 desktop colony-su
 
 The presentation uses a distinct industrial vault-control language—residents, seal stabilization, Charge Nodes, Lumens, Nutrient Stations, and Salvage Bays—and placeholder vector/Node2D visuals. No third-party game IP or assets are included.
 
+## PR #1 QA fixes
+
+- Remapped Dig from `D` to `E`, leaving `WASD` camera movement conflict-free and updating the HUD/README control copy.
+- Rejected excavation marks unless their designation chain reaches carved floor; invalid hover feedback and a connection alert now match acceptance, and canceling a bridge clears newly stranded marks/jobs.
+- Derived Nutrient Station recipe copy from the simulated 1-raw-to-1-meal constants.
+- Removed the hidden eight-meal cooking gate, so a powered station with raw food can cook from the starting stock onward.
+- Made Cancel hover valid on unfinished blueprints as well as dig designations.
+- Required a completed, powered Grow Tray for the “Power a grow tray” checklist item.
+
 ## Landed scope
 
 - Godot 4.7.2 project configured for a 1280×720 desktop reference viewport and GL Compatibility rendering
@@ -43,7 +52,7 @@ For a quicker logic exercise, use 3× speed. A complete survival playthrough sti
 ## Testing status
 
 - Godot 4.7.2 headless editor import/parse completed successfully with exit code 0, including project initialization and loading of the configured main scene and local GDScript dependencies.
-- The native headless suite passes **9 cases / 107 assertions**. It covers the configured scene and UI, sealed-map invariants, real excavation work, blueprint supply/construction, overload recovery, exact day-seven timing, save/load deterministic continuation and malformed-snapshot rejection, an untouched-wing loss, a player-issued dig/build survival plan, and a managed win.
+- The native headless suite passes **12 cases / 139 assertions**. It covers the configured scene and UI, conflict-free tool hotkeys and recipe copy, rejected disconnected digs plus connected excavation chains, cancel-preview/checklist truthfulness, real excavation work, blueprint supply/construction, cooking above the former starting-stock gate, overload recovery, exact day-seven timing, save/load deterministic continuation and malformed-snapshot rejection, an untouched-wing loss, a player-issued dig/build survival plan, and a managed win.
 - An Xvfb/OpenGL visual smoke ran successfully through Mesa llvmpipe at 1280×720, and the captured opening briefing/HUD was inspected. The main scene also completed a separate five-frame headless runtime boot without script/runtime errors.
 - Desktop export presets load in the Godot 4.7.2 editor, and a Linux-preset `--export-pack` resource build completed successfully with exit code 0. Standalone platform binaries were not produced because matching export templates are not installed in this workspace; Linux, macOS, and Windows artifacts still need native-host smoke tests before a release build.
 - No store build, signing, notarization, mobile package, network service, analytics, ad SDK, or payment SDK was exercised or introduced.
@@ -75,7 +84,7 @@ mkdir -p exports/linux
 
 1. Run and record a complete Linux day-seven survival smoke test plus save/load regression on Godot 4.7.2.
 2. Tune the starting inventory, need decay, production rates, construction costs, and job priorities from full-run observations so both survival and failure remain legible.
-3. Add focused automated coverage for snapshot round trips, seven-day boundary behavior, job cancellation/reservation, power overload ordering, and food conversion.
+3. Add focused automated coverage for multi-job cancellation/reservation edge cases and longer mixed-workload balance runs.
 4. Improve order feedback for unreachable work, insufficient salvage, unpowered producers, and inactive permissions; add accessible non-color-only cues.
 5. Add original vault art, animation, audio, and effects while retaining the current system boundaries and terminology.
 6. Smoke-test unsigned desktop exports on Linux, macOS, and Windows and document host-specific issues.

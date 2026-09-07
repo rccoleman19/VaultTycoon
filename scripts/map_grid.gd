@@ -3,6 +3,7 @@ extends Node2D
 
 signal tile_changed(cell: Vector2i)
 signal rubble_created(cell: Vector2i, amount: int)
+signal dig_orders_removed(cells: Array[Vector2i])
 
 enum Tile { ROCK, FLOOR }
 
@@ -16,11 +17,16 @@ var dig_marks: Dictionary = {}
 var dig_progress: Dictionary = {}
 var hover_cell := Vector2i(-1, -1)
 var preview_tool := "select"
+var cancel_preview_check := Callable()
 
 
 func _ready() -> void:
 	if cells.is_empty():
 		new_wing()
+
+
+func setup(cancel_check: Callable) -> void:
+	cancel_preview_check = cancel_check
 
 
 func new_wing() -> void:
@@ -57,8 +63,14 @@ func is_diggable(cell: Vector2i) -> bool:
 	return is_inside(cell) and not is_border(cell) and get_tile(cell) == Tile.ROCK
 
 
-func queue_dig(cell: Vector2i) -> bool:
+func can_queue_dig(cell: Vector2i) -> bool:
 	if not is_diggable(cell) or dig_marks.has(cell):
+		return false
+	return _dig_component_reaches_floor(cell)
+
+
+func queue_dig(cell: Vector2i) -> bool:
+	if not can_queue_dig(cell):
 		return false
 	dig_marks[cell] = true
 	dig_progress[cell] = 0.0
@@ -69,9 +81,12 @@ func queue_dig(cell: Vector2i) -> bool:
 func cancel_dig(cell: Vector2i) -> bool:
 	if not dig_marks.has(cell):
 		return false
+	var removed: Array[Vector2i] = [cell]
 	dig_marks.erase(cell)
 	dig_progress.erase(cell)
+	removed.append_array(_remove_stranded_dig_marks())
 	queue_redraw()
+	dig_orders_removed.emit(removed)
 	return true
 
 
@@ -96,6 +111,16 @@ func has_walkable_neighbor(cell: Vector2i) -> bool:
 		if is_walkable(neighbor):
 			return true
 	return false
+
+
+func is_preview_valid(tool: String, cell: Vector2i) -> bool:
+	if not is_inside(cell):
+		return false
+	if tool == "dig":
+		return can_queue_dig(cell)
+	if tool == "cancel":
+		return dig_marks.has(cell) or (cancel_preview_check.is_valid() and bool(cancel_preview_check.call(cell)))
+	return is_walkable(cell)
 
 
 func nearest_walkable_neighbor(cell: Vector2i, from_cell: Vector2i) -> Vector2i:
@@ -187,12 +212,54 @@ func deserialize(data: Dictionary) -> bool:
 			if is_diggable(cell):
 				dig_marks[cell] = true
 				dig_progress[cell] = float(entry[2])
+	_remove_stranded_dig_marks()
 	queue_redraw()
 	return true
 
 
 func _index(cell: Vector2i) -> int:
 	return cell.y * WIDTH + cell.x
+
+
+func _dig_component_reaches_floor(start: Vector2i) -> bool:
+	var frontier: Array[Vector2i] = [start]
+	var visited: Dictionary = {start: true}
+	var cursor := 0
+	while cursor < frontier.size():
+		var current := frontier[cursor]
+		cursor += 1
+		if has_walkable_neighbor(current):
+			return true
+		for neighbor in get_neighbors(current):
+			if not visited.has(neighbor) and dig_marks.has(neighbor):
+				visited[neighbor] = true
+				frontier.append(neighbor)
+	return false
+
+
+func _remove_stranded_dig_marks() -> Array[Vector2i]:
+	var connected: Dictionary = {}
+	var frontier: Array[Vector2i] = []
+	for cell: Vector2i in dig_marks:
+		if has_walkable_neighbor(cell):
+			connected[cell] = true
+			frontier.append(cell)
+	var cursor := 0
+	while cursor < frontier.size():
+		var current := frontier[cursor]
+		cursor += 1
+		for neighbor in get_neighbors(current):
+			if dig_marks.has(neighbor) and not connected.has(neighbor):
+				connected[neighbor] = true
+				frontier.append(neighbor)
+	var removed: Array[Vector2i] = []
+	for cell: Vector2i in dig_marks.keys():
+		if connected.has(cell):
+			continue
+		dig_marks.erase(cell)
+		dig_progress.erase(cell)
+		removed.append(cell)
+	return removed
 
 
 func _draw() -> void:
@@ -220,8 +287,6 @@ func _draw() -> void:
 		draw_line(Vector2(rect.end.x - 4, rect.position.y + 4), Vector2(rect.position.x + 4, rect.end.y - 4), Color("e8a13b"), 1.5)
 	if is_inside(hover_cell) and preview_tool != "select":
 		var hover_rect := Rect2(Vector2(hover_cell * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE)).grow(-1.0)
-		var valid := is_diggable(hover_cell) if preview_tool == "dig" else is_walkable(hover_cell)
-		if preview_tool == "cancel":
-			valid = dig_marks.has(hover_cell)
+		var valid := is_preview_valid(preview_tool, hover_cell)
 		draw_rect(hover_rect, Color(0.35, 0.9, 0.68, 0.16) if valid else Color(0.95, 0.25, 0.22, 0.16))
 		draw_rect(hover_rect, Color("71d6b7") if valid else Color("ef5a54"), false, 2.0)
