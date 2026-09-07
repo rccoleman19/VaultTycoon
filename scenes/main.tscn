@@ -1,0 +1,41 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource path="res://scripts/game.gd" type="Script" id="1_game"]
+[ext_resource path="res://scripts/map_grid.gd" type="Script" id="2_map"]
+[ext_resource path="res://scripts/job_system.gd" type="Script" id="3_jobs"]
+[ext_resource path="res://scripts/power_grid.gd" type="Script" id="4_power"]
+[ext_resource path="res://scripts/food_system.gd" type="Script" id="5_food"]
+[ext_resource path="res://scripts/day_cycle.gd" type="Script" id="6_day"]
+[ext_resource path="res://scripts/save_load.gd" type="Script" id="7_save"]
+[ext_resource path="res://scripts/player_orders.gd" type="Script" id="8_ui"]
+
+[node name="Game" type="Node2D"]
+script = ExtResource("1_game")
+
+[node name="MapGrid" type="Node2D" parent="."]
+script = ExtResource("2_map")
+
+[node name="Buildings" type="Node2D" parent="."]
+
+[node name="Colonists" type="Node2D" parent="."]
+
+[node name="JobSystem" type="Node" parent="."]
+script = ExtResource("3_jobs")
+
+[node name="PowerGrid" type="Node" parent="."]
+script = ExtResource("4_power")
+
+[node name="FoodSystem" type="Node" parent="."]
+script = ExtResource("5_food")
+
+[node name="DayCycle" type="Node" parent="."]
+script = ExtResource("6_day")
+
+[node name="SaveLoad" type="Node" parent="."]
+script = ExtResource("7_save")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(480, 360)
+
+[node name="PlayerOrders" type="CanvasLayer" parent="."]
+script = ExtResource("8_ui")
