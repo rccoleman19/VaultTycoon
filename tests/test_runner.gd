@@ -316,7 +316,7 @@ func _test_work_priorities_board() -> void:
 	game.set_tool("dig")
 	var orders := game.player_orders
 	orders.refresh()
-	_assert_equal(orders.command_grid.get_child_count(), 15, "Help does not displace or masquerade as a map tool")
+	_assert_equal(orders.command_grid.get_child_count(), 16, "Help does not displace or masquerade as a map tool")
 	_assert_false(orders.command_grid.is_ancestor_of(orders.work_priorities_button), "priorities opener lives with the roster rather than the map tools")
 	_assert_equal(orders.work_priority_buttons.size(), game.residents.size() * VaultResident.WORK_TYPES.size(), "board exposes one cell for every resident and work category")
 	_assert_equal(orders.work_priorities_grid.columns, 5, "board contains Resident plus the four in-game work kinds")

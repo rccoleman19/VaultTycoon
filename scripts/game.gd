@@ -55,6 +55,7 @@ func _ready() -> void:
 	map_grid.setup(
 		Callable(self, "_has_cancelable_blueprint_at"),
 		Callable(self, "_is_reserved_cell"),
+		Callable(self, "_is_stockpile_floor"),
 	)
 	breach_system.setup(self)
 	job_system.setup(self)
@@ -249,7 +250,7 @@ func set_speed(speed: int) -> void:
 
 
 func set_tool(tool: String) -> void:
-	active_tool = tool if tool in ["select", "dig", "cancel", "bed", "lamp", "generator", "grow", "kitchen", "stockpile", "air", "rec", "medical"] else "select"
+	active_tool = tool if tool in ["select", "dig", "cancel", "bed", "lamp", "generator", "grow", "kitchen", "stockpile", "air", "rec", "medical", "zone"] else "select"
 	status_message = _tool_help(active_tool)
 	status_message_left = 4.0
 	map_grid.preview_tool = active_tool
@@ -273,7 +274,16 @@ func issue_order(cell: Vector2i) -> bool:
 			status_message = "Dig orders require undesignated rock inside the steel boundary."
 		status_message_left = 3.0
 		return false
+	if active_tool == "zone":
+		var painted := map_grid.paint_stockpile(cell)
+		status_message = "Stockpile cell painted. Salvage haulers prefer reachable zones." if painted else "Zones need empty carved floor; keep fixtures and the hatch clear."
+		status_message_left = 3.0
+		return painted
 	if active_tool == "cancel":
+		if map_grid.clear_stockpile(cell):
+			status_message = "Stockpile cell cleared. Haulers will choose another destination."
+			status_message_left = 3.0
+			return true
 		if map_grid.cancel_dig(cell):
 			status_message = "Excavation order canceled. Any disconnected designations were cleared."
 			status_message_left = 2.0
@@ -300,6 +310,7 @@ func place_blueprint(kind: int, cell: Vector2i) -> bool:
 		status_message = "That floor tile is already occupied."
 		status_message_left = 3.0
 		return false
+	map_grid.clear_stockpile(cell)
 	var building := VaultBuilding.new()
 	building_root.add_child(building)
 	building.configure(next_building_id, kind as VaultBuilding.Kind, cell)
@@ -563,6 +574,15 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	var jobs_data: Variant = snapshot.get("jobs", {})
 	if not map_data is Dictionary or not resident_data is Array or not building_data is Array:
 		return false
+	if not MapGrid.is_stockpile_data_valid(map_data):
+		return false
+	for entry: Array in map_data.get("stockpile_cells", []):
+		var zone_cell := Vector2i(int(entry[0]), int(entry[1]))
+		if zone_cell == BreachSystem.HATCH_CELL:
+			return false
+		for fixture: Variant in building_data:
+			if fixture is Dictionary and fixture.get("cell") == entry:
+				return false
 	if snapshot.has("ended") and typeof(snapshot.ended) != TYPE_BOOL:
 		return false
 	if snapshot.has("outcome") and typeof(snapshot.outcome) != TYPE_STRING:
@@ -764,7 +784,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		var motion := event as InputEventMouseMotion
 		if _dragging_camera:
 			world_camera.position -= motion.relative / world_camera.zoom.x
-		elif Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and active_tool in ["dig", "cancel"]:
+		elif Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and active_tool in ["dig", "cancel", "zone"]:
 			if motion.position.x < get_viewport_rect().size.x - RIGHT_PANEL_WIDTH:
 				issue_order(map_grid.world_to_cell(get_global_mouse_position()))
 		map_grid.hover_cell = map_grid.world_to_cell(get_global_mouse_position())
@@ -855,6 +875,10 @@ func _remove_building(building: VaultBuilding, salvage_refund: int, message: Str
 	return true
 
 
+func _is_stockpile_floor(cell: Vector2i) -> bool:
+	return get_building_at(cell) == null
+
+
 func _is_reserved_cell(cell: Vector2i) -> bool:
 	return cell == BreachSystem.HATCH_CELL
 
@@ -940,8 +964,9 @@ func _finish_loss() -> void:
 func _tool_help(tool: String) -> String:
 	match tool:
 		"select": return "SELECT: inspect a resident or fixture; use HELP to reopen the checklist."
+		"zone": return "STOCKPILE: click/drag empty floor to paint salvage drop-off cells. CANCEL [X] clears cells; Esc exits. No cost."
 		"dig": return "DIG: click or drag connected rock; hauled rubble yields 3 salvage per tile."
-		"cancel": return "CANCEL: remove dig orders or unfinished blueprints."
+		"cancel": return "CANCEL: clear stockpile cells, dig orders, or unfinished blueprints."
 		"medical": return "MEDICAL BED: 8 salvage, 8s assembly, no power. Residents at 95 HP or below claim care automatically (+2 HP/s); hatch repair first. Disable to deny care."
 		"bed": return "BUNK: residents sleep here automatically (8 salvage)."
 		"lamp": return "LUMEN: powered light improves mood (5 salvage, 1 power)."

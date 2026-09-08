@@ -691,7 +691,9 @@ func _process_rubble_job(resident: VaultResident, job: Dictionary, delta_seconds
 		resident.carrying = int(job.amount)
 		resident.job_phase = "deposit"
 		resident.clear_path()
-	var stockpile_cell := _stockpile_cell()
+	var stockpile_cell := map_grid.nearest_stockpile(resident.get_cell(map_grid))
+	if stockpile_cell.x < 0:
+		stockpile_cell = _stockpile_cell()
 	if not resident.move_to(stockpile_cell, map_grid, delta_seconds):
 		resident.state = "Carrying salvage"
 		return

@@ -311,12 +311,13 @@ func _build_interface() -> void:
 	var tools := [
 		["select", "SELECT", "Inspect residents and fixtures; Esc returns here", 76],
 		["dig", "DIG [E]", "Mark rock for excavation", 68],
-		["cancel", "CANCEL [X]", "Remove orders and blueprints", 96],
+		["cancel", "CANCEL [X]", "Clear zone cells, orders, and blueprints", 96],
 		["bed", "BUNK $8", "Rest fixture", 80],
 		["lamp", "LUMEN $5", "1 power; lights nearby tiles", 90],
 		["generator", "CHARGE $18", "+7 power", 104],
 		["grow", "GROW $12", "3 power; yields raw food", 90],
 		["kitchen", "NUTRI $10", "Nutrient Station: 2 power; cooks meals", 96],
+		["zone", "ZONE", "Paint stockpile cells on empty floor; CANCEL [X] clears them", 76],
 		["stockpile", "BAY $4", "Salvage Bay: hauling destination", 64],
 		["air", "AIR $14", "Air Recycler: 3 power; restores vault oxygen", 86],
 		["medical", "MED $8", "Medical Bed: automatic injury recovery, +2 HP/s; no power", 82],
@@ -667,6 +668,8 @@ func refresh() -> void:
 		return
 	clock_label.text = game.day_cycle.get_clock_text()
 	resource_label.text = "MEALS %d  RAW %d  SALVAGE %d" % [game.food_system.meals, game.food_system.raw_food, game.food_system.salvage]
+	command_buttons.zone.text = "ZONE %d" % game.map_grid.stockpile_cells.size()
+	command_buttons.zone.tooltip_text = "Stockpile: %d cells. Salvage drops prefer reachable zones; otherwise Salvage Bay / chamber center. Click/drag to paint; CANCEL [X] clears." % game.map_grid.stockpile_cells.size()
 	_refresh_objective()
 	power_label.text = game.power_grid.get_status_text()
 	power_label.add_theme_color_override("font_color", Color("ef6860") if game.power_grid.brownout_active else Color("75d4b4"))
@@ -1070,6 +1073,7 @@ func _refresh_checklist() -> void:
 	var rec_done := game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) >= 1
 	var rec_marker := "[color=#75d4b4][DONE][/color]" if rec_done else "[color=#8faeb7][OPTIONAL][/color]"
 	lines.append("%s  Power a Rec Console; free 1 power if shed" % rec_marker)
+	lines.append("Optional: ZONE paints salvage drop-offs; CANCEL clears cells")
 	lines.append("Optional: Medical Bed ($8) heals injuries; disable to deny care")
 	lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled")
 	checklist.text = "\n".join(lines)

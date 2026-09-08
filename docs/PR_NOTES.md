@@ -1,4 +1,51 @@
-# PR: Slice 7 — first-session playability polish
+# PR notes — desktop stack through Slice 9
+
+## Current stack
+
+Slice 9 (`feat/stockpile-zones`) starts directly from Slice 8 / PR #8 at
+`451a442` (`feat/medical-beds`), which is stacked on Slice 7 / PR #7
+(`feat/first-session-polish`). Slices 1–8, including Medical Beds and injury recovery,
+remain in place. This PR targets `main`; no merge or store shipping is authorized.
+
+## Slice 9 — Stockpile zones
+
+- Paint a cell set with **ZONE**, using click or left-button drag on empty carved
+  floor. Cyan cell outlines and a live **ZONE N** toolbar count expose the zone.
+- **CANCEL [X]** clears cells; Esc/right-click exits the tool. Dig, construction,
+  and cancel retain their existing actions. Fixtures replace their zone cell.
+- Reject rock, out-of-bounds cells, occupied floor, blueprints, and the hatch.
+- Salvage-rubble haulers choose the nearest reachable zone by floor-path length.
+  Breadth-first left/right/up/down traversal gives deterministic ties. Destinations
+  update while moving; no reachable zone uses the existing first completed Bay,
+  or chamber center when no Bay exists.
+- Credit shared salvage once on arrival. Supply pickups still use Bay/center.
+  Raw food/meals already use shared inventory and have no physical haul jobs.
+- Persist optional zone cells in schema-1 saves; accept old saves without zones,
+  reject invalid zone payloads atomically, and clear zones on New Wing.
+- Correct README intro and scope drift: the stack now includes medical recovery
+  and stockpile zones. The older Slice 7 notes below are retained history.
+
+### Validation and limits
+
+`./scripts/check.sh` passed with Godot 4.7.2: core **35 cases / 712 assertions**,
+mood/recreation **9 / 232**, work priorities **9 / 237**, breach-modal regression
+passed, medical **0 failures**, and stockpile zones **6 / 56 / 0 failures**.
+Editor import and scene boot passed; the Linux pack export and five-frame headless
+pack boot also passed.
+
+The script includes the new stockpile-zone suite,
+all core, mood/recreation, work-priority, breach-modal, and medical regressions,
+editor import, and scene boot. Zone tests cover preferred drops, no-zone and
+unreachable-zone fallback, inventory conservation, deterministic selection,
+rerouting, paint/cancel/build/HUD, save/load, malformed/legacy saves, and reset.
+
+The Linux game pack can be exported and booted with Godot 4.7.2. Graphical desktop
+interaction and standalone platform exports are not verified in this environment.
+There are no per-cell inventories, capacity limits, reservations, conveyors,
+per-item filters, or new food-haul systems. The existing surface, monetization,
+multiplayer, final-art/audio, and mobile-export exclusions remain.
+
+## Slice 7 — first-session playability polish (retained notes)
 
 ## Summary
 
@@ -229,9 +276,9 @@ The core acceptance coverage includes both sides of the balance target: a staged
 ## Known limitations and scope boundary
 
 - Placeholder geometry, colors, resident markers, controls, and silent presentation remain; final art and audio are outside this slice.
-- Priorities cover four broad work categories only. There are no skills, passions, schedules, shifts, zones, direct movement, forced jobs, or per-task priorities.
+- Priorities cover four broad work categories only. There are no skills, passions, schedules, shifts, work-assignment zones, direct movement, forced jobs, or per-task priorities.
 - Oxygen remains one vault-wide percentage. There is no spatial gas, diffusion, room pressure graph, pipe network, or wiring simulation.
-- There is no broader medical system, surface play, caravans, factions, research, mods, multiplayer, IAP, ads, analytics, mobile export, or store shipping.
+- Medical Beds and basic injury recovery are included in Slice 8; a full disease/surgery tree and drugs remain excluded. There is no surface play, caravans, factions, research, mods, multiplayer, IAP, ads, analytics, mobile export, or store shipping.
 - Combat, enemies, raiders, weapons, repeated incidents, and procedural events remain outside the first-playable boundary.
 
 Slice 7 ends at a clearer, more forgiving version of the same sealed-wing day-seven objective. It does not merge or ship the game and does not introduce another major system.

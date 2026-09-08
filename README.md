@@ -2,7 +2,7 @@
 
 Vault Tycoon is an original underground colony-survival prototype built with Godot 4. A crew of four residents begins inside a sealed vault wing. Dig into the surrounding rock, recover salvage, furnish the new rooms, keep food, rest, mood, power, and shared oxygen stable, and contain the wing's first maintenance-hatch pressure breach through seven complete in-game days.
 
-This repository contains the first seven desktop gameplay slices: the first-playable sealed wing, one deterministic environmental breach, one vault-wide oxygen percentage, deterministic power brownouts with priority shedding, per-resident mood with basic powered recreation, a crew-wide work priorities board, and first-session balance and help polish. Oxygen and power are deliberately vault-wide resources rather than spatial gas or wiring simulations. The project does not include a surface map, caravans, factions, combat, research, mods, multiplayer, IAP, ads, analytics, store packaging, final art or audio, mobile export, a medical system, a multi-room sealed-door graph, or any other full atmosphere simulation.
+This repository contains the desktop gameplay stack through Slice 9: the first-playable sealed wing, one deterministic environmental breach, one vault-wide oxygen percentage, deterministic power brownouts with priority shedding, per-resident mood with basic powered recreation, a crew-wide work priorities board, first-session balance and help polish, Medical Beds with basic injury recovery, and paintable stockpile zones for salvage drop-offs. Oxygen and power are deliberately vault-wide resources rather than spatial gas or wiring simulations. The project does not include a surface map, caravans, factions, combat, research, mods, multiplayer, IAP, ads, analytics, store packaging, final art or audio, mobile export, a full disease/surgery tree or drugs, a multi-room sealed-door graph, or any other full atmosphere simulation.
 
 ## Requirements
 
@@ -86,7 +86,7 @@ Build tools, Help, and the work priorities board are available in the HUD. Right
 - **OxygenSystem:** tracks one shared percentage for the entire vault, starting at 100% and clamped from 0% to 100%. Living residents consume 0.08 points per second each, every powered Air Recycler restores 0.8 points per second, and an open hatch vents 2.5 points per second. The low threshold is 35%; at or below the 15% critical threshold, all living residents take 4 health damage per second.
 - **DayCycle:** one game day lasts 40 simulation seconds. Pausing stops the clock; speed controls multiply it. Victory becomes available after 280 simulation seconds, when seven full days have elapsed, and requires at least one living resident, a sealed hatch, and breathable oxygen at or above 15%.
 - **Breach pressure:** one deterministic maintenance-hatch warning begins at exactly 60 simulation seconds. Its first appearance pauses the simulation, resets speed to 1×, and focuses the hatch. The hatch opens at exactly 80 seconds if the 4-salvage, 8-second patch is unfinished; while open, it adds a 2.5-point-per-second oxygen loss until sealed.
-- **PlayerOrders:** builds the 1280×720 HUD, reopenable Help/checklist, roster and adjacent **PRIORITIES [P]** control, contextual inspector, alerts, lower map/build/save toolbar including **AIR $14**, **REC $8**, and **HELP**, the complete crew-by-work priority board, power supply/demand/brownout readouts, every living resident's mood, active mood factors, fixed-priority fixture labels and recovery controls, vault-atmosphere meter and rate breakdown, breach pressure/blocker readout and focus control, day-seven victory blockers, and outcome screens in GDScript. The checklist distinguishes the required powered food and air chain from optional recreation and work specialization.
+- **PlayerOrders:** builds the 1280×720 HUD, reopenable Help/checklist, roster and adjacent **PRIORITIES [P]** control, contextual inspector, alerts, lower map/build/save toolbar including **AIR $14**, **REC $8**, **MED $8**, **ZONE**, and **HELP**, the complete crew-by-work priority board, power supply/demand/brownout readouts, every living resident's mood, active mood factors, fixed-priority fixture labels and recovery controls, vault-atmosphere meter and rate breakdown, breach pressure/blocker readout and focus control, day-seven victory blockers, and outcome screens in GDScript. The checklist distinguishes the required powered food and air chain from optional recreation and work specialization.
 - **SaveLoad:** uses a crash-recoverable temporary-file replacement for one versioned local JSON snapshot and restores the map, residents, per-category work priorities, fixtures (including manually disabled power loads), inventory, jobs, time, camera, breach state, oxygen, mood/recreation state, and outcome state. An interrupted replacement preserves a recoverable previous file. Slice 7 remains on schema version 1: numeric priorities are an optional compatible extension, older boolean work permissions migrate to priority 3 or OFF, earlier `light_mood` snapshots migrate to canonical mood, and missing recreation state defaults safely.
 
 The main scene keeps these systems as separate child nodes under `VaultGame`, with `VaultGame` coordinating a fixed 0.1-second simulation tick.
@@ -196,7 +196,7 @@ Cross-exporting creates the target files when the matching templates are install
 
 ## Scope boundary
 
-Slice 7 intentionally polishes the existing sealed-wing day-seven survival objective rather than adding another major system. The boundary remains one deterministic maintenance-hatch pressure event, one aggregate oxygen percentage, one deterministic vault-wide power allocator with brownout shedding, one-seat basic recreation, and one numeric priority for each resident/work-category pair. It does not add resident skills, aptitudes, or passions, work speed traits, schedules or shifts, direct-move commands, player-authored job queues, priorities for individual blueprints or recipes, work zones, relationships, social recreation, memories, room beauty, comfort, recreation variety, a medical system, wiring, circuits, batteries, fuel, spatial gas cells, multiple gases, diffusion, pressure zones, oxygen pipe networks, multiple independently sealed rooms, a sealed-door/room graph, or any other full atmosphere model. It also does not add surface expeditions, caravans, factions, research, mods, multiplayer, IAP, ads, analytics, final art or audio, mobile export, store packaging, raiders, enemies, weapons, combat, or repeated/procedural incidents.
+Slice 7 polished the sealed-wing day-seven survival objective; Slice 8 adds buildable Medical Beds and the Rest-Medical recovery activity; Slice 9 adds floor-painted stockpile zones for existing salvage hauling. The current stack includes one deterministic maintenance-hatch pressure event, one aggregate oxygen percentage, one deterministic vault-wide power allocator with brownout shedding, one-seat basic recreation, one numeric priority for each resident/work-category pair, basic one-patient medical care, and stockpile destination cells. It does not add resident skills, aptitudes, or passions, work speed traits, schedules or shifts, direct-move commands, player-authored job queues, priorities for individual blueprints or recipes, work-assignment zones, relationships, social recreation, memories, room beauty, comfort, recreation variety, a full disease/surgery tree, drugs, wiring, circuits, batteries, fuel, spatial gas cells, multiple gases, diffusion, pressure zones, oxygen pipe networks, multiple independently sealed rooms, a sealed-door/room graph, or any other full atmosphere model. It also does not add surface expeditions, caravans, factions, research, mods, multiplayer, IAP, ads, analytics, final art or audio, mobile export, store packaging, raiders, enemies, weapons, combat, or repeated/procedural incidents.
 
 
 ## Slice 8 — Medical beds
@@ -223,3 +223,41 @@ The original first-session construction routes and unmanaged failure tests remai
 capacity, travel, save/load, removal, death, HUD, and a managed day-seven medical
 route, along with all prior suites. Godot remains 4.7.2. This slice is stacked on
 PR #7 (`b6d95a5`) and targets main; merge the earlier slices first.
+
+
+## Slice 9 — Stockpile zones
+
+Use **ZONE** and click or hold the left mouse button while moving across empty
+carved floor to paint a set of stockpile cells. Cyan outlines show painted cells;
+**ZONE N** in the toolbar reports the total cell count (including disconnected
+floor). The tooltip explains fallback behavior. Painting costs no salvage or time.
+**CANCEL [X]** clears individual zone cells with the same click/drag gesture;
+**Esc** or right-click returns to Select without deleting zones. Dig/build tools
+remain separate. Rock, out-of-bounds cells, fixtures, blueprints, and the hatch
+cannot be painted. Placing a fixture on a zone automatically clears that cell.
+
+| Haul rule | Behavior |
+| --- | --- |
+| Cargo affected | Existing rubble-to-salvage hauling only |
+| Preferred drop-off | Closest reachable valid zone cell by floor-path length |
+| Equal-distance ties | Deterministic breadth-first traversal: left, right, up, down |
+| Zones cleared or changed while hauling | Destination is recalculated on each haul update |
+| No reachable zone | Existing first completed Salvage Bay; chamber center if no Bay exists |
+| Inventory | Salvage is credited once on arrival to shared inventory; no cell capacity or item piles |
+| Supply pickups | Building and hatch supply pickups retain the existing Bay/center behavior |
+| Raw food and meals | Remain shared inventory; the existing game has no physical food-haul jobs |
+
+Zones persist as optional `map.stockpile_cells` in schema-1 saves. Legacy saves
+start without zones; malformed, duplicate, occupied, hatch, and non-floor entries
+are rejected before the live game changes. New Wing clears zones.
+
+`./scripts/check.sh` includes `tests/test_stockpile_zones.gd` alongside core,
+mood/recreation, work priorities, breach-modal speed keys, medical, editor import,
+and main-scene boot. The zone suite covers painting/cancel/build/HUD, physical
+deposit and exact inventory credit, fallback, deterministic selection, rerouting,
+save/load, legacy compatibility, invalid-load atomicity, and New Wing reset.
+
+Slice 9 branches from Slice 8 / PR #8 at `451a442`, targets `main`, and retains the
+unmerged stack. No merge or store shipping is part of this work. Conveyors, per-item
+filters, physical food-haul jobs, surface systems, and the other exclusions above
+remain outside scope.

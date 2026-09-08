@@ -13,6 +13,8 @@ const TILE_SIZE := 24
 const CHAMBER := Rect2i(17, 11, 12, 10)
 
 var cells: Array[int] = []
+var stockpile_cells: Dictionary = {}
+var stockpile_cell_check := Callable()
 var dig_marks: Dictionary = {}
 var dig_progress: Dictionary = {}
 var hover_cell := Vector2i(-1, -1)
@@ -26,9 +28,10 @@ func _ready() -> void:
 		new_wing()
 
 
-func setup(cancel_check: Callable, reserved_check := Callable()) -> void:
+func setup(cancel_check: Callable, reserved_check := Callable(), zone_check := Callable()) -> void:
 	cancel_preview_check = cancel_check
 	reserved_cell_check = reserved_check
+	stockpile_cell_check = zone_check
 
 
 func new_wing() -> void:
@@ -37,6 +40,7 @@ func new_wing() -> void:
 	cells.fill(Tile.ROCK)
 	dig_marks.clear()
 	dig_progress.clear()
+	stockpile_cells.clear()
 	for y in range(CHAMBER.position.y, CHAMBER.end.y):
 		for x in range(CHAMBER.position.x, CHAMBER.end.x):
 			cells[_index(Vector2i(x, y))] = Tile.FLOOR
@@ -118,11 +122,73 @@ func has_walkable_neighbor(cell: Vector2i) -> bool:
 func is_preview_valid(tool: String, cell: Vector2i) -> bool:
 	if not is_inside(cell):
 		return false
+	if tool == "zone":
+		return can_paint_stockpile(cell) and not stockpile_cells.has(cell)
 	if tool == "dig":
 		return can_queue_dig(cell)
 	if tool == "cancel":
-		return dig_marks.has(cell) or (cancel_preview_check.is_valid() and bool(cancel_preview_check.call(cell)))
+		return stockpile_cells.has(cell) or dig_marks.has(cell) or (cancel_preview_check.is_valid() and bool(cancel_preview_check.call(cell)))
 	return is_walkable(cell) and not (reserved_cell_check.is_valid() and bool(reserved_cell_check.call(cell)))
+
+
+func can_paint_stockpile(cell: Vector2i) -> bool:
+	return is_walkable(cell) and not (reserved_cell_check.is_valid() and bool(reserved_cell_check.call(cell))) and (not stockpile_cell_check.is_valid() or bool(stockpile_cell_check.call(cell)))
+
+
+func paint_stockpile(cell: Vector2i) -> bool:
+	if not can_paint_stockpile(cell) or stockpile_cells.has(cell):
+		return false
+	stockpile_cells[cell] = true
+	queue_redraw()
+	return true
+
+
+func clear_stockpile(cell: Vector2i) -> bool:
+	if not stockpile_cells.erase(cell):
+		return false
+	queue_redraw()
+	return true
+
+
+# One breadth-first traversal selects the closest reachable zone. Equal-distance
+# ties follow get_neighbors() order: left, right, up, down. No per-item storage.
+func nearest_stockpile(from_cell: Vector2i) -> Vector2i:
+	if stockpile_cells.is_empty() or not is_walkable(from_cell):
+		return Vector2i(-1, -1)
+	var frontier: Array[Vector2i] = [from_cell]
+	var visited: Dictionary = {from_cell: true}
+	var cursor := 0
+	while cursor < frontier.size():
+		var cell := frontier[cursor]
+		cursor += 1
+		if stockpile_cells.has(cell) and can_paint_stockpile(cell):
+			return cell
+		for neighbor: Vector2i in get_neighbors(cell):
+			if is_walkable(neighbor) and not visited.has(neighbor):
+				visited[neighbor] = true
+				frontier.append(neighbor)
+	return Vector2i(-1, -1)
+
+
+static func is_stockpile_data_valid(data: Dictionary) -> bool:
+	var zones: Variant = data.get("stockpile_cells", [])
+	var saved_cells: Variant = data.get("cells", [])
+	if not zones is Array or zones.size() > WIDTH * HEIGHT or not saved_cells is Array or saved_cells.size() != WIDTH * HEIGHT:
+		return false
+	var seen := {}
+	for entry: Variant in zones:
+		if not entry is Array or entry.size() != 2:
+			return false
+		for value: Variant in entry:
+			if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or float(value) != floorf(float(value)):
+				return false
+		if entry[0] < 0 or entry[0] >= WIDTH or entry[1] < 0 or entry[1] >= HEIGHT:
+			return false
+		var cell := Vector2i(int(entry[0]), int(entry[1]))
+		if seen.has(cell) or saved_cells[cell.y * WIDTH + cell.x] != Tile.FLOOR:
+			return false
+		seen[cell] = true
+	return true
 
 
 func nearest_walkable_neighbor(cell: Vector2i, from_cell: Vector2i) -> Vector2i:
@@ -196,10 +262,16 @@ func serialize() -> Dictionary:
 	for cell: Vector2i in dig_marks:
 		marks.append([cell.x, cell.y, float(dig_progress.get(cell, 0.0))])
 	marks.sort_custom(func(a: Array, b: Array) -> bool: return a[1] * WIDTH + a[0] < b[1] * WIDTH + b[0])
-	return {"cells": cells.duplicate(), "dig_marks": marks}
+	var zones: Array = []
+	for cell: Vector2i in stockpile_cells:
+		zones.append([cell.x, cell.y])
+	zones.sort_custom(func(a: Array, b: Array) -> bool: return a[1] * WIDTH + a[0] < b[1] * WIDTH + b[0])
+	return {"cells": cells.duplicate(), "dig_marks": marks, "stockpile_cells": zones}
 
 
 func deserialize(data: Dictionary) -> bool:
+	if not is_stockpile_data_valid(data):
+		return false
 	var loaded_cells: Array = data.get("cells", [])
 	if loaded_cells.size() != WIDTH * HEIGHT:
 		return false
@@ -214,6 +286,9 @@ func deserialize(data: Dictionary) -> bool:
 			if is_diggable(cell):
 				dig_marks[cell] = true
 				dig_progress[cell] = float(entry[2])
+	stockpile_cells.clear()
+	for entry: Array in data.get("stockpile_cells", []):
+		stockpile_cells[Vector2i(int(entry[0]), int(entry[1]))] = true
 	_remove_stranded_dig_marks()
 	queue_redraw()
 	return true
@@ -287,6 +362,10 @@ func _draw() -> void:
 		draw_rect(rect, Color("e8a13b"), false, 2.0)
 		draw_line(rect.position + Vector2(4, 4), rect.end - Vector2(4, 4), Color("e8a13b"), 1.5)
 		draw_line(Vector2(rect.end.x - 4, rect.position.y + 4), Vector2(rect.position.x + 4, rect.end.y - 4), Color("e8a13b"), 1.5)
+	for cell: Vector2i in stockpile_cells:
+		var zone_rect := Rect2(Vector2(cell * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE)).grow(-3.0)
+		draw_rect(zone_rect, Color(0.3, 0.75, 0.85, 0.20))
+		draw_rect(zone_rect, Color("64bdcd"), false, 1.5)
 	if is_inside(hover_cell) and preview_tool != "select":
 		var hover_rect := Rect2(Vector2(hover_cell * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE)).grow(-1.0)
 		var valid := is_preview_valid(preview_tool, hover_cell)

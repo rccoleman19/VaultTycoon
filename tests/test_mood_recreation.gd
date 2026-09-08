@@ -542,7 +542,7 @@ func _test_hud_contract() -> void:
 	var orders := game.player_orders
 	orders.refresh()
 	_assert_equal(orders.command_grid.columns, 8, "expanded command grid retains two-row layout")
-	_assert_equal(orders.command_grid.get_child_count(), 15, "toolbar contains twelve tools plus save, load, and Help")
+	_assert_equal(orders.command_grid.get_child_count(), 16, "toolbar contains thirteen tools plus save, load, and Help")
 	_assert_equal(orders.briefing_panel.size, Vector2(640, 600), "briefing leaves room for every stabilization objective")
 	_assert_equal(orders.briefing_overlay.mouse_filter, Control.MOUSE_FILTER_STOP, "briefing backdrop blocks accidental map input")
 	_assert_true(orders.checklist.fit_content and orders.checklist.custom_minimum_size.y >= 238.0, "briefing checklist expands to keep all objectives legible")
