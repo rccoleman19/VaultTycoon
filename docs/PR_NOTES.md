@@ -1,11 +1,56 @@
-# PR notes — desktop stack through Slice 9
+# PR notes — desktop stack through Slice 10
 
 ## Current stack
 
-Slice 9 (`feat/stockpile-zones`) starts directly from Slice 8 / PR #8 at
-`451a442` (`feat/medical-beds`), which is stacked on Slice 7 / PR #7
-(`feat/first-session-polish`). Slices 1–8, including Medical Beds and injury recovery,
-remain in place. This PR targets `main`; no merge or store shipping is authorized.
+Slice 10 (`feat/food-stockpile-haul`) starts directly from Slice 9 at `cc56863`
+(`feat/stockpile-zones`), which is stacked on the earlier desktop gameplay slices.
+Slices 1–9, including Medical Beds and stockpile-zone painting, remain in place.
+This work targets `main`; no merge or store shipping is authorized.
+
+## Slice 10 — Food and meal hauling
+
+- Powered Grow Tray cycles now create pending raw-food cargo at the tray instead
+  of crediting shared inventory immediately.
+- Four seconds of powered Cook work still consumes one stored raw food, but now
+  creates pending meal cargo at the Nutrient Station. A meal becomes usable only
+  after Haul delivery.
+- Raw food and meals reuse the existing generic stockpile routing: closest
+  reachable zone by deterministic floor-path length, live rerouting when zones
+  change, then the first completed Salvage Bay or chamber-center fallback.
+- Repeated producer output accumulates without changing an in-flight stack.
+  Hunger, Haul OFF, emergency preemption, death, power loss, and producer removal
+  preserve every undeposited unit for safe retry and exact-once credit.
+- Both cargo types are ordinary Haul work. Prepared meals batch while stored
+  reserves are healthy; low reserves restore meal-delivery priority. During the
+  hatch response, missing patch salvage promotes rubble recovery and connected
+  excavation ahead of routine food work.
+- The HUD separates stored food from pending output with parenthesized counts,
+  producer inspectors show output awaiting Haul, and task/cargo colors distinguish
+  salvage, raw food, and meals. The existing single ZONE tool remains unchanged.
+- Schema 1 remains current. Optional `jobs.raw_food` and `jobs.meals` arrays
+  preserve queued and in-flight totals; legacy omission loads empty. Malformed,
+  duplicate, out-of-bounds, non-floor, and non-positive entries reject atomically.
+- New Wing clears food cargo. Starting meals/raw remain pre-stocked, and cooking
+  input plus resident eating continue to use deposited shared inventory.
+
+### Validation and limits
+
+`./scripts/check.sh` covers the focused food-hauling suite plus every prior core,
+mood/recreation, work-priority, breach-modal, medical, and stockpile-zone
+regression, editor import, and main-scene boot. The new suite exercises exact
+production and deposit boundaries, disabled Haul, backlog and mid-flight output,
+preferred/fallback/rerouted destinations, interruption, producer removal, death,
+save/load validation and compatibility, New Wing reset, and HUD guidance.
+
+Godot 4.7.2 passes the complete check: core **35 cases / 718 assertions**,
+mood/recreation **9 / 232**, work priorities **9 / 237**, stockpile zones
+**6 / 56**, food hauling **8 / 107**, zero medical failures, the breach-modal
+regression, headless editor import, and the five-frame main-scene boot.
+
+This slice does not add conveyors, per-cell stacks, stockpile capacity or filters,
+heavy per-stack UI, raw-input delivery, meal-fetch trips, surface play, caravans,
+factions, research, mods, multiplayer, IAP, ads, analytics, final art/audio,
+mobile work, merging, or store shipping.
 
 ## Slice 9 — Stockpile zones
 
@@ -19,7 +64,7 @@ remain in place. This PR targets `main`; no merge or store shipping is authorize
   update while moving; no reachable zone uses the existing first completed Bay,
   or chamber center when no Bay exists.
 - Credit shared salvage once on arrival. Supply pickups still use Bay/center.
-  Raw food/meals already use shared inventory and have no physical haul jobs.
+  In Slice 9, raw food/meals used shared inventory without physical haul jobs.
 - Persist optional zone cells in schema-1 saves; accept old saves without zones,
   reject invalid zone payloads atomically, and clear zones on New Wing.
 - Correct README intro and scope drift: the stack now includes medical recovery
@@ -41,9 +86,9 @@ rerouting, paint/cancel/build/HUD, save/load, malformed/legacy saves, and reset.
 
 The Linux game pack can be exported and booted with Godot 4.7.2. Graphical desktop
 interaction and standalone platform exports are not verified in this environment.
-There are no per-cell inventories, capacity limits, reservations, conveyors,
-per-item filters, or new food-haul systems. The existing surface, monetization,
-multiplayer, final-art/audio, and mobile-export exclusions remain.
+Slice 9 added no per-cell inventories, capacity limits, reservations, conveyors,
+per-item filters, or food-haul systems. The existing surface, monetization,
+multiplayer, final-art/audio, and mobile-export exclusions remained.
 
 ## Slice 7 — first-session playability polish (retained notes)
 

@@ -61,6 +61,7 @@ func _ready() -> void:
 	job_system.setup(self)
 	map_grid.rubble_created.connect(_on_rubble_created)
 	map_grid.dig_orders_removed.connect(_on_dig_orders_removed)
+	food_system.raw_food_produced.connect(_on_raw_food_produced)
 	day_cycle.day_started.connect(_on_day_started)
 	power_grid.brownout_started.connect(_on_power_brownout_started)
 	power_grid.brownout_cleared.connect(_on_power_brownout_cleared)
@@ -276,7 +277,7 @@ func issue_order(cell: Vector2i) -> bool:
 		return false
 	if active_tool == "zone":
 		var painted := map_grid.paint_stockpile(cell)
-		status_message = "Stockpile cell painted. Salvage haulers prefer reachable zones." if painted else "Zones need empty carved floor; keep fixtures and the hatch clear."
+		status_message = "Stockpile cell painted. Salvage, raw food, and meal haulers prefer reachable zones." if painted else "Zones need empty carved floor; keep fixtures and the hatch clear."
 		status_message_left = 3.0
 		return painted
 	if active_tool == "cancel":
@@ -576,6 +577,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 		return false
 	if not MapGrid.is_stockpile_data_valid(map_data):
 		return false
+	if not job_system.is_serialized_food_haul_data_valid(jobs_data, map_data):
+		return false
 	for entry: Array in map_data.get("stockpile_cells", []):
 		var zone_cell := Vector2i(int(entry[0]), int(entry[1]))
 		if zone_cell == BreachSystem.HATCH_CELL:
@@ -836,6 +839,10 @@ func _on_rubble_created(cell: Vector2i, amount: int) -> void:
 	job_system.queue_rubble(cell, amount)
 
 
+func _on_raw_food_produced(cell: Vector2i, amount: int) -> void:
+	job_system.queue_raw_food(cell, amount)
+
+
 func _on_dig_orders_removed(cells: Array[Vector2i]) -> void:
 	for cell in cells:
 		job_system.cancel_dig(cell)
@@ -964,16 +971,16 @@ func _finish_loss() -> void:
 func _tool_help(tool: String) -> String:
 	match tool:
 		"select": return "SELECT: inspect a resident or fixture; use HELP to reopen the checklist."
-		"zone": return "STOCKPILE: click/drag empty floor to paint salvage drop-off cells. CANCEL [X] clears cells; Esc exits. No cost."
+		"zone": return "STOCKPILE: paint drop-offs for salvage, raw food, and meals. CANCEL [X] clears cells; Esc exits. No cost."
 		"dig": return "DIG: click or drag connected rock; hauled rubble yields 3 salvage per tile."
 		"cancel": return "CANCEL: clear stockpile cells, dig orders, or unfinished blueprints."
 		"medical": return "MEDICAL BED: 8 salvage, 8s assembly, no power. Residents at 95 HP or below claim care automatically (+2 HP/s); hatch repair first. Disable to deny care."
 		"bed": return "BUNK: residents sleep here automatically (8 salvage)."
 		"lamp": return "LUMEN: powered light improves mood (5 salvage, 1 power)."
 		"generator": return "CHARGE NODE: adds 7 power for food and life support (18 salvage)."
-		"grow": return "GROW TRAY: produces raw food when powered (12 salvage, 3 power)."
-		"kitchen": return "NUTRIENT STATION: powered Cook work turns %d raw into %d meal (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
-		"stockpile": return "SALVAGE BAY: hauling destination (4 salvage)."
+		"grow": return "GROW TRAY: produces raw food for Haul delivery when powered (12 salvage, 3 power)."
+		"kitchen": return "NUTRIENT STATION: Cook turns %d stored raw into %d meal for Haul delivery (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
+		"stockpile": return "SALVAGE BAY: fallback destination for salvage and food hauling (4 salvage)."
 		"air": return "AIR RECYCLER: restores vault oxygen; build a Charge Node to supply its 3 power (14 salvage)."
 		"rec": return "REC CONSOLE: optional one-seat mood recovery; it sheds first in a brownout (8 salvage, 1 power)."
 	return ""

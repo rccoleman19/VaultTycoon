@@ -37,7 +37,7 @@ func _run() -> void:
 	_run_case("air recyclers require power and retain life-support priority", _test_air_recycler_power_and_rates)
 	_run_case("critical oxygen damages only for exact exposure time", _test_oxygen_threshold_damage)
 	_run_case("overbuilding can shed recycling and cascade into oxygen danger", _test_brownout_during_critical_air_recovery)
-	_run_case("powered kitchens cook without a silent meal cap", _test_cooking_at_starting_stock)
+	_run_case("powered kitchens queue meals for hauling without a silent cap", _test_cooking_at_starting_stock)
 	_run_case("breach warning triggers exactly once and pauses the shift", _test_breach_warning_interrupt)
 	_run_case("breach blockers and urgent jobs drive the patch sequence", _test_breach_response_jobs)
 	_run_case("a prepared response seals during grace without damage", _test_prepared_breach_survival)
@@ -151,7 +151,7 @@ func _test_tool_hotkeys_and_help() -> void:
 	_assert_equal(game.active_tool, "dig", "configured E hotkey selects Dig")
 	_assert_equal(
 		game._tool_help("kitchen"),
-		"NUTRIENT STATION: powered Cook work turns %d raw into %d meal (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT],
+		"NUTRIENT STATION: Cook turns %d stored raw into %d meal for Haul delivery (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT],
 		"nutrient help is derived from the simulated recipe",
 	)
 	game.set_tool("dig")
@@ -436,7 +436,7 @@ func _test_order_preview_and_checklist() -> void:
 		"Excavate at least 12 connected tiles; haul rubble for salvage",
 		"Assemble at least 2 bunks",
 		"Build a Charge Node (+7 power)",
-		"Power Grow Tray + Nutrient Station; keep Cook enabled",
+		"Power Grow Tray + Nutrient Station; keep Cook + Haul enabled",
 		"Power an Air Recycler (3 power)",
 		"Reserve 4 salvage; keep Haul + Craft enabled",
 		"Patch and seal the maintenance hatch",
@@ -474,6 +474,11 @@ func _test_order_preview_and_checklist() -> void:
 	game.player_orders._refresh_checklist()
 	_assert_true(kitchen.powered, "charge capacity also powers the nutrient station")
 	_assert_true("[DONE][/color]  Power Grow Tray + Nutrient Station" in game.player_orders.checklist.text, "powered food fixtures with an eligible Cook complete the food chain")
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+	game.player_orders._refresh_checklist()
+	_assert_true("[    ][/color]  Power Grow Tray + Nutrient Station" in game.player_orders.checklist.text, "food chain becomes incomplete when every Hauler is disabled")
+	game.residents[0].set_work_priority("haul", VaultResident.DEFAULT_WORK_PRIORITY)
 	for resident: VaultResident in game.residents:
 		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
 	game.player_orders._refresh_checklist()
@@ -732,7 +737,8 @@ func _test_shed_production_progress() -> void:
 	_assert_equal(game.food_system.raw_food, raw_before, "tray does not yield before its exact production boundary")
 	game.food_system.advance(0.1, game.buildings)
 	_assert_approximately(second_grow.production_progress, 0.0, 0.0001, "completed production cycle resets progress once")
-	_assert_equal(game.food_system.raw_food, raw_before + FoodSystem.GROW_YIELD, "restored tray yields exactly one raw food")
+	_assert_equal(game.food_system.raw_food, raw_before, "completed growth remains outside stored inventory until hauled")
+	_assert_equal(game.job_system.get_pending_raw_food(), FoodSystem.GROW_YIELD, "restored tray queues exactly one raw-food haul")
 	_dispose(game)
 
 
@@ -883,7 +889,11 @@ func _test_cooking_at_starting_stock() -> void:
 	_assert_true(kitchen.powered, "nutrient station is powered")
 	game.step_simulation(4.2)
 	_assert_equal(game.food_system.raw_food, 0, "cooking consumes raw food while meals start at eight")
-	_assert_equal(game.food_system.meals, 8 + FoodSystem.COOK_OUTPUT, "cooking adds a meal above the old silent cap")
+	_assert_equal(game.food_system.meals, 8, "cooking output remains unavailable before its haul deposit")
+	_assert_equal(game.job_system.get_pending_meals(), FoodSystem.COOK_OUTPUT, "cooking queues one meal above the old silent cap")
+	game.step_simulation(10.0)
+	_assert_equal(game.food_system.meals, 8 + FoodSystem.COOK_OUTPUT, "hauling stores the cooked meal above the old silent cap")
+	_assert_equal(game.job_system.get_pending_meals(), 0, "stored cooking output is no longer pending")
 	_dispose(game)
 
 
@@ -1650,6 +1660,8 @@ func _test_player_order_survival_plan() -> void:
 	game.player_orders.breach_resume_button.pressed.emit()
 	_assert_true(game.breach_system.warning_acknowledged, "first-session path uses Resume Response to acknowledge the warning")
 	_assert_false(game.user_paused or game.player_orders.breach_warning_panel.visible, "Resume Response returns the first-session path to play")
+	game.set_tool("zone")
+	_assert_true(game.issue_order(Vector2i(23, 13)), "first-session route paints a food drop-off near its powered producers")
 	game.step_simulation(200.0 - BreachSystem.WARNING_AT_SECONDS)
 	_assert_true(game.food_system.salvage >= 0, "ordered construction never overdraws salvage")
 	_assert_true(game.breach_system.is_sealed(), "player-order plan automatically contains the first breach")

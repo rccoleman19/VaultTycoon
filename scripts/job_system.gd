@@ -1,7 +1,7 @@
 class_name JobSystem
 extends Node
 
-enum JobType { DIG, HAUL_RUBBLE, SUPPLY_BUILD, BUILD, COOK, SUPPLY_BREACH, PATCH_BREACH }
+enum JobType { DIG, HAUL_RUBBLE, SUPPLY_BUILD, BUILD, COOK, SUPPLY_BREACH, PATCH_BREACH, HAUL_RAW_FOOD, HAUL_MEAL }
 
 const JOB_NAMES := {
 	JobType.DIG: "Excavating",
@@ -11,6 +11,8 @@ const JOB_NAMES := {
 	JobType.COOK: "Preparing meals",
 	JobType.SUPPLY_BREACH: "Hauling emergency patch",
 	JobType.PATCH_BREACH: "Patching pressure breach",
+	JobType.HAUL_RAW_FOOD: "Hauling raw food",
+	JobType.HAUL_MEAL: "Hauling meal",
 }
 
 const MEDICAL_HP_PER_SECOND := 2.0
@@ -45,6 +47,18 @@ func queue_rubble(cell: Vector2i, amount: int) -> void:
 	_add_job(JobType.HAUL_RUBBLE, cell, -1, amount)
 
 
+func queue_raw_food(cell: Vector2i, amount: int) -> void:
+	_queue_food_output(JobType.HAUL_RAW_FOOD, cell, amount)
+
+
+func queue_meals(cell: Vector2i, amount: int) -> void:
+	_queue_food_output(JobType.HAUL_MEAL, cell, amount)
+
+
+func queue_meal(cell: Vector2i, amount: int) -> void:
+	queue_meals(cell, amount)
+
+
 func queue_building(building: VaultBuilding) -> void:
 	if building.needs_supply():
 		_add_job(JobType.SUPPLY_BUILD, building.cell, building.building_id, building.get_cost() - building.delivered)
@@ -69,8 +83,12 @@ func release_resident(resident: VaultResident) -> void:
 			if int(job.type) in [JobType.SUPPLY_BUILD, JobType.SUPPLY_BREACH] and int(job.get("in_transit", 0)) > 0:
 				food.add_salvage(int(job.in_transit))
 				job.in_transit = 0
+			elif int(job.type) in [JobType.HAUL_RAW_FOOD, JobType.HAUL_MEAL] and int(job.get("in_transit", 0)) > 0:
+				job.amount = int(job.get("amount", 0)) + int(job.in_transit)
+				job.in_transit = 0
 			job.reserved_by = -1
 	resident.carrying = 0
+	resident.carrying_kind = ""
 	resident.clear_job()
 
 
@@ -143,6 +161,12 @@ func rebuild_from_state(saved_data: Dictionary = {}) -> void:
 	for entry: Variant in saved_data.get("rubble", []):
 		if entry is Array and entry.size() >= 3:
 			queue_rubble(Vector2i(int(entry[0]), int(entry[1])), int(entry[2]))
+	for entry: Variant in saved_data.get("raw_food", []):
+		if entry is Array and entry.size() >= 3:
+			queue_raw_food(Vector2i(int(entry[0]), int(entry[1])), int(entry[2]))
+	for entry: Variant in saved_data.get("meals", []):
+		if entry is Array and entry.size() >= 3:
+			queue_meals(Vector2i(int(entry[0]), int(entry[1])), int(entry[2]))
 	for entry: Variant in saved_data.get("supplies", []):
 		if entry is Array and entry.size() >= 5:
 			var target := Vector2i(int(entry[1]), int(entry[2]))
@@ -186,6 +210,8 @@ func rebuild_from_state(saved_data: Dictionary = {}) -> void:
 
 func serialize() -> Dictionary:
 	var rubble: Array = []
+	var raw_food: Array = []
+	var meals: Array = []
 	var supplies: Array = []
 	var breach_supply: Array = []
 	var breach_patch: Array = []
@@ -193,6 +219,15 @@ func serialize() -> Dictionary:
 		if int(job.type) == JobType.HAUL_RUBBLE and not bool(job.get("done", false)):
 			var target: Vector2i = job.target
 			rubble.append([target.x, target.y, int(job.amount)])
+		elif int(job.type) in [JobType.HAUL_RAW_FOOD, JobType.HAUL_MEAL] and not bool(job.get("done", false)):
+			var target: Vector2i = job.target
+			var undeposited := int(job.get("amount", 0)) + int(job.get("in_transit", 0))
+			if undeposited > 0:
+				var output := [target.x, target.y, undeposited]
+				if int(job.type) == JobType.HAUL_RAW_FOOD:
+					raw_food.append(output)
+				else:
+					meals.append(output)
 		elif int(job.type) == JobType.SUPPLY_BUILD and not bool(job.get("done", false)):
 			var target: Vector2i = job.target
 			supplies.append([int(job.building_id), target.x, target.y, int(job.amount), int(job.get("in_transit", 0))])
@@ -205,12 +240,59 @@ func serialize() -> Dictionary:
 			]
 		elif int(job.type) == JobType.PATCH_BREACH and not bool(job.get("done", false)):
 			breach_patch = [int(job.get("reserved_by", -1))]
+	raw_food.sort_custom(_serialized_cargo_before)
+	meals.sort_custom(_serialized_cargo_before)
 	return {
 		"rubble": rubble,
+		"raw_food": raw_food,
+		"meals": meals,
 		"supplies": supplies,
 		"breach_supply": breach_supply,
 		"breach_patch": breach_patch,
 	}
+
+
+func is_serialized_food_haul_data_valid(saved_data: Variant, saved_map: Variant) -> bool:
+	if not saved_data is Dictionary or not saved_map is Dictionary:
+		return false
+	var saved_cells: Variant = saved_map.get("cells", [])
+	if not saved_cells is Array or saved_cells.size() != MapGrid.WIDTH * MapGrid.HEIGHT:
+		return false
+	for key: String in ["raw_food", "meals"]:
+		var entries: Variant = saved_data.get(key, [])
+		if not entries is Array or entries.size() > MapGrid.WIDTH * MapGrid.HEIGHT:
+			return false
+		var seen := {}
+		for entry: Variant in entries:
+			if not entry is Array or entry.size() != 3:
+				return false
+			if (
+				not _is_integer_in_range(entry[0], 0, MapGrid.WIDTH - 1)
+				or not _is_integer_in_range(entry[1], 0, MapGrid.HEIGHT - 1)
+				or not _is_integer_in_range(entry[2], 1, 2_147_483_647)
+			):
+				return false
+			var cell := Vector2i(int(entry[0]), int(entry[1]))
+			if seen.has(cell) or int(saved_cells[cell.y * MapGrid.WIDTH + cell.x]) != MapGrid.Tile.FLOOR:
+				return false
+			seen[cell] = true
+	return true
+
+
+func get_pending_raw_food() -> int:
+	return _get_pending_output(JobType.HAUL_RAW_FOOD)
+
+
+func get_pending_meals() -> int:
+	return _get_pending_output(JobType.HAUL_MEAL)
+
+
+func get_pending_raw_food_at(cell: Vector2i) -> int:
+	return _get_pending_output(JobType.HAUL_RAW_FOOD, cell)
+
+
+func get_pending_meals_at(cell: Vector2i) -> int:
+	return _get_pending_output(JobType.HAUL_MEAL, cell)
 
 
 func is_serialized_breach_data_valid(
@@ -412,7 +494,14 @@ func _handle_medical(resident: VaultResident, delta_seconds: float) -> bool:
 	# Keep the ration pipeline staffed before optional recovery.
 	if food.meals < game.get_alive_count():
 		for job: Dictionary in jobs:
-			if int(job.type) == JobType.COOK and int(job.reserved_by) in [-1, resident.resident_id] and _resident_allows(resident, JobType.COOK) and _job_available(resident, job):
+			var type := int(job.type)
+			var carrying_food_output := (
+				type in [JobType.HAUL_RAW_FOOD, JobType.HAUL_MEAL]
+				and resident.current_job_id == int(job.id)
+				and int(job.reserved_by) == resident.resident_id
+				and int(job.get("in_transit", 0)) > 0
+			)
+			if type in [JobType.COOK, JobType.HAUL_RAW_FOOD, JobType.HAUL_MEAL] and int(job.reserved_by) in [-1, resident.resident_id] and _resident_allows(resident, type) and (carrying_food_output or _job_available(resident, job)):
 				_release_medical(resident)
 				return false
 	var bed := game.get_building_by_id(resident.medical_bed_id) as VaultBuilding
@@ -533,6 +622,7 @@ func _claim_best_job(resident: VaultResident) -> void:
 	if int(job.type) in [JobType.SUPPLY_BUILD, JobType.SUPPLY_BREACH] and int(job.get("in_transit", 0)) > 0:
 		resident.job_phase = "target"
 		resident.carrying = int(job.in_transit)
+		resident.carrying_kind = "salvage"
 	resident.work_accumulator = 0.0
 	resident.state = str(JOB_NAMES.get(int(job.type), "Working"))
 
@@ -605,6 +695,12 @@ func _job_available(resident: VaultResident, job: Dictionary) -> bool:
 		return map_grid.dig_marks.has(target) and map_grid.nearest_walkable_neighbor(target, resident.get_cell(map_grid)).x >= 0
 	if type == JobType.HAUL_RUBBLE:
 		return map_grid.is_walkable(target) and not map_grid.find_path(resident.get_cell(map_grid), target).is_empty()
+	if type in [JobType.HAUL_RAW_FOOD, JobType.HAUL_MEAL]:
+		return (
+			int(job.get("amount", 0)) > 0
+			and map_grid.is_walkable(target)
+			and not map_grid.find_path(resident.get_cell(map_grid), target).is_empty()
+		)
 	if type == JobType.SUPPLY_BREACH:
 		return breach.is_response_active() and breach.needs_supply() and (int(job.get("in_transit", 0)) > 0 or food.salvage > 0) and not map_grid.find_path(resident.get_cell(map_grid), target).is_empty()
 	if type == JobType.PATCH_BREACH:
@@ -641,6 +737,9 @@ func _process_job(resident: VaultResident, delta_seconds: float) -> void:
 		return
 	if type == JobType.HAUL_RUBBLE:
 		_process_rubble_job(resident, job, delta_seconds)
+		return
+	if type in [JobType.HAUL_RAW_FOOD, JobType.HAUL_MEAL]:
+		_process_food_haul_job(resident, job, delta_seconds)
 		return
 	if type == JobType.SUPPLY_BREACH:
 		_process_breach_supply_job(resident, job, delta_seconds)
@@ -679,7 +778,8 @@ func _process_job(resident: VaultResident, delta_seconds: float) -> void:
 		resident.state = "Preparing meals"
 		resident.work_accumulator += delta_seconds * resident.get_work_multiplier()
 		if resident.work_accumulator >= 4.0:
-			food.finish_cooking()
+			if food.finish_cooking():
+				queue_meals(building.cell, FoodSystem.COOK_OUTPUT)
 			_finish_job(job, resident)
 
 
@@ -689,17 +789,52 @@ func _process_rubble_job(resident: VaultResident, job: Dictionary, delta_seconds
 			resident.state = "Walking to rubble"
 			return
 		resident.carrying = int(job.amount)
+		resident.carrying_kind = "salvage"
 		resident.job_phase = "deposit"
 		resident.clear_path()
-	var stockpile_cell := map_grid.nearest_stockpile(resident.get_cell(map_grid))
-	if stockpile_cell.x < 0:
-		stockpile_cell = _stockpile_cell()
+	var stockpile_cell := _preferred_stockpile_cell(resident.get_cell(map_grid))
 	if not resident.move_to(stockpile_cell, map_grid, delta_seconds):
 		resident.state = "Carrying salvage"
 		return
 	food.add_salvage(int(job.amount))
 	resident.carrying = 0
+	resident.carrying_kind = ""
 	_finish_job(job, resident)
+
+
+func _process_food_haul_job(resident: VaultResident, job: Dictionary, delta_seconds: float) -> void:
+	var type := int(job.type)
+	var cargo_name := "raw food" if type == JobType.HAUL_RAW_FOOD else "meal"
+	if resident.job_phase == "target":
+		if int(job.get("amount", 0)) <= 0:
+			_finish_job(job, resident)
+			return
+		if not resident.move_to(job.target, map_grid, delta_seconds):
+			resident.state = "Collecting %s" % cargo_name
+			return
+		resident.carrying = int(job.amount)
+		resident.carrying_kind = "raw_food" if type == JobType.HAUL_RAW_FOOD else "meal"
+		job.in_transit = resident.carrying
+		job.amount = 0
+		resident.job_phase = "deposit"
+		resident.clear_path()
+	var stockpile_cell := _preferred_stockpile_cell(resident.get_cell(map_grid))
+	if not resident.move_to(stockpile_cell, map_grid, delta_seconds):
+		resident.state = "Carrying %s" % cargo_name
+		return
+	var delivered := int(job.get("in_transit", 0))
+	if type == JobType.HAUL_RAW_FOOD:
+		food.add_raw_food(delivered)
+	else:
+		food.add_meals(delivered)
+	job.in_transit = 0
+	resident.carrying = 0
+	resident.carrying_kind = ""
+	if int(job.get("amount", 0)) > 0:
+		job.reserved_by = -1
+		resident.clear_job()
+	else:
+		_finish_job(job, resident)
 
 
 func _process_supply_job(resident: VaultResident, job: Dictionary, building: VaultBuilding, delta_seconds: float) -> void:
@@ -714,6 +849,7 @@ func _process_supply_job(resident: VaultResident, job: Dictionary, building: Vau
 			resident.clear_job()
 			return
 		job.in_transit = resident.carrying
+		resident.carrying_kind = "salvage"
 		resident.job_phase = "target"
 		resident.clear_path()
 	if not resident.move_to(building.cell, map_grid, delta_seconds):
@@ -722,6 +858,7 @@ func _process_supply_job(resident: VaultResident, job: Dictionary, building: Vau
 	building.add_delivery(resident.carrying)
 	job.in_transit = 0
 	resident.carrying = 0
+	resident.carrying_kind = ""
 	if building.needs_supply():
 		job.amount = building.get_cost() - building.delivered
 		job.reserved_by = -1
@@ -745,6 +882,7 @@ func _process_breach_supply_job(resident: VaultResident, job: Dictionary, delta_
 			resident.clear_job()
 			return
 		job.in_transit = resident.carrying
+		resident.carrying_kind = "salvage"
 		resident.job_phase = "target"
 		resident.clear_path()
 	if not resident.move_to(BreachSystem.HATCH_CELL, map_grid, delta_seconds):
@@ -753,6 +891,7 @@ func _process_breach_supply_job(resident: VaultResident, job: Dictionary, delta_
 	breach.add_delivery(resident.carrying)
 	job.in_transit = 0
 	resident.carrying = 0
+	resident.carrying_kind = ""
 	if breach.needs_supply():
 		job.amount = BreachSystem.PATCH_COST - breach.patch_delivered
 		job.reserved_by = -1
@@ -769,6 +908,11 @@ func _stockpile_cell() -> Vector2i:
 	return map_grid.get_chamber_center()
 
 
+func _preferred_stockpile_cell(from_cell: Vector2i) -> Vector2i:
+	var zone_cell := map_grid.nearest_stockpile(from_cell)
+	return zone_cell if zone_cell.x >= 0 else _stockpile_cell()
+
+
 func _resident_allows(resident: VaultResident, type: int) -> bool:
 	var work_type := _work_type_for_job(type)
 	return not work_type.is_empty() and resident.get_work_priority(work_type) != VaultResident.PRIORITY_DISABLED
@@ -777,7 +921,7 @@ func _resident_allows(resident: VaultResident, type: int) -> bool:
 func _work_type_for_job(type: int) -> String:
 	match type:
 		JobType.DIG: return "dig"
-		JobType.HAUL_RUBBLE, JobType.SUPPLY_BUILD, JobType.SUPPLY_BREACH: return "haul"
+		JobType.HAUL_RUBBLE, JobType.SUPPLY_BUILD, JobType.SUPPLY_BREACH, JobType.HAUL_RAW_FOOD, JobType.HAUL_MEAL: return "haul"
 		JobType.BUILD, JobType.PATCH_BREACH: return "craft"
 		JobType.COOK: return "cook"
 	return ""
@@ -788,11 +932,32 @@ func get_work_type_for_job(type: int) -> String:
 
 
 func _job_priority(type: int) -> int:
+	# Once the hatch response starts, newly recovered salvage is part of the
+	# critical supply chain. Prefer exposed rubble, then connected excavation,
+	# until the missing patch material can be collected.
+	if breach != null and breach.needs_supply():
+		var patch_shortfall := maxi(
+			0,
+			BreachSystem.PATCH_COST
+				- breach.patch_delivered
+				- _breach_supply_in_transit()
+				- food.salvage,
+		)
+		if patch_shortfall > 0:
+			if type == JobType.HAUL_RUBBLE:
+				return 2
+			if type == JobType.DIG:
+				return 3
 	match type:
 		JobType.SUPPLY_BREACH: return 0
 		JobType.PATCH_BREACH: return 1
 		JobType.SUPPLY_BUILD: return 10
 		JobType.BUILD: return 15
+		JobType.HAUL_MEAL:
+			# Batch finished rations while the shared meal buffer is healthy. This
+			# keeps cooking output from monopolizing Haul without imposing a cap.
+			return 18 if food.meals <= game.get_alive_count() * 2 else 45
+		JobType.HAUL_RAW_FOOD: return 19
 		JobType.COOK: return 20
 		JobType.HAUL_RUBBLE: return 30
 		JobType.DIG: return 40
@@ -858,6 +1023,7 @@ func _restore_breach_assignment(
 	resident.current_job_type = type
 	resident.job_phase = phase_name
 	resident.carrying = int(job.get("in_transit", 0)) if type == JobType.SUPPLY_BREACH else 0
+	resident.carrying_kind = "salvage" if resident.carrying > 0 else ""
 	resident.work_accumulator = 0.0
 	resident.state = str(JOB_NAMES[type])
 
@@ -928,6 +1094,31 @@ func _add_job(type: int, target: Vector2i, building_id := -1, amount := 0) -> vo
 	next_job_id += 1
 
 
+func _queue_food_output(type: int, source: Vector2i, amount: int) -> void:
+	if type not in [JobType.HAUL_RAW_FOOD, JobType.HAUL_MEAL] or amount <= 0:
+		return
+	for job: Dictionary in jobs:
+		if not bool(job.get("done", false)) and int(job.type) == type and job.target == source:
+			job.amount = int(job.get("amount", 0)) + amount
+			return
+	_add_job(type, source, -1, amount)
+
+
+func _get_pending_output(type: int, source := Vector2i(-1, -1)) -> int:
+	var total := 0
+	for job: Dictionary in jobs:
+		if bool(job.get("done", false)) or int(job.type) != type:
+			continue
+		if source.x >= 0 and job.target != source:
+			continue
+		total += int(job.get("amount", 0)) + int(job.get("in_transit", 0))
+	return total
+
+
+func _serialized_cargo_before(a: Array, b: Array) -> bool:
+	return int(a[1]) * MapGrid.WIDTH + int(a[0]) < int(b[1]) * MapGrid.WIDTH + int(b[0])
+
+
 func _find_job(job_id: int) -> Dictionary:
 	for job: Dictionary in jobs:
 		if int(job.id) == job_id:
@@ -939,6 +1130,7 @@ func _finish_job(job: Dictionary, resident: VaultResident) -> void:
 	job.done = true
 	job.reserved_by = -1
 	resident.carrying = 0
+	resident.carrying_kind = ""
 	resident.clear_job()
 
 

@@ -28,6 +28,7 @@ var current_job_id := -1
 var current_job_type := -1
 var job_phase := ""
 var carrying := 0
+var carrying_kind := ""
 var work_accumulator := 0.0
 var medical_bed_id := -1
 var sleeping := false
@@ -310,7 +311,12 @@ func _draw() -> void:
 	draw_circle(Vector2(0, -3), 5.5, body_color)
 	draw_rect(Rect2(-6, 2, 12, 7), body_color)
 	if carrying > 0:
-		draw_rect(Rect2(4, 1, 6, 6), Color("bd8f52"))
+		var cargo_color := Color("bd8f52")
+		if carrying_kind == "raw_food":
+			cargo_color = Color("74b76c")
+		elif carrying_kind == "meal":
+			cargo_color = Color("efc56b")
+		draw_rect(Rect2(4, 1, 6, 6), cargo_color)
 	if alive:
 		var mood_color := Color("ef5a54") if needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD else (Color("efc56b") if needs.mood < 70.0 else Color("75d4b4"))
 		draw_rect(Rect2(-8, 10, 16, 2), Color("17242b"))

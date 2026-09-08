@@ -150,8 +150,9 @@ func clear_stockpile(cell: Vector2i) -> bool:
 	return true
 
 
-# One breadth-first traversal selects the closest reachable zone. Equal-distance
-# ties follow get_neighbors() order: left, right, up, down. No per-item storage.
+# One breadth-first traversal selects the closest reachable zone for any inbound
+# cargo. Equal-distance ties follow get_neighbors() order: left, right, up, down.
+# Zones remain destination markers rather than per-cell inventories.
 func nearest_stockpile(from_cell: Vector2i) -> Vector2i:
 	if stockpile_cells.is_empty() or not is_walkable(from_cell):
 		return Vector2i(-1, -1)

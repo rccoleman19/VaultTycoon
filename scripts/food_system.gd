@@ -2,6 +2,7 @@ class_name FoodSystem
 extends Node
 
 signal inventory_changed
+signal raw_food_produced(source_cell: Vector2i, amount: int)
 
 const GROW_SECONDS := 9.0
 const GROW_YIELD := 1
@@ -39,9 +40,22 @@ func finish_cooking() -> bool:
 	if not can_cook():
 		return false
 	raw_food -= COOK_INPUT
-	meals += COOK_OUTPUT
 	inventory_changed.emit()
 	return true
+
+
+func add_raw_food(amount: int) -> void:
+	if amount <= 0:
+		return
+	raw_food += amount
+	inventory_changed.emit()
+
+
+func add_meals(amount: int) -> void:
+	if amount <= 0:
+		return
+	meals += amount
+	inventory_changed.emit()
 
 
 func add_salvage(amount: int) -> void:
@@ -58,18 +72,14 @@ func take_salvage(amount: int) -> int:
 
 
 func advance(delta_seconds: float, buildings: Array[VaultBuilding]) -> void:
-	var inventory_was_changed := false
 	for building in buildings:
 		if not building.complete or building.kind != VaultBuilding.Kind.GROW_TRAY or not building.powered:
 			continue
 		building.production_progress += delta_seconds
 		while building.production_progress >= GROW_SECONDS:
 			building.production_progress -= GROW_SECONDS
-			raw_food += GROW_YIELD
-			inventory_was_changed = true
+			raw_food_produced.emit(building.cell, GROW_YIELD)
 		building.queue_redraw()
-	if inventory_was_changed:
-		inventory_changed.emit()
 
 
 func serialize() -> Dictionary:

@@ -315,10 +315,10 @@ func _build_interface() -> void:
 		["bed", "BUNK $8", "Rest fixture", 80],
 		["lamp", "LUMEN $5", "1 power; lights nearby tiles", 90],
 		["generator", "CHARGE $18", "+7 power", 104],
-		["grow", "GROW $12", "3 power; yields raw food", 90],
-		["kitchen", "NUTRI $10", "Nutrient Station: 2 power; cooks meals", 96],
-		["zone", "ZONE", "Paint stockpile cells on empty floor; CANCEL [X] clears them", 76],
-		["stockpile", "BAY $4", "Salvage Bay: hauling destination", 64],
+		["grow", "GROW $12", "3 power; yields raw food for hauling", 90],
+		["kitchen", "NUTRI $10", "2 power; cooks meals for hauling", 96],
+		["zone", "ZONE", "Paint drop-offs for salvage, raw food, and meals; CANCEL [X] clears", 76],
+		["stockpile", "BAY $4", "Fallback destination for salvage and food hauling", 64],
 		["air", "AIR $14", "Air Recycler: 3 power; restores vault oxygen", 86],
 		["medical", "MED $8", "Medical Bed: automatic injury recovery, +2 HP/s; no power", 82],
 		["rec", "REC $8", "Rec Console: 1 power; restores one resident's mood", 82],
@@ -408,7 +408,7 @@ func _build_work_priorities_board() -> void:
 	title_row.add_child(work_priorities_close_button)
 
 	var explanation := Label.new()
-	explanation.text = "Click a cell to cycle.  1 = highest  ·  4 = lowest  ·  OFF = never claim.  Hatch work overrides numbered ranks, but OFF still blocks it. Recreation is autonomous."
+	explanation.text = "Click a cell to cycle.  1 = highest  ·  4 = lowest  ·  OFF = never claim. HAUL covers salvage, raw food, and meals. Hatch work overrides numbered ranks, but OFF still blocks it. Recreation is autonomous."
 	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	explanation.custom_minimum_size.y = 42
 	content.add_child(explanation)
@@ -544,7 +544,7 @@ func _build_briefing() -> void:
 	title.add_theme_color_override("font_color", Color("75d4b4"))
 	content.add_child(title)
 	var intro := Label.new()
-	intro.text = "Dig and haul salvage, add bunks, then power food and an Air Recycler. Reserve 4 salvage and keep Haul + Craft enabled for the hatch warning. Recreation and work specialization help, but neither is required to win."
+	intro.text = "Dig and haul salvage, add bunks, then power food and an Air Recycler. Keep Haul enabled to store Grow Tray and Nutrient Station output. Reserve 4 salvage and keep Haul + Craft enabled for the hatch warning."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	intro.custom_minimum_size.y = 62
 	content.add_child(intro)
@@ -667,9 +667,16 @@ func refresh() -> void:
 	if game == null or clock_label == null:
 		return
 	clock_label.text = game.day_cycle.get_clock_text()
-	resource_label.text = "MEALS %d  RAW %d  SALVAGE %d" % [game.food_system.meals, game.food_system.raw_food, game.food_system.salvage]
+	resource_label.text = "MEALS %d (+%d)  RAW %d (+%d)  SALVAGE %d" % [
+		game.food_system.meals,
+		game.job_system.get_pending_meals(),
+		game.food_system.raw_food,
+		game.job_system.get_pending_raw_food(),
+		game.food_system.salvage,
+	]
+	resource_label.tooltip_text = "Stored inventory; values in parentheses are produced food still awaiting Haul delivery."
 	command_buttons.zone.text = "ZONE %d" % game.map_grid.stockpile_cells.size()
-	command_buttons.zone.tooltip_text = "Stockpile: %d cells. Salvage drops prefer reachable zones; otherwise Salvage Bay / chamber center. Click/drag to paint; CANCEL [X] clears." % game.map_grid.stockpile_cells.size()
+	command_buttons.zone.tooltip_text = "Stockpile: %d cells. Salvage, raw food, and meals prefer reachable zones; otherwise Salvage Bay / chamber center. Click/drag to paint; CANCEL [X] clears." % game.map_grid.stockpile_cells.size()
 	_refresh_objective()
 	power_label.text = game.power_grid.get_status_text()
 	power_label.add_theme_color_override("font_color", Color("ef6860") if game.power_grid.brownout_active else Color("75d4b4"))
@@ -829,9 +836,16 @@ func _refresh_inspector() -> void:
 			if building.is_power_consumer():
 				inspector_state.text += "\nPriority: %s (fixed)" % building.get_power_priority_name()
 			if building.kind == VaultBuilding.Kind.GROW_TRAY:
-				inspector_state.text += "\nGrowth: %d%% · yields 1 raw" % floori(building.production_progress / FoodSystem.GROW_SECONDS * 100.0)
+				inspector_state.text += "\nGrowth: %d%% · yields 1 raw\nAwaiting Haul: %d raw" % [
+					floori(building.production_progress / FoodSystem.GROW_SECONDS * 100.0),
+					game.job_system.get_pending_raw_food_at(building.cell),
+				]
 			elif building.kind == VaultBuilding.Kind.KITCHEN:
-				inspector_state.text += "\nRecipe: %d raw -> %d meal" % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
+				inspector_state.text += "\nRecipe: %d raw -> %d meal\nAwaiting Haul: %d meals" % [
+					FoodSystem.COOK_INPUT,
+					FoodSystem.COOK_OUTPUT,
+					game.job_system.get_pending_meals_at(building.cell),
+				]
 			elif building.kind == VaultBuilding.Kind.AIR_RECYCLER:
 				inspector_state.text += "\nO2 recovery: +%.1f%%/s" % OxygenSystem.RECYCLER_OUTPUT_PER_SECOND
 			elif building.kind == VaultBuilding.Kind.MEDICAL_BED:
@@ -883,6 +897,9 @@ func _refresh_alerts() -> void:
 		alerts.append("SEAL WARNING · %s" % _format_seconds(game.breach_system.get_time_to_open()))
 	if game.food_system.meals < game.get_alive_count():
 		alerts.append("LOW MEALS")
+	var pending_food := game.job_system.get_pending_raw_food() + game.job_system.get_pending_meals()
+	if pending_food > 0 and not _has_eligible_worker("haul"):
+		alerts.append("FOOD WAITING · ENABLE HAUL")
 	if game.power_grid.brownout_active:
 		alerts.append("POWER BROWNOUT · SHED %s" % game.power_grid.get_shed_summary())
 	if game.get_completed_building_count(VaultBuilding.Kind.BED) < game.get_alive_count():
@@ -1052,12 +1069,13 @@ func _refresh_checklist() -> void:
 		game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) >= 1
 		and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) >= 1
 		and cook_enabled
+		and _has_eligible_worker("haul")
 	)
 	var checks := [
 		[game.map_grid.get_floor_cells().size() >= initial_floor_count + 12, "Excavate at least 12 connected tiles; haul rubble for salvage"],
 		[game.get_completed_building_count(VaultBuilding.Kind.BED) >= 2, "Assemble at least 2 bunks"],
 		[game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) >= 1, "Build a Charge Node (+7 power)"],
-		[food_chain_ready, "Power Grow Tray + Nutrient Station; keep Cook enabled"],
+		[food_chain_ready, "Power Grow Tray + Nutrient Station; keep Cook + Haul enabled"],
 		[game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) >= 1, "Power an Air Recycler (3 power)"],
 		[hatch_ready, "Reserve 4 salvage; keep Haul + Craft enabled"],
 		[game.breach_system.is_sealed(), "Patch and seal the maintenance hatch"],
@@ -1073,7 +1091,7 @@ func _refresh_checklist() -> void:
 	var rec_done := game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) >= 1
 	var rec_marker := "[color=#75d4b4][DONE][/color]" if rec_done else "[color=#8faeb7][OPTIONAL][/color]"
 	lines.append("%s  Power a Rec Console; free 1 power if shed" % rec_marker)
-	lines.append("Optional: ZONE paints salvage drop-offs; CANCEL clears cells")
+	lines.append("Optional: ZONE paints salvage + food drop-offs; CANCEL clears cells")
 	lines.append("Optional: Medical Bed ($8) heals injuries; disable to deny care")
 	lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled")
 	checklist.text = "\n".join(lines)
