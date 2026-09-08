@@ -155,8 +155,8 @@ func begin_shift() -> void:
 	tutorial_open = false
 	user_paused = false
 	player_orders.show_briefing(false)
-	status_message = "Shift running. Dig, furnish, sustain mood and life support, and watch the seal monitor."
-	status_message_left = 5.0
+	status_message = "First job: DIG [E] rock beside the chamber, then build 2 bunks."
+	status_message_left = 8.0
 
 
 func _simulation_step(delta_seconds: float) -> void:
