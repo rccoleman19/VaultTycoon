@@ -575,8 +575,8 @@ func _build_briefing() -> void:
 	briefing_overlay.add_child(scrim)
 	briefing_panel = PanelContainer.new()
 	briefing_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	briefing_panel.custom_minimum_size = Vector2(640, 520)
-	briefing_panel.size = Vector2(640, 520)
+	briefing_panel.custom_minimum_size = Vector2(640, 600)
+	briefing_panel.size = Vector2(640, 600)
 	briefing_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	briefing_panel.add_theme_stylebox_override("panel", _panel_style(Color("111b21"), Color("72cdb8"), 3))
 	briefing_overlay.add_child(briefing_panel)
@@ -600,7 +600,7 @@ func _build_briefing() -> void:
 	content.add_child(intro)
 	var checklist_scroll := ScrollContainer.new()
 	checklist_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	checklist_scroll.custom_minimum_size.y = 180
+	checklist_scroll.custom_minimum_size.y = 238
 	checklist_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	content.add_child(checklist_scroll)
 	checklist = RichTextLabel.new()

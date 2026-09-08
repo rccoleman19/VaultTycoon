@@ -545,7 +545,10 @@ func _test_hud_contract() -> void:
 	_assert_equal(orders.command_grid.get_child_count(), 16, "toolbar contains thirteen tools plus save, load, and Help")
 	_assert_equal(orders.briefing_panel.size, Vector2(640, 600), "briefing leaves room for every stabilization objective")
 	_assert_equal(orders.briefing_overlay.mouse_filter, Control.MOUSE_FILTER_STOP, "briefing backdrop blocks accidental map input")
-	_assert_true(orders.checklist.fit_content and orders.checklist.custom_minimum_size.y >= 238.0, "briefing checklist expands to keep all objectives legible")
+	var checklist_scroll := orders.checklist.get_parent() as ScrollContainer
+	_assert_true(checklist_scroll != null and checklist_scroll.custom_minimum_size.y >= 238.0, "briefing checklist scrolls inside a fixed panel so BEGIN SHIFT stays visible")
+	_assert_true(orders.checklist.fit_content, "briefing checklist still expands for full objective text inside the scroll")
+	_assert_true(orders.briefing_begin_button.visible and orders.briefing_begin_button.get_global_rect().size.y > 0.0, "BEGIN SHIFT remains laid out on the first screen")
 	_assert_false(orders.right_scroll.is_ancestor_of(orders.objective_label), "critical wing telemetry stays outside the scrolling inspector")
 	_assert_equal(orders.command_buttons.rec.text, "REC $8", "toolbar exposes the compact recreation build command")
 	_assert_true("1 power" in orders.command_buttons.rec.tooltip_text, "recreation tooltip states its power demand")
