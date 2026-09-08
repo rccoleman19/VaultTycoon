@@ -59,6 +59,8 @@ func _ready() -> void:
 	map_grid.rubble_created.connect(_on_rubble_created)
 	map_grid.dig_orders_removed.connect(_on_dig_orders_removed)
 	day_cycle.day_started.connect(_on_day_started)
+	power_grid.brownout_started.connect(_on_power_brownout_started)
+	power_grid.brownout_cleared.connect(_on_power_brownout_cleared)
 	breach_system.warning_started.connect(_on_breach_warning_started)
 	breach_system.breach_opened.connect(_on_breach_opened)
 	breach_system.breach_sealed.connect(_on_breach_sealed)
@@ -92,6 +94,7 @@ func new_game(show_tutorial := false) -> void:
 	next_building_id = 1
 	map_grid.new_wing()
 	job_system.reset()
+	power_grid.reset()
 	food_system.reset()
 	oxygen_system.reset()
 	day_cycle.reset()
@@ -259,13 +262,7 @@ func issue_order(cell: Vector2i) -> bool:
 			return true
 		var blueprint := get_building_at(cell)
 		if blueprint != null and not blueprint.complete:
-			food_system.add_salvage(blueprint.delivered)
-			job_system.cancel_building(blueprint.building_id)
-			buildings.erase(blueprint)
-			blueprint.free()
-			status_message = "Blueprint canceled; delivered salvage refunded."
-			status_message_left = 3.0
-			return true
+			return _remove_building(blueprint, blueprint.delivered, "Blueprint canceled; delivered salvage refunded.")
 		return false
 	if BUILD_KIND_BY_TOOL.has(active_tool):
 		return place_blueprint(int(BUILD_KIND_BY_TOOL[active_tool]), cell)
@@ -309,6 +306,31 @@ func get_powered_building_count(kind: int) -> int:
 		if building.complete and building.powered and building.kind == kind:
 			count += 1
 	return count
+
+
+func toggle_building_enabled(building_id: int) -> bool:
+	var building := get_building_by_id(building_id)
+	if building == null or not building.complete or not building.is_power_consumer():
+		return false
+	building.manually_disabled = not building.manually_disabled
+	power_grid.recalculate(buildings)
+	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
+	var state := "disabled" if building.manually_disabled else "enabled"
+	status_message = "%s %s. Power grid recalculated." % [building.get_display_name(), state]
+	status_message_left = 4.0
+	return true
+
+
+func deconstruct_building(building_id: int) -> bool:
+	var building := get_building_by_id(building_id)
+	if building == null or not building.complete or building.is_emergency_core:
+		return false
+	var refund := building.get_deconstruct_refund()
+	return _remove_building(
+		building,
+		refund,
+		"%s deconstructed; %d salvage recovered." % [building.get_display_name(), refund],
+	)
 
 
 func get_building_by_id(building_id: int) -> VaultBuilding:
@@ -460,6 +482,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 		world_camera.position = Vector2(float(camera_data[0]), float(camera_data[1]))
 		world_camera.zoom = Vector2.ONE * clampf(float(camera_data[2]), 0.75, 1.8)
 	job_system.rebuild_from_state(snapshot.get("jobs", {}))
+	power_grid.reset()
 	power_grid.recalculate(buildings)
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	selected_resident_id = -1
@@ -515,6 +538,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 			living_residents += 1
 	for entry: Variant in building_data:
 		if not entry is Dictionary or not entry.get("cell") is Array or entry.cell.size() < 2:
+			return false
+		if entry.has("manually_disabled") and typeof(entry.manually_disabled) != TYPE_BOOL:
 			return false
 	if not job_system.is_serialized_breach_data_valid(jobs_data, breach_data, resident_data):
 		return false
@@ -686,6 +711,30 @@ func _has_cancelable_blueprint_at(cell: Vector2i) -> bool:
 	return building != null and not building.complete
 
 
+func _remove_building(building: VaultBuilding, salvage_refund: int, message: String) -> bool:
+	if building == null:
+		return false
+	food_system.add_salvage(maxi(0, salvage_refund))
+	job_system.cancel_building(building.building_id)
+	for resident: VaultResident in residents:
+		if resident.bed_id == building.building_id:
+			resident.bed_id = -1
+			resident.sleeping = false
+		if resident.current_job_id >= 0:
+			var target_job := job_system._find_job(resident.current_job_id)
+			if not target_job.is_empty() and int(target_job.get("building_id", -1)) == building.building_id:
+				job_system.release_resident(resident)
+	if selected_building_id == building.building_id:
+		selected_building_id = -1
+	buildings.erase(building)
+	building.free()
+	power_grid.recalculate(buildings)
+	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
+	status_message = message
+	status_message_left = 3.0
+	return true
+
+
 func _is_reserved_cell(cell: Vector2i) -> bool:
 	return cell == BreachSystem.HATCH_CELL
 
@@ -706,6 +755,21 @@ func _on_day_started(_day: int) -> void:
 			return
 		status_message = "Cycle checkpoint saved locally."
 		status_message_left = 3.0
+
+
+func _on_power_brownout_started(new_shed_count: int, new_shed_demand: int) -> void:
+	var fixture_word := "fixture" if new_shed_count == 1 else "fixtures"
+	status_message = "POWER BROWNOUT: shedding %d power across %d %s. Disable or deconstruct optional load, or add capacity." % [
+		new_shed_demand,
+		new_shed_count,
+		fixture_word,
+	]
+	status_message_left = 8.0
+
+
+func _on_power_brownout_cleared() -> void:
+	status_message = "POWER STABLE: all completed fixtures are served."
+	status_message_left = 5.0
 
 
 func _on_breach_warning_started() -> void:

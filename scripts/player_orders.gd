@@ -9,6 +9,7 @@ var power_label: Label
 var pause_button: Button
 var objective_label: Label
 var alert_label: Label
+var power_detail_label: Label
 var oxygen_label: Label
 var oxygen_bar: ProgressBar
 var breach_label: Label
@@ -19,6 +20,10 @@ var roster_box: VBoxContainer
 var inspector_title: Label
 var inspector_state: Label
 var work_header: Label
+var fixture_header: Label
+var fixture_controls: HBoxContainer
+var fixture_power_button: Button
+var fixture_deconstruct_button: Button
 var need_labels: Dictionary = {}
 var need_bars: Dictionary = {}
 var work_buttons: Dictionary = {}
@@ -71,7 +76,7 @@ func _build_interface() -> void:
 	resource_label.custom_minimum_size.x = 185
 	top_row.add_child(resource_label)
 	power_label = Label.new()
-	power_label.custom_minimum_size.x = 150
+	power_label.custom_minimum_size.x = 210
 	top_row.add_child(power_label)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -120,6 +125,14 @@ func _build_interface() -> void:
 	alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	alert_label.custom_minimum_size.y = 38
 	side.add_child(alert_label)
+	var power_header := Label.new()
+	power_header.text = "POWER GRID"
+	power_header.add_theme_color_override("font_color", Color("8faeb7"))
+	side.add_child(power_header)
+	power_detail_label = Label.new()
+	power_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	power_detail_label.custom_minimum_size.y = 62
+	side.add_child(power_detail_label)
 	var oxygen_header := Label.new()
 	oxygen_header.text = "VAULT ATMOSPHERE"
 	oxygen_header.add_theme_color_override("font_color", Color("8faeb7"))
@@ -201,6 +214,24 @@ func _build_interface() -> void:
 		work_buttons[work_type] = work_button
 		work_row.add_child(work_button)
 	side.add_child(work_row)
+	fixture_header = Label.new()
+	fixture_header.text = "FIXTURE CONTROLS"
+	fixture_header.add_theme_color_override("font_color", Color("8faeb7"))
+	side.add_child(fixture_header)
+	fixture_controls = HBoxContainer.new()
+	fixture_controls.add_theme_constant_override("separation", 5)
+	fixture_power_button = Button.new()
+	fixture_power_button.tooltip_text = "Remove or restore this fixture's power demand."
+	fixture_power_button.custom_minimum_size = Vector2(92, 28)
+	fixture_power_button.pressed.connect(_on_fixture_power_pressed)
+	fixture_controls.add_child(fixture_power_button)
+	fixture_deconstruct_button = Button.new()
+	fixture_deconstruct_button.text = "REMOVE"
+	fixture_deconstruct_button.custom_minimum_size = Vector2(92, 28)
+	fixture_deconstruct_button.pressed.connect(_on_fixture_deconstruct_pressed)
+	fixture_controls.add_child(fixture_deconstruct_button)
+	side.add_child(fixture_controls)
+	_hide_fixture_controls()
 
 	var bottom_panel := PanelContainer.new()
 	bottom_panel.set_anchor(SIDE_RIGHT, 1.0)
@@ -406,7 +437,8 @@ func refresh() -> void:
 	clock_label.text = game.day_cycle.get_clock_text()
 	resource_label.text = "MEALS %d  RAW %d  SALVAGE %d" % [game.food_system.meals, game.food_system.raw_food, game.food_system.salvage]
 	power_label.text = game.power_grid.get_status_text()
-	power_label.add_theme_color_override("font_color", Color("ef6860") if game.power_grid.demand > game.power_grid.supply else Color("75d4b4"))
+	power_label.add_theme_color_override("font_color", Color("ef6860") if game.power_grid.brownout_active else Color("75d4b4"))
+	_refresh_power_detail()
 	pause_button.text = "RESUME" if game.user_paused else "PAUSE"
 	tool_status.text = "%s // %s" % [game.active_tool.to_upper(), game.status_message]
 	for key: String in command_buttons:
@@ -466,6 +498,7 @@ func _refresh_inspector() -> void:
 			button.visible = true
 			button.button_pressed = bool(resident.work_allowed[key])
 			button.text = "%s: %s" % [key.to_upper(), "ON" if resident.work_allowed[key] else "OFF"]
+		_hide_fixture_controls()
 		return
 	_last_inspected_resident_id = -1
 	if game.selected_breach:
@@ -488,26 +521,41 @@ func _refresh_inspector() -> void:
 			_:
 				inspector_state.text = "Seal monitor nominal."
 		_hide_needs_and_work()
+		_hide_fixture_controls()
 		return
 	var building := game.get_building_by_id(game.selected_building_id)
 	if building != null:
 		inspector_title.text = building.get_display_name().to_upper()
 		if building.complete:
-			var power_text := "Powered" if building.get_power_demand() == 0 or building.powered else "UNPOWERED"
-			inspector_state.text = "Online · %s\nPower: %d use / %d output" % [power_text, building.get_power_demand(), building.get_power_output()]
+			var power_text := "NO DEMAND"
+			if building.is_power_consumer():
+				if building.manually_disabled:
+					power_text = "DISABLED"
+				elif building.powered:
+					power_text = "POWERED"
+				elif game.power_grid.is_building_shed(building.building_id):
+					power_text = "SHED · BROWNOUT"
+				else:
+					power_text = "UNPOWERED"
+			inspector_state.text = "Online · %s\nPower: %d demand / %d output" % [power_text, building.get_base_power_demand(), building.get_power_output()]
+			if building.is_power_consumer():
+				inspector_state.text += "\nPriority: %s (fixed)" % building.get_power_priority_name()
 			if building.kind == VaultBuilding.Kind.GROW_TRAY:
 				inspector_state.text += "\nGrowth: %d%% · yields 1 raw" % floori(building.production_progress / FoodSystem.GROW_SECONDS * 100.0)
 			elif building.kind == VaultBuilding.Kind.KITCHEN:
 				inspector_state.text += "\nRecipe: %d raw -> %d meal" % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
 			elif building.kind == VaultBuilding.Kind.AIR_RECYCLER:
 				inspector_state.text += "\nO2 recovery: +%.1f%%/s" % OxygenSystem.RECYCLER_OUTPUT_PER_SECOND
+			_show_fixture_controls(building)
 		else:
 			inspector_state.text = "Blueprint · Salvage %d/%d\nAssembly remaining: %.1fs" % [building.delivered, building.get_cost(), building.construction_left]
+			_hide_fixture_controls()
 		_hide_needs_and_work()
 		return
 	inspector_title.text = "INSPECTOR"
 	inspector_state.text = "Select a resident or fixture. Dig and build orders are completed through work permissions."
 	_hide_needs_and_work()
+	_hide_fixture_controls()
 
 
 func _refresh_alerts() -> void:
@@ -522,8 +570,8 @@ func _refresh_alerts() -> void:
 		alerts.append("SEAL WARNING · %s" % _format_seconds(game.breach_system.get_time_to_open()))
 	if game.food_system.meals < game.get_alive_count():
 		alerts.append("LOW MEALS")
-	if game.power_grid.demand > game.power_grid.supply:
-		alerts.append("POWER OVERLOAD")
+	if game.power_grid.brownout_active:
+		alerts.append("POWER BROWNOUT · SHED %s" % game.power_grid.get_shed_summary())
 	if game.get_completed_building_count(VaultBuilding.Kind.BED) < game.get_alive_count():
 		alerts.append("BED SHORTAGE")
 	var cook_enabled := false
@@ -538,6 +586,23 @@ func _refresh_alerts() -> void:
 			break
 	alert_label.text = "STATUS NOMINAL" if alerts.is_empty() else "  ·  ".join(alerts)
 	alert_label.add_theme_color_override("font_color", Color("75d4b4") if alerts.is_empty() else Color("ef6860"))
+
+
+func _refresh_power_detail() -> void:
+	var power := game.power_grid
+	power_detail_label.text = "SUPPLY %d · DEMAND %d\nSERVED %d · RESERVE %d" % [
+		power.supply,
+		power.demand,
+		power.served,
+		maxi(0, power.supply - power.served),
+	]
+	if power.brownout_active:
+		power_detail_label.text += "\nSHED %d POWER · %s" % [power.shed_demand, power.get_shed_summary()]
+	elif power.disabled_demand > 0:
+		power_detail_label.text += "\nDISABLED %d POWER · %s" % [power.disabled_demand, power.get_disabled_summary()]
+	else:
+		power_detail_label.text += "\nALL CONSUMERS SERVED"
+	power_detail_label.add_theme_color_override("font_color", Color("ef6860") if power.brownout_active else Color("75d4b4"))
 
 
 func _refresh_oxygen() -> void:
@@ -681,6 +746,28 @@ func _hide_needs_and_work() -> void:
 		button.visible = false
 
 
+func _show_fixture_controls(building: VaultBuilding) -> void:
+	var visible := building.complete
+	fixture_header.visible = visible
+	fixture_controls.visible = visible
+	if not visible:
+		return
+	var is_consumer := building.is_power_consumer()
+	fixture_header.text = "FIXTURE CONTROLS"
+	fixture_power_button.visible = is_consumer
+	fixture_power_button.text = "ENABLE" if building.manually_disabled else "DISABLE"
+	fixture_power_button.disabled = not is_consumer
+	fixture_deconstruct_button.disabled = building.is_emergency_core
+	fixture_deconstruct_button.tooltip_text = "Emergency core cannot be deconstructed." if building.is_emergency_core else "Recover %d salvage and remove this fixture." % building.get_deconstruct_refund()
+
+
+func _hide_fixture_controls() -> void:
+	if fixture_header != null:
+		fixture_header.visible = false
+	if fixture_controls != null:
+		fixture_controls.visible = false
+
+
 func _on_tool_pressed(tool: String) -> void:
 	game.set_tool(tool)
 
@@ -696,6 +783,18 @@ func _on_resident_pressed(resident_id: int) -> void:
 func _on_work_pressed(work_type: String) -> void:
 	if game.selected_resident_id >= 0:
 		game.toggle_work(game.selected_resident_id, work_type)
+
+
+func _on_fixture_power_pressed() -> void:
+	var building := game.get_building_by_id(game.selected_building_id)
+	if building != null:
+		game.toggle_building_enabled(building.building_id)
+
+
+func _on_fixture_deconstruct_pressed() -> void:
+	var building := game.get_building_by_id(game.selected_building_id)
+	if building != null:
+		game.deconstruct_building(building.building_id)
 
 
 func _format_seconds(seconds: float) -> String:

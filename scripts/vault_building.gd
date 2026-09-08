@@ -2,6 +2,7 @@ class_name VaultBuilding
 extends Node2D
 
 enum Kind { BED, LAMP, GENERATOR, GROW_TRAY, KITCHEN, STOCKPILE, AIR_RECYCLER }
+enum PowerPriority { CRITICAL, HIGH, NORMAL, LOW }
 
 const KIND_NAMES := {
 	Kind.BED: "Bunk",
@@ -30,6 +31,12 @@ const POWER_DEMAND := {
 	Kind.STOCKPILE: 0,
 	Kind.AIR_RECYCLER: 3,
 }
+const POWER_PRIORITY_NAMES := {
+	PowerPriority.CRITICAL: "CRITICAL",
+	PowerPriority.HIGH: "HIGH",
+	PowerPriority.NORMAL: "NORMAL",
+	PowerPriority.LOW: "LOW",
+}
 
 var building_id := 0
 var kind: Kind = Kind.BED
@@ -38,6 +45,7 @@ var complete := false
 var delivered := 0
 var construction_left := 6.0
 var powered := false
+var manually_disabled := false
 var is_emergency_core := false
 var production_progress := 0.0
 var reserved_by := -1
@@ -64,14 +72,45 @@ func get_cost() -> int:
 	return int(COSTS.get(kind, 0))
 
 
+func get_deconstruct_refund() -> int:
+	if is_emergency_core:
+		return 0
+	return floori(float(get_cost()) * 0.5)
+
+
 func get_build_time() -> float:
 	return 5.0 if kind in [Kind.LAMP, Kind.STOCKPILE] else 8.0
 
 
 func get_power_demand() -> int:
-	if not complete:
+	if not complete or manually_disabled:
 		return 0
+	return get_base_power_demand()
+
+
+func get_base_power_demand() -> int:
 	return int(POWER_DEMAND.get(kind, 0))
+
+
+func is_power_consumer() -> bool:
+	return get_base_power_demand() > 0
+
+
+func get_power_priority_name() -> String:
+	return str(POWER_PRIORITY_NAMES.get(get_power_priority(), "NORMAL"))
+
+
+func get_power_priority() -> PowerPriority:
+	return get_default_power_priority(kind)
+
+
+static func get_default_power_priority(building_kind: int) -> PowerPriority:
+	match building_kind:
+		Kind.AIR_RECYCLER: return PowerPriority.CRITICAL
+		Kind.LAMP: return PowerPriority.HIGH
+		Kind.KITCHEN: return PowerPriority.NORMAL
+		Kind.GROW_TRAY: return PowerPriority.LOW
+	return PowerPriority.NORMAL
 
 
 func get_power_output() -> int:
@@ -115,6 +154,7 @@ func serialize() -> Dictionary:
 		"delivered": delivered,
 		"construction_left": construction_left,
 		"powered": powered,
+		"manually_disabled": manually_disabled,
 		"is_emergency_core": is_emergency_core,
 		"production_progress": production_progress,
 	}
@@ -126,6 +166,7 @@ func deserialize(data: Dictionary) -> void:
 	delivered = int(data.get("delivered", 0))
 	construction_left = float(data.get("construction_left", get_build_time()))
 	powered = bool(data.get("powered", false))
+	manually_disabled = bool(data.get("manually_disabled", false))
 	is_emergency_core = bool(data.get("is_emergency_core", false))
 	production_progress = float(data.get("production_progress", 0.0))
 	queue_redraw()
@@ -169,7 +210,10 @@ func _draw() -> void:
 			draw_circle(Vector2.ZERO, 3.0, Color("24434a"))
 			for direction in [Vector2.UP, Vector2.RIGHT, Vector2.DOWN, Vector2.LEFT]:
 				draw_line(direction * 3.0, direction * 7.0, Color("24434a"), 2.0)
-	if get_power_demand() > 0 and not powered:
+	if get_base_power_demand() > 0 and manually_disabled:
+		draw_rect(rect.grow(-3.0), Color(0.11, 0.16, 0.18, 0.68))
+		draw_line(Vector2(-6, 0), Vector2(6, 0), Color("8faeb7"), 2.0)
+	elif get_power_demand() > 0 and not powered:
 		draw_line(Vector2(-7, -7), Vector2(7, 7), Color("ef5a54"), 2.0)
 		draw_line(Vector2(7, -7), Vector2(-7, 7), Color("ef5a54"), 2.0)
 

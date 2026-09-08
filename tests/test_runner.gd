@@ -4,6 +4,7 @@ const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 const SAVE_TEST_PATH := "user://headless_round_trip.json"
 const BREACH_SAVE_TEST_PATH := "user://headless_breach_round_trip.json"
 const OXYGEN_SAVE_TEST_PATH := "user://headless_oxygen_round_trip.json"
+const POWER_SAVE_TEST_PATH := "user://headless_power_round_trip.json"
 const ATOMIC_SAVE_TEST_PATH := "user://headless_atomic_save.json"
 
 var _assertion_count := 0
@@ -24,9 +25,15 @@ func _run() -> void:
 	_run_case("blueprints are supplied and constructed", _test_blueprint_build)
 	_run_case("cancel previews and powered checklist match their actions", _test_order_preview_and_checklist)
 	_run_case("power is allocated by supply and priority", _test_power_allocation)
+	_run_case("fixed fixture priorities deterministically control brownout shedding", _test_fixed_power_priorities)
+	_run_case("fixture recovery controls work immediately while paused", _test_fixture_recovery_controls_while_paused)
+	_run_case("balanced power grids serve every enabled consumer", _test_balanced_power_grid_accounting)
+	_run_case("power recovery can disable, deconstruct, or add capacity", _test_power_recovery_controls)
+	_run_case("shed grow trays pause and resume production progress", _test_shed_production_progress)
 	_run_case("living residents consume shared oxygen within hard bounds", _test_oxygen_consumption_and_clamping)
 	_run_case("air recyclers require power and retain life-support priority", _test_air_recycler_power_and_rates)
 	_run_case("critical oxygen damages only for exact exposure time", _test_oxygen_threshold_damage)
+	_run_case("overbuilding can shed recycling and cascade into oxygen danger", _test_brownout_during_critical_air_recovery)
 	_run_case("powered kitchens cook at the starting meal stock", _test_cooking_at_starting_stock)
 	_run_case("breach warning triggers exactly once and pauses the shift", _test_breach_warning_interrupt)
 	_run_case("breach blockers and urgent jobs drive the patch sequence", _test_breach_response_jobs)
@@ -35,6 +42,7 @@ func _run() -> void:
 	_run_case("an open breach drains shared oxygen only until sealed", _test_breach_oxygen_drain_and_seal)
 	_run_case("active and legacy breach snapshots load safely", _test_breach_save_load_compatibility)
 	_run_case("active, malformed, and legacy oxygen snapshots load safely", _test_oxygen_save_load_compatibility)
+	_run_case("power controls round trip and legacy defaults load safely", _test_power_controls_save_load_compatibility)
 	_run_case("day seven completes only at the exact boundary", _test_exact_day_boundary)
 	_run_case("day-seven victory requires a sealed breathable wing", _test_day_seven_requires_sealed_breathable_wing)
 	_run_case("save and load preserve a deterministic simulation", _test_save_load_round_trip)
@@ -245,6 +253,230 @@ func _test_power_allocation() -> void:
 	_dispose(game)
 
 
+func _test_fixed_power_priorities() -> void:
+	var game := _spawn_game()
+	var lamp: VaultBuilding = game.get_building_at(Vector2i(22, 14))
+	var generator := _add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(18, 12))
+	var recycler := _add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(19, 12))
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	var first_grow := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12))
+	var second_grow := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
+	var transitions := {"started": 0, "cleared": 0}
+	game.power_grid.brownout_started.connect(func(_count: int, _amount: int) -> void:
+		transitions.started = int(transitions.started) + 1
+	)
+	game.power_grid.brownout_cleared.connect(func() -> void:
+		transitions.cleared = int(transitions.cleared) + 1
+	)
+
+	game.power_grid.recalculate(game.buildings)
+	_assert_equal(recycler.get_power_priority(), VaultBuilding.PowerPriority.CRITICAL, "air recycler has immutable critical priority")
+	_assert_equal(lamp.get_power_priority(), VaultBuilding.PowerPriority.HIGH, "lumen has fixed high priority")
+	_assert_equal(kitchen.get_power_priority(), VaultBuilding.PowerPriority.NORMAL, "nutrient station has fixed normal priority")
+	_assert_equal(first_grow.get_power_priority(), VaultBuilding.PowerPriority.LOW, "grow trays have fixed low priority")
+	var default_shed_order: Array[VaultBuilding] = game.power_grid.get_shed_order(game.buildings)
+	var default_shed_names: Array[String] = []
+	for building: VaultBuilding in default_shed_order:
+		default_shed_names.append("%s#%d" % [building.get_display_name(), building.building_id])
+	_assert_variants_equal([
+		"Grow Tray#%d" % second_grow.building_id,
+		"Grow Tray#%d" % first_grow.building_id,
+		"Nutrient Station#%d" % kitchen.building_id,
+		"Lumen#%d" % lamp.building_id,
+		"Air Recycler#%d" % recycler.building_id,
+	], default_shed_names, "documented shed order runs from lowest priority to protected life support")
+	_assert_true("Grow Trays -> Nutrient Stations -> Lumens -> Air Recyclers" in game.power_grid.get_shed_order_text(), "shed order text documents priority groups")
+	_assert_true(game.power_grid.brownout_active, "unserved completed demand enters brownout")
+	_assert_equal(game.power_grid.supply, 9, "priority test has nine available power")
+	_assert_equal(game.power_grid.demand, 12, "priority test has twelve total demand")
+	_assert_equal(game.power_grid.served, 9, "priority allocator remains work-conserving")
+	_assert_equal(game.power_grid.shed_demand, 3, "brownout accounts for all shed power")
+	_assert_equal(game.power_grid.shed_count, 1, "brownout accounts for one shed fixture")
+	_assert_true(first_grow.powered, "lower building ID wins an equal-priority tie")
+	_assert_false(second_grow.powered, "newer equal-priority fixture sheds deterministically")
+	_assert_equal(transitions.started, 1, "entering brownout emits one transition")
+	game.power_grid.recalculate(game.buildings)
+	_assert_equal(transitions.started, 1, "idempotent recalculation does not repeat the transition")
+
+	_assert_true(recycler.powered, "protected life support remains powered during the default overload")
+	_assert_false(game.power_grid.is_building_shed(recycler.building_id), "protected recycler is absent from the shed set")
+	_assert_true(game.power_grid.is_building_shed(second_grow.building_id), "grid exposes the exact shed fixture")
+	_assert_equal(game.power_grid.get_shed_summary(), "Grow Tray", "brownout summary names the shed load")
+
+	var reordered: Array[VaultBuilding] = []
+	for index in range(game.buildings.size() - 1, -1, -1):
+		reordered.append(game.buildings[index])
+	game.power_grid.recalculate(reordered)
+	_assert_true(recycler.powered, "allocation is independent of input array order")
+	_assert_true(first_grow.powered and not second_grow.powered, "reordered input preserves deterministic same-kind winner")
+	_assert_equal(generator.get_power_priority(), VaultBuilding.PowerPriority.NORMAL, "non-consumers use a harmless fixed fallback priority")
+
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(23, 12))
+	game.power_grid.recalculate(game.buildings)
+	_assert_false(game.power_grid.brownout_active, "added capacity clears the brownout")
+	_assert_equal(game.power_grid.shed_demand, 0, "restored grid clears shed-power accounting")
+	_assert_equal(game.power_grid.shed_count, 0, "restored grid clears shed-fixture accounting")
+	_assert_true(recycler.powered and first_grow.powered and second_grow.powered, "restored capacity powers every consumer")
+	_assert_equal(transitions.cleared, 1, "leaving brownout emits one recovery transition")
+	game.power_grid.recalculate(game.buildings)
+	_assert_equal(transitions.cleared, 1, "stable recalculation does not repeat the recovery transition")
+	_dispose(game)
+
+
+func _test_fixture_recovery_controls_while_paused() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.toggle_pause()
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(19, 12))
+	_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	var first_grow := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12))
+	var second_grow := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
+	second_grow.production_progress = 4.25
+	game.power_grid.recalculate(game.buildings)
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	game.select_building(second_grow.building_id)
+	game.player_orders.refresh()
+
+	_assert_true(game.user_paused, "fixture-control test starts user-paused")
+	_assert_false(second_grow.powered, "selected low-priority grow tray starts shed")
+	_assert_true(game.player_orders.fixture_controls.visible, "completed consumer exposes recovery controls")
+	_assert_equal(game.player_orders.fixture_header.text, "FIXTURE CONTROLS", "fixture controls do not imply mutable shedding priorities")
+	_assert_true(game.player_orders.fixture_power_button.visible and not game.player_orders.fixture_power_button.disabled, "consumer can be disabled")
+	_assert_false(game.player_orders.fixture_deconstruct_button.disabled, "optional consumer can be removed")
+	_assert_true("SHED · BROWNOUT" in game.player_orders.inspector_state.text, "inspector distinguishes a shed fixture")
+	_assert_true("Priority: LOW (fixed)" in game.player_orders.inspector_state.text, "inspector explains the immutable shed tier")
+	_assert_true("SHED 3 POWER" in game.player_orders.power_detail_label.text, "power readout exposes shed demand")
+	_assert_true("POWER BROWNOUT" in game.player_orders.alert_label.text, "compound alerts name the brownout")
+
+	var elapsed_before := game.day_cycle.elapsed_seconds
+	var oxygen_before := game.oxygen_system.oxygen
+	var progress_before := second_grow.production_progress
+	game.player_orders.fixture_power_button.pressed.emit()
+	game.player_orders.refresh()
+
+	_assert_true(second_grow.manually_disabled, "Disable press removes the selected consumer's demand")
+	_assert_false(game.power_grid.brownout_active, "disabling enough optional load clears the grid immediately")
+	_assert_true(first_grow.powered, "fixed same-kind winner remains powered")
+	_assert_equal(game.selected_building_id, second_grow.building_id, "recovery action preserves fixture selection")
+	_assert_equal(game.player_orders.fixture_power_button.text, "ENABLE", "fixture control refreshes to the inverse action")
+	_assert_true("DISABLED" in game.player_orders.inspector_state.text, "inspector distinguishes manual disable from shedding")
+	_assert_approximately(game.day_cycle.elapsed_seconds, elapsed_before, 0.0001, "disable does not advance the paused clock")
+	_assert_approximately(game.oxygen_system.oxygen, oxygen_before, 0.0001, "disable does not advance paused oxygen")
+	_assert_approximately(second_grow.production_progress, progress_before, 0.0001, "disable does not advance production")
+
+	game.player_orders.fixture_power_button.pressed.emit()
+	game.player_orders.refresh()
+	_assert_false(second_grow.manually_disabled, "Enable press restores the selected consumer's demand")
+	_assert_true(game.power_grid.brownout_active and not second_grow.powered, "re-enabled low-priority load returns to the deterministic shed state")
+
+	var core: VaultBuilding = game.get_building_at(Vector2i(24, 15))
+	game.select_building(core.building_id)
+	game.player_orders.refresh()
+	_assert_true(game.player_orders.fixture_controls.visible, "generator selection exposes fixture controls")
+	_assert_false(game.player_orders.fixture_power_button.visible, "generator selection hides consumer disable control")
+	_assert_true(game.player_orders.fixture_deconstruct_button.disabled, "emergency core cannot be removed")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.GROW_TRAY, Vector2i(23, 12)), "test can place an unfinished consumer blueprint")
+	var blueprint := game.get_building_at(Vector2i(23, 12))
+	game.select_building(blueprint.building_id)
+	game.player_orders.refresh()
+	_assert_false(game.player_orders.fixture_controls.visible, "unfinished blueprint hides fixture controls")
+	_dispose(game)
+
+
+func _test_balanced_power_grid_accounting() -> void:
+	var game := _spawn_game()
+	var lamp: VaultBuilding = game.get_building_at(Vector2i(22, 14))
+	var generator := _add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(18, 12))
+	var recycler := _add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(19, 12))
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	var grow_tray := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12))
+	game.power_grid.recalculate(game.buildings)
+	game.player_orders.refresh()
+
+	_assert_equal(generator.get_power_output(), 7, "non-core charge node adds seven supply")
+	_assert_equal(game.power_grid.supply, 9, "balanced grid includes emergency core and charge node supply")
+	_assert_equal(game.power_grid.demand, 9, "balanced grid reports enabled consumer demand")
+	_assert_equal(game.power_grid.served, 9, "balanced grid serves all enabled demand")
+	_assert_equal(game.power_grid.shed_demand, 0, "balanced grid sheds no load")
+	_assert_equal(game.power_grid.disabled_demand, 0, "balanced grid has no disabled demand")
+	_assert_false(game.power_grid.brownout_active, "balanced grid does not enter brownout")
+	_assert_true(lamp.powered and recycler.powered and kitchen.powered and grow_tray.powered, "all balanced consumers are powered")
+	_assert_true("PWR 9/9 used" in game.power_grid.get_status_text(), "top HUD status reports used supply explicitly")
+	_assert_true("SUPPLY 9" in game.player_orders.power_detail_label.text, "right HUD reports supply")
+	_assert_true("DEMAND 9" in game.player_orders.power_detail_label.text, "right HUD reports demand")
+	_assert_true("ALL CONSUMERS SERVED" in game.player_orders.power_detail_label.text, "right HUD reports stable service state")
+	_dispose(game)
+
+
+func _test_power_recovery_controls() -> void:
+	var game := _spawn_game()
+	var generator := _add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(18, 12))
+	var recycler := _add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(19, 12))
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	var first_grow := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12))
+	var second_grow := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
+	var second_grow_id := second_grow.building_id
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(game.power_grid.brownout_active, "extra grow tray starts a recoverable brownout")
+	_assert_false(second_grow.powered, "newest low-priority grow tray is initially shed")
+
+	_assert_true(game.toggle_building_enabled(second_grow_id), "selected consumer can be manually disabled")
+	_assert_true(second_grow.manually_disabled, "manual disable state is stored on the fixture")
+	_assert_false(game.power_grid.brownout_active, "manual disable removes enough demand to clear brownout")
+	_assert_equal(game.power_grid.disabled_demand, 3, "disabled demand is accounted separately")
+	_assert_true("disabled" in game.power_grid.get_status_text(), "HUD status exposes disabled demand")
+
+	_assert_true(game.toggle_building_enabled(second_grow_id), "disabled consumer can be re-enabled")
+	_assert_true(game.power_grid.brownout_active, "re-enabled load returns the brownout")
+	var salvage_before_deconstruct := game.food_system.salvage
+	_assert_true(game.deconstruct_building(second_grow_id), "deconstructing optional load is a recovery action")
+	_assert_true(game.get_building_by_id(second_grow_id) == null, "deconstructed load leaves the building list")
+	_assert_equal(game.food_system.salvage, salvage_before_deconstruct + 6, "deconstruction recovers half the grow tray cost")
+	_assert_false(game.power_grid.brownout_active, "removing optional load clears the brownout")
+
+	_assert_true(game.deconstruct_building(generator.building_id), "non-core charge node can be deconstructed and recovered")
+	_assert_true(game.power_grid.brownout_active, "removing charge capacity creates a severe brownout")
+	_assert_false(recycler.powered, "severe brownout can take the recycler offline")
+	_assert_true(game.get_building_by_id(kitchen.building_id) != null and game.get_building_by_id(first_grow.building_id) != null, "only the requested fixture is deconstructed")
+
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(23, 12))
+	game.power_grid.recalculate(game.buildings)
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	_assert_false(game.power_grid.brownout_active, "adding charge capacity restores the grid")
+	_assert_true(recycler.powered, "restored capacity brings the recycler back online")
+	_assert_approximately(game.oxygen_system.recycler_output_rate, 0.8, 0.0001, "oxygen recovery resumes after power recovery")
+	_dispose(game)
+
+
+func _test_shed_production_progress() -> void:
+	var game := _spawn_game()
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(19, 12))
+	_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	var first_grow := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12))
+	var second_grow := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
+	second_grow.production_progress = 4.0
+	game.power_grid.recalculate(game.buildings)
+	var raw_before := game.food_system.raw_food
+
+	_assert_false(second_grow.powered, "newer low-priority tray starts shed")
+	game.food_system.advance(3.0, game.buildings)
+	_assert_approximately(second_grow.production_progress, 4.0, 0.0001, "shed tray preserves rather than advances its progress")
+	_assert_equal(game.food_system.raw_food, raw_before, "shed tray produces no food")
+
+	_assert_true(game.toggle_building_enabled(first_grow.building_id), "disabling another tray frees enough power for the shed tray")
+	_assert_true(second_grow.powered, "restored tray is powered immediately")
+	_assert_true(first_grow.manually_disabled and not first_grow.powered, "disabled optional load remains outside allocation")
+	game.food_system.advance(4.9, game.buildings)
+	_assert_approximately(second_grow.production_progress, 8.9, 0.0001, "restored tray resumes from its preserved progress")
+	_assert_equal(game.food_system.raw_food, raw_before, "tray does not yield before its exact production boundary")
+	game.food_system.advance(0.1, game.buildings)
+	_assert_approximately(second_grow.production_progress, 0.0, 0.0001, "completed production cycle resets progress once")
+	_assert_equal(game.food_system.raw_food, raw_before + FoodSystem.GROW_YIELD, "restored tray yields exactly one raw food")
+	_dispose(game)
+
+
 func _test_oxygen_consumption_and_clamping() -> void:
 	var game := _spawn_game()
 	var oxygen := game.oxygen_system
@@ -330,6 +562,52 @@ func _test_oxygen_threshold_damage() -> void:
 			96.0,
 			0.0001,
 			"%s takes four damage for exactly one critical second" % resident.resident_name,
+		)
+	_dispose(game)
+
+
+func _test_brownout_during_critical_air_recovery() -> void:
+	var game := _spawn_game()
+	var oxygen := game.oxygen_system
+	for resident: VaultResident in game.residents:
+		resident.needs.health = 100.0
+
+	var recycler := _add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(18, 12))
+	game.power_grid.recalculate(game.buildings)
+	oxygen.oxygen = 14.0
+	oxygen.advance(2.0, game.residents, game.buildings, false)
+
+	_assert_true(game.power_grid.brownout_active, "overbuilding the two-power emergency grid creates a brownout")
+	_assert_equal(game.power_grid.supply, 2, "the emergency core exposes its two available power")
+	_assert_equal(game.power_grid.demand, 4, "the recycler and starting lumen expose four enabled demand")
+	_assert_false(recycler.powered, "highest-priority recycler still sheds when its three-power load cannot fit")
+	_assert_true(game.power_grid.is_building_shed(recycler.building_id), "brownout accounting identifies the unpowered recycler")
+	_assert_approximately(oxygen.recycler_output_rate, 0.0, 0.0001, "shed recycler contributes no oxygen recovery")
+	_assert_approximately(oxygen.net_rate, -0.32, 0.0001, "overbuild cascade leaves only resident oxygen consumption")
+	_assert_approximately(oxygen.oxygen, 13.36, 0.0001, "overbuild cascade drives critical oxygen lower")
+	for resident: VaultResident in game.residents:
+		_assert_approximately(
+			resident.needs.health,
+			92.0,
+			0.001,
+			"%s takes damage throughout the unpowered critical-air interval" % resident.resident_name,
+		)
+
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(19, 12))
+	game.power_grid.recalculate(game.buildings)
+	oxygen.advance(4.0, game.residents, game.buildings, false)
+
+	_assert_false(game.power_grid.brownout_active, "added charge capacity clears the overbuild brownout")
+	_assert_true(recycler.powered, "added capacity restores protected life support")
+	_assert_approximately(oxygen.recycler_output_rate, 0.8, 0.0001, "restored recycler resumes oxygen output")
+	_assert_approximately(oxygen.net_rate, 0.48, 0.0001, "restored recycler creates positive net oxygen recovery")
+	_assert_approximately(oxygen.oxygen, 15.28, 0.0001, "power recovery returns the wing above critical oxygen")
+	for resident: VaultResident in game.residents:
+		_assert_approximately(
+			resident.needs.health,
+			78.3333,
+			0.001,
+			"%s stops taking damage once restored recycling crosses the threshold" % resident.resident_name,
 		)
 	_dispose(game)
 
@@ -812,6 +1090,69 @@ func _test_oxygen_save_load_compatibility() -> void:
 	_dispose(loaded)
 	_dispose(original)
 	_remove_test_save(OXYGEN_SAVE_TEST_PATH)
+
+
+func _test_power_controls_save_load_compatibility() -> void:
+	_remove_test_save(POWER_SAVE_TEST_PATH)
+	var original := _spawn_game()
+	_add_completed_building(original, VaultBuilding.Kind.GENERATOR, Vector2i(18, 12))
+	var recycler := _add_completed_building(original, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(19, 12))
+	var kitchen := _add_completed_building(original, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	var first_grow := _add_completed_building(original, VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12))
+	var second_grow := _add_completed_building(original, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
+	_assert_true(original.toggle_building_enabled(kitchen.building_id), "round-trip kitchen accepts manual disable")
+	var snapshot_before := original.create_snapshot()
+	_assert_true(recycler.powered, "fixed-priority recycler is protected before saving")
+	_assert_true(first_grow.powered and not second_grow.powered, "same-kind allocation is deterministic before saving")
+	_assert_true(kitchen.manually_disabled, "disabled kitchen stores separate demand before saving")
+	_assert_true(original.save_game(false, POWER_SAVE_TEST_PATH), "power-control snapshot writes to the isolated save")
+
+	var loaded := _spawn_game()
+	_assert_true(loaded.load_game(POWER_SAVE_TEST_PATH), "fresh game loads power controls")
+	_assert_variants_equal(snapshot_before, loaded.create_snapshot(), "manual disable and derived allocation round trip")
+	_assert_true(loaded.user_paused, "power-control load returns paused")
+	var loaded_recycler := loaded.get_building_by_id(recycler.building_id)
+	var loaded_kitchen := loaded.get_building_by_id(kitchen.building_id)
+	var loaded_first_grow := loaded.get_building_by_id(first_grow.building_id)
+	var loaded_second_grow := loaded.get_building_by_id(second_grow.building_id)
+	_assert_equal(loaded_recycler.get_power_priority(), VaultBuilding.PowerPriority.CRITICAL, "loaded recycler retains immutable life-support priority")
+	_assert_true(loaded_kitchen.manually_disabled, "manual disable survives by building ID")
+	_assert_equal(loaded.power_grid.disabled_demand, 2, "loaded manual disable restores disabled-demand accounting")
+	_assert_true(loaded_first_grow.powered and not loaded_second_grow.powered, "loaded grid recomputes the same fixed-priority winner")
+	_assert_true(loaded_recycler.powered, "loaded grid keeps the recycler protected")
+
+	var stale_powered: Dictionary = snapshot_before.duplicate(true)
+	for entry: Dictionary in stale_powered.buildings:
+		if int(entry.id) == recycler.building_id:
+			entry.powered = false
+		elif int(entry.id) == first_grow.building_id:
+			entry.powered = false
+	_assert_true(loaded.apply_snapshot(stale_powered), "snapshot powered flags remain derived rather than authoritative")
+	_assert_true(loaded.get_building_by_id(recycler.building_id).powered, "load corrects a stale unpowered recycler flag")
+	_assert_true(loaded.get_building_by_id(first_grow.building_id).powered, "load corrects a stale shed flag on a priority winner")
+
+	var legacy_snapshot: Dictionary = snapshot_before.duplicate(true)
+	for entry: Dictionary in legacy_snapshot.buildings:
+		entry.erase("manually_disabled")
+	_assert_true(loaded.apply_snapshot(legacy_snapshot), "schema-one snapshot without manual-disable state loads safely")
+	loaded_recycler = loaded.get_building_by_id(recycler.building_id)
+	loaded_kitchen = loaded.get_building_by_id(kitchen.building_id)
+	loaded_first_grow = loaded.get_building_by_id(first_grow.building_id)
+	loaded_second_grow = loaded.get_building_by_id(second_grow.building_id)
+	_assert_equal(loaded_recycler.get_power_priority(), VaultBuilding.PowerPriority.CRITICAL, "legacy recycler retains its fixed life-support priority")
+	_assert_false(loaded_kitchen.manually_disabled, "legacy consumer defaults to enabled")
+	_assert_true(loaded_recycler.powered and loaded_first_grow.powered, "legacy defaults reproduce Slice 3 winners")
+	_assert_false(loaded_second_grow.powered, "legacy defaults reproduce deterministic same-kind shedding")
+
+	var stable_snapshot := loaded.create_snapshot()
+	var malformed_disabled: Dictionary = stable_snapshot.duplicate(true)
+	malformed_disabled.buildings[1].manually_disabled = "sometimes"
+	_assert_false(loaded.apply_snapshot(malformed_disabled), "nonnumeric manual-disable state is rejected")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected manual-disable type is atomic")
+
+	_dispose(loaded)
+	_dispose(original)
+	_remove_test_save(POWER_SAVE_TEST_PATH)
 
 
 func _test_exact_day_boundary() -> void:

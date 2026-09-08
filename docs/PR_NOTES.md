@@ -1,27 +1,27 @@
-# PR: Slice 3 — vault air pressure
+# PR: Slice 4 — power brownouts
 
 ## Summary
 
-This change extends Vault Tycoon's Godot 4.7.2 desktop colony-survival prototype with one shared, vault-wide oxygen percentage. A new wing starts at 100% oxygen. Each living resident consumes 0.08 percentage points per simulation second, while each powered Air Recycler restores 0.8 points per second. The new fixture costs 14 salvage, draws 3 power, and receives the highest power-grid priority so life support is served before lumens, Nutrient Stations, and Grow Trays during overload.
+This change extends Vault Tycoon's Godot 4.7.2 desktop prototype with explicit power-grid supply, demand, served-load, disabled-load, and brownout accounting. Completed enabled consumers now have deterministic fixed-priority allocation. When enabled demand exceeds supply, the grid records and displays every shed load and emits brownout/recovery transitions.
 
-The existing deterministic hatch timing and response remain intact: the warning fires at exactly 60 simulation seconds, the hatch opens at exactly 80 seconds if still unsealed, and the urgent automatic patch requires 4 salvage plus 8 seconds of Craft work. An open hatch now vents 2.5 oxygen points per second instead of directly damaging residents. The atmosphere HUD raises a low warning at or below 35%; at or below 15%, every living resident takes 4 health damage per second. Day-seven victory requires at least one survivor, a sealed hatch, and breathable oxygen at or above 15%.
+Air Recyclers remain protected at the highest fixed priority, ahead of Lumens, Nutrient Stations, and Grow Trays. They still go offline when available supply cannot satisfy their 3-power demand. A severe brownout can therefore remove recycler oxygen output and cascade into the existing Slice 3 low-air and suffocation danger.
 
-This remains a focused resource layer, not a spatial or full gas simulation. There are no room volumes, gas cells, diffusion, oxygen networks, multiple gases, or sealed-door/room graph. The `feat/vault-air-pressure` branch starts directly from the published Slice 2 commit `ae3aa711`; the Slice 3 PR targets `main` as requested and is not merged by this work. These notes do not claim an export or store package.
+Players can recover by selecting a completed consumer and disabling its demand, removing a non-core completed fixture for a 50% salvage refund, or building another Charge Node for 7 additional power. Disabled consumers can be re-enabled; the emergency core cannot be removed.
 
-## Focused scope
+## Focused Scope
 
-- One vault-wide oxygen value that starts at 100% and remains clamped between 0% and 100%
-- Consumption of 0.08 oxygen points per second for each living resident, immediately reflecting deaths
-- A buildable Air Recycler costing 14 salvage, using 3 power, restoring 0.8 oxygen points per second while powered, and receiving the highest consumer priority
-- A low-air warning at or below 35%, plus 4 health damage per second to every living resident while oxygen is at or below 15%
-- Existing hatch timing preserved: warning and first-focus interruption at 60 seconds, opening at 80 seconds, and a 4-salvage/8-second urgent patch
-- A 2.5-point-per-second vault oxygen leak while the hatch is open, ending immediately when the hatch is sealed
-- A right-HUD atmosphere percentage, net-rate and source breakdown, severity color, breach leak readout, alerts, and a stabilization-checklist entry for a powered recycler
-- Day-seven victory gated on survival, a sealed hatch, and oxygen at or above the 15% breathable threshold
-- Optional oxygen data inside the existing version-1 snapshot; compatible version-1 saves without it load at the safe 100% full-air default
-- Focused documentation and verification coverage only; no export, mobile, store-package, final-art, or final-audio work
+- Explicit power accounting for supply, enabled demand, served load, disabled demand, shed demand, and shed fixture count
+- Deterministic power allocation by fixed fixture-kind priority, then building id
+- Protected allocation order: Air Recycler, Lumen, Nutrient Station, Grow Tray
+- Exact shed order: Grow Trays -> Nutrient Stations -> Lumens -> Air Recyclers
+- Same-priority tie break: newer fixtures shed before older fixtures
+- Brownout transition messages and right-HUD power-grid state
+- Selected-fixture controls for consumer disable/enable and non-core deconstruction recovery
+- Save/load support for manually disabled consumers while preserving compatible schema-one defaults
+- Prior Slice 1-3 behavior and the PR #1 BUG-1..BUG-6 fixes remain in scope and covered by the prior suites
+- No merge, export, store package, signing, mobile package, network service, analytics, ads, payment SDK, final art, or final audio work
 
-## How to review
+## How To Review
 
 Use Godot 4.7.2.
 
@@ -31,49 +31,42 @@ godot --editor --path .
 
 Run the project with **F5**, select **BEGIN SHIFT**, then exercise this route:
 
-1. On the opening briefing, confirm the stabilization checklist includes **Power an air recycler**. Begin the shift and verify **VAULT ATMOSPHERE** starts at 100%; with four living residents and no powered recycler, its use and net rate should both reflect 0.32 points per second of consumption.
-2. Excavate enough salvage, build a Charge Node, select **AIR $14**, and place an Air Recycler blueprint on carved floor. Confirm normal Haul/Craft work supplies 14 salvage and assembles it, then verify the powered fixture draws 3 power and adds 0.8 points per second of recycling. With four residents, a sealed hatch, and one powered recycler, the net rate is +0.48 points per second until the 100% cap.
-3. Create a power overload and confirm the Air Recycler is served before the lumen, Nutrient Station, and Grow Tray. Remove or restore sufficient supply and confirm recycler output and the displayed net oxygen rate update with its powered state.
-4. Keep at least 4 salvage and at least one living resident with Haul and Craft enabled, then advance to exactly 60 simulation seconds. Confirm the maintenance-hatch warning pauses immediately, resets speed to 1×, focuses the hatch, and shows the remaining grace period without adding a breach toolbar tool.
-5. In one run, let the hatch reach exactly 80 seconds unsealed. Confirm it changes to open and the atmosphere readout adds a 2.5-point-per-second leak until the patch completes. In another run, confirm an urgent Haul job delivers 4 salvage before an urgent Craft job performs the 8-second patch, and that sealing stops the leak immediately.
-6. Exercise the exact oxygen boundaries: at or below 35%, confirm the low warning; at or below 15%, confirm every living resident takes 4 health damage per second. Above 15%, oxygen alone must not damage residents. Confirm a resident death reduces subsequent consumption by 0.08 points per second.
-7. Select a resident during the hatch response and confirm all work permissions remain reachable. In separate runs, disable Haul, disable Craft, spend below 4 salvage, or make the hatch unreachable; confirm the breach HUD names the applicable blocker.
-8. Save and load with non-default oxygen, an in-flight hatch Haul, and partial Craft progress. Confirm oxygen, carrier, salvage, patch progress, clock, powered-recycler state, and other simulation state resume without duplication or loss. Also load a compatible schema-version-1 snapshot without an oxygen payload and confirm it receives the 100% full-air default; a missing optional breach payload should continue to receive its existing safe defaults.
-9. Continue until day seven and test the gates independently. Victory must wait while the hatch is open or oxygen is below 15%, then become available once at least one resident remains alive, the hatch is sealed, and oxygen is at least 15%.
+1. Build a Charge Node, Air Recycler, Nutrient Station, and Grow Tray. Confirm the right HUD reports supply 9, demand 9, served 9, and all enabled consumers served.
+2. Add another Grow Tray. Confirm the grid enters brownout, the newest Grow Tray is shed first, and the HUD names the shed load.
+3. Confirm the exact shed order: Grow Trays, then Nutrient Stations, then Lumens, then Air Recyclers; newer fixtures shed first within a fixture kind.
+4. Select the shed Grow Tray. Confirm its inspector says **SHED · BROWNOUT**, identifies its fixed low priority, and offers **DISABLE** and **REMOVE** controls.
+5. Disable that optional load. Confirm disabled demand is reported separately and the brownout clears immediately, even while paused.
+6. Re-enable it, then remove a non-core fixture. Confirm half its salvage cost is refunded and the grid recalculates immediately. Confirm the emergency core cannot be removed.
+7. Remove or otherwise lose Charge Node capacity while an Air Recycler is present. Confirm the recycler can brown out when only the 2-power emergency core remains, oxygen recycling drops to 0.0, and existing oxygen danger resumes.
+8. Build another Charge Node. Confirm brownout clears, the recycler comes back online, and oxygen recovery resumes.
+9. Save and load with a disabled consumer. Confirm disabled state, derived powered flags, and brownout state restore deterministically. Also confirm schema-one snapshots without manual-disable fields default consumers to enabled.
 
-For a quicker approach to the trigger and oxygen thresholds, use 3× speed. The first warning must still pause at the exact 60-second threshold and reset speed to 1×; the hatch must remain in its warning phase through 79.9 seconds and open at 80 seconds. A complete survival playthrough still requires active resource, power, and job management.
+## Testing Status
 
-## Testing status
-
-- Godot 4.7.2 completed a headless editor import/parse and a five-frame runtime boot without script or runtime errors.
-- The native suite passes **24 cases / 390 assertions**. Slice 3 coverage includes oxygen initialization and clamping; per-living-resident consumption; powered and unpowered recycler output; highest-priority power allocation; exact low/critical threshold behavior and partial-step suffocation accounting; exact 60/80-second hatch boundaries, including a patch completed at 80 seconds; open-hatch oxygen loss and immediate stop on seal; active, malformed, and legacy oxygen snapshots; saved-win invariant rejection; and player-order plus managed day-seven survival plans.
-- A 1280×720 Xvfb/OpenGL smoke rendered the opening briefing, vault-atmosphere meter and rates, right-rail oxygen and breach readouts, and the complete two-row toolbar with **AIR $14**, Save, and Load visible. Mesa llvmpipe was used; missing host audio correctly fell back to Godot's dummy driver.
+- `scripts/check.sh` passes with Godot 4.7.2.
+- The native suite passes **31 cases / 531 assertions**.
+- Slice 4 coverage includes balanced-grid accounting, deterministic fixed shed order, paused recovery controls, shed production pause/resume, recycler protection, an overbuild-to-recycler-loss oxygen cascade, disable/deconstruct/add-capacity recovery, disabled-state save/load, and legacy power defaults.
+- Prior Slice 1-3 suites still cover scene boot, controls, dig/build/cancel jobs, food, oxygen, breach timing/response, save/load atomicity, unmanaged loss, player-order survival, and managed day-seven victory.
 - No export, store package, signing, notarization, mobile package, network service, analytics, ad SDK, payment SDK, or final art/audio validation was performed.
 
-Reproduction commands (an example local binary path is shown; use `godot` if 4.7.2 is installed on `PATH`):
+Reproduction:
 
 ```bash
-GODOT_BIN=/tmp/godot-4.7.2/Godot_v4.7.2-stable_linux.x86_64
-"$GODOT_BIN" --headless --path . --editor --quit
-scripts/check.sh "$GODOT_BIN"
+scripts/check.sh
 ```
 
-An extended interactive smoke can additionally exercise low/critical severity colors, the powered-recycler checklist transition, overload changes, hatch focus, and the independent day-seven gates.
+## Known Limitations
 
-## Known limitations
-
-- Oxygen is one aggregate percentage for the entire vault. It has no spatial cells, room volumes, diffusion, multiple gases, pressure zones, oxygen network, or sealed-door/room graph.
-- The pressure event remains one scripted maintenance-hatch incident rather than a procedural incident director or combat encounter.
+- Power is still a vault-wide resource allocator, not a wiring, circuit, battery, or fuel simulation.
+- Brownouts do not damage fixtures; they only deny powered behavior while demand is shed.
+- Deconstruction is instant and returns a fixed 50% salvage value for non-core completed fixtures.
 - Placeholder geometry and colors remain; final art, animation, sound, and effects are not part of this slice.
-- Job control is permission-based rather than a full priority matrix, schedule system, or direct-move command system.
-- The single local save slot has no save browser, migration path beyond schema rejection, cloud sync, or conflict recovery.
 - Keyboard and mouse are required. There is no mobile export or touch/safe-area adaptation.
-- Balance is first-pass and needs observed full-run tuning, especially recycler timing, power contention, oxygen recovery, food timing, salvage recovery, and breach workload.
 
-## Next steps
+## Next Steps
 
-1. Record a complete interactive Linux day-seven survival smoke plus oxygen and partial-patch save/load regressions.
-2. Tune oxygen/recycler balance from full-run observations while preserving the fixed Slice 3 rules and scope.
-3. Add focused coverage for power loss during critical-air recovery and worker death during an in-flight patch.
+1. Record a complete interactive Linux day-seven smoke with a deliberate brownout and recovery.
+2. Tune balance around power contention, recycler timing, oxygen recovery, food timing, salvage recovery, and breach workload.
+3. Add focused coverage for worker death during an in-flight patch.
 
 Surface play, caravans, factions, research, mods, multiplayer, IAP, ads, analytics, store packaging, final art/audio, and mobile export remain out of scope. So do raiders, enemies, weapons, combat, repeated/procedural incidents, spatial gas or pressure zones, oxygen networks, multiple-room sealing, a sealed-door graph, and every other form of full atmosphere simulation.
