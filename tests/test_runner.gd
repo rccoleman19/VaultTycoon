@@ -442,6 +442,7 @@ func _test_order_preview_and_checklist() -> void:
 		"Patch and seal the maintenance hatch",
 		"Finish Day 7 with a sealed hatch and O2 >= 15%",
 		"Power a Rec Console; free 1 power if shed",
+		"Shed Lumens stop lighting cells; darkness costs awake residents 30 extra mood/day",
 		"PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled",
 	]:
 		_assert_true(expected_label in checklist_text, "checklist covers %s" % expected_label)

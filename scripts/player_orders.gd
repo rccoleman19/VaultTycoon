@@ -1091,6 +1091,7 @@ func _refresh_checklist() -> void:
 	var rec_done := game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) >= 1
 	var rec_marker := "[color=#75d4b4][DONE][/color]" if rec_done else "[color=#8faeb7][OPTIONAL][/color]"
 	lines.append("%s  Power a Rec Console; free 1 power if shed" % rec_marker)
+	lines.append("[color=#efc56b]BROWNOUT[/color]  Shed Lumens stop lighting cells; darkness costs awake residents 30 extra mood/day")
 	lines.append("Optional: ZONE paints salvage + food drop-offs; CANCEL clears cells")
 	lines.append("Optional: Medical Bed ($8) heals injuries; disable to deny care")
 	lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled")
