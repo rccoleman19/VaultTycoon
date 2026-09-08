@@ -31,6 +31,7 @@ run_godot_check() {
 
 run_godot_check import --editor --quit
 run_godot_check tests --script res://tests/test_runner.gd
+run_godot_check breach-modal-speed-keys --script res://tests/test_breach_modal_speed_keys.gd
 run_godot_check boot --quit-after 5
 
 echo "All Vault Tycoon headless checks passed."

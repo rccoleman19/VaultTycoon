@@ -18,6 +18,7 @@ Players can recover by selecting a completed consumer and disabling its demand, 
 - Brownout transition messages and right-HUD power-grid state
 - Selected-fixture controls for consumer disable/enable and non-core deconstruction recovery
 - Save/load support for manually disabled consumers while preserving compatible schema-one defaults
+- Breach warning modal regression fix: speed hotkeys 1/2/3 no longer acknowledge or dismiss the modal
 - Prior Slice 1-3 behavior and the PR #1 BUG-1..BUG-6 fixes remain in scope and covered by the prior suites
 - No merge, export, store package, signing, mobile package, network service, analytics, ads, payment SDK, final art, or final audio work
 
@@ -44,7 +45,7 @@ Run the project with **F5**, select **BEGIN SHIFT**, then exercise this route:
 ## Testing Status
 
 - `scripts/check.sh` passes with Godot 4.7.2.
-- The native suite passes **31 cases / 531 assertions**.
+- The native suite passes **31 cases / 531 assertions**, plus the focused breach-warning speed-key regression run from `scripts/check.sh`.
 - Slice 4 coverage includes balanced-grid accounting, deterministic fixed shed order, paused recovery controls, shed production pause/resume, recycler protection, an overbuild-to-recycler-loss oxygen cascade, disable/deconstruct/add-capacity recovery, disabled-state save/load, and legacy power defaults.
 - Prior Slice 1-3 suites still cover scene boot, controls, dig/build/cancel jobs, food, oxygen, breach timing/response, save/load atomicity, unmanaged loss, player-order survival, and managed day-seven victory.
 - No export, store package, signing, notarization, mobile package, network service, analytics, ad SDK, payment SDK, or final art/audio validation was performed.
