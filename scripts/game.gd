@@ -131,7 +131,7 @@ func new_game(show_tutorial := false) -> void:
 	user_paused = true
 	status_message = "Wing initialized. Stabilize supplies, oxygen, and the pressure hatch."
 	status_message_left = 5.0
-	player_orders.show_briefing(show_tutorial)
+	player_orders.show_briefing(show_tutorial, show_tutorial)
 	player_orders.show_breach_warning(
 		breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged
 	)
@@ -219,11 +219,16 @@ func step_simulation(seconds: float) -> void:
 
 
 func is_simulation_paused() -> bool:
-	return user_paused or tutorial_open or ended
+	return (
+		user_paused
+		or tutorial_open
+		or ended
+		or (player_orders != null and player_orders.is_briefing_open())
+	)
 
 
 func toggle_pause() -> void:
-	if tutorial_open or ended:
+	if tutorial_open or ended or player_orders.is_help_open():
 		return
 	if user_paused and breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged:
 		acknowledge_breach_warning(true)
@@ -232,6 +237,8 @@ func toggle_pause() -> void:
 
 
 func set_speed(speed: int) -> void:
+	if player_orders.is_briefing_open():
+		return
 	simulation_speed = clampi(speed, 1, 3)
 	if not tutorial_open and not ended:
 		if breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged:
@@ -249,7 +256,7 @@ func set_tool(tool: String) -> void:
 
 
 func issue_order(cell: Vector2i) -> bool:
-	if ended or tutorial_open or not map_grid.is_inside(cell):
+	if ended or tutorial_open or player_orders.is_help_open() or not map_grid.is_inside(cell):
 		return false
 	if active_tool == "select":
 		return _select_at(cell)
@@ -680,6 +687,12 @@ func _select_at(cell: Vector2i) -> bool:
 
 
 func _input(event: InputEvent) -> void:
+	if player_orders != null and player_orders.is_briefing_open():
+		if player_orders.is_help_open() and event.is_action_pressed("cancel_order"):
+			player_orders.show_briefing(false)
+		if event.is_action_pressed("cancel_order") or event.is_action_pressed("pause_game"):
+			get_viewport().set_input_as_handled()
+			return
 	# Space is both the global pause shortcut and Godot's default button accept
 	# key. Handle it before GUI focus while this modal is open so it cannot
 	# silently change the focused work-priority cell.
@@ -693,6 +706,11 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if player_orders.is_briefing_open():
+		if player_orders.is_help_open() and event.is_action_pressed("cancel_order"):
+			player_orders.show_briefing(false)
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("work_priorities"):
 		player_orders.toggle_work_priorities()
 		get_viewport().set_input_as_handled()
@@ -778,7 +796,9 @@ func acknowledge_breach_warning(resume_response: bool) -> void:
 
 
 func _update_camera(delta: float) -> void:
-	if player_orders != null and player_orders.is_work_priorities_open():
+	if player_orders != null and (
+		player_orders.is_work_priorities_open() or player_orders.is_briefing_open()
+	):
 		_dragging_camera = false
 		return
 	var direction := Input.get_vector("camera_left", "camera_right", "camera_up", "camera_down")
@@ -912,17 +932,17 @@ func _finish_loss() -> void:
 
 func _tool_help(tool: String) -> String:
 	match tool:
-		"select": return "SELECT: inspect a resident or fixture."
-		"dig": return "DIG: click or drag across rock to designate excavation."
+		"select": return "SELECT: inspect a resident or fixture; use HELP to reopen the checklist."
+		"dig": return "DIG: click or drag connected rock; hauled rubble yields 3 salvage per tile."
 		"cancel": return "CANCEL: remove dig orders or unfinished blueprints."
-		"bed": return "BUNK: place on carved floor (8 salvage)."
+		"bed": return "BUNK: residents sleep here automatically (8 salvage)."
 		"lamp": return "LUMEN: powered light improves mood (5 salvage, 1 power)."
-		"generator": return "CHARGE NODE: adds 7 power (18 salvage)."
+		"generator": return "CHARGE NODE: adds 7 power for food and life support (18 salvage)."
 		"grow": return "GROW TRAY: produces raw food when powered (12 salvage, 3 power)."
-		"kitchen": return "NUTRIENT STATION: cooks %d raw food into %d meal (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
+		"kitchen": return "NUTRIENT STATION: powered Cook work turns %d raw into %d meal (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
 		"stockpile": return "SALVAGE BAY: hauling destination (4 salvage)."
-		"air": return "AIR RECYCLER: restores vault oxygen when powered (14 salvage, 3 power)."
-		"rec": return "REC CONSOLE: restores one resident's mood at a time (8 salvage, 1 power)."
+		"air": return "AIR RECYCLER: restores vault oxygen; build a Charge Node to supply its 3 power (14 salvage)."
+		"rec": return "REC CONSOLE: optional one-seat mood recovery; it sheds first in a brownout (8 salvage, 1 power)."
 	return ""
 
 

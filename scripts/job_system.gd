@@ -294,6 +294,10 @@ func get_breach_response_status() -> String:
 	return "AWAITING PATCH CREW"
 
 
+func get_breach_supply_in_transit() -> int:
+	return _breach_supply_in_transit()
+
+
 func _ensure_state_jobs() -> void:
 	if breach != null and breach.is_response_active():
 		if breach.needs_supply():

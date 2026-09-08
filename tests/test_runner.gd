@@ -37,7 +37,7 @@ func _run() -> void:
 	_run_case("air recyclers require power and retain life-support priority", _test_air_recycler_power_and_rates)
 	_run_case("critical oxygen damages only for exact exposure time", _test_oxygen_threshold_damage)
 	_run_case("overbuilding can shed recycling and cascade into oxygen danger", _test_brownout_during_critical_air_recovery)
-	_run_case("powered kitchens cook at the starting meal stock", _test_cooking_at_starting_stock)
+	_run_case("powered kitchens cook without a silent meal cap", _test_cooking_at_starting_stock)
 	_run_case("breach warning triggers exactly once and pauses the shift", _test_breach_warning_interrupt)
 	_run_case("breach blockers and urgent jobs drive the patch sequence", _test_breach_response_jobs)
 	_run_case("a prepared response seals during grace without damage", _test_prepared_breach_survival)
@@ -51,7 +51,7 @@ func _run() -> void:
 	_run_case("save and load preserve a deterministic simulation", _test_save_load_round_trip)
 	_run_case("interrupted save writes preserve the prior slot", _test_atomic_save_recovery)
 	_run_case("an unmanaged wing fails before day seven", _test_unmanaged_loss)
-	_run_case("player-issued dig and build orders sustain the wing", _test_player_order_survival_plan)
+	_run_case("a first-session order path reaches a comfortable day-seven win", _test_player_order_survival_plan)
 	_run_case("a managed wing survives to the day-seven win", _test_managed_day_seven_win)
 
 	print("")
@@ -98,8 +98,15 @@ func _test_scene_boot_and_initial_state() -> void:
 		for work_type: String in VaultResident.WORK_TYPES:
 			_assert_equal(resident.get_work_priority(work_type), VaultResident.DEFAULT_WORK_PRIORITY, "%s starts with %s at sensible normal priority" % [resident.resident_name, work_type])
 	_assert_equal(game.buildings.size(), 3, "three emergency fixtures are present")
+	_assert_equal(game.food_system.meals, FoodSystem.STARTING_MEALS, "new wing receives the tuned meal reserve")
+	_assert_equal(game.food_system.raw_food, FoodSystem.STARTING_RAW_FOOD, "new wing receives the tuned raw-food reserve")
+	_assert_equal(game.food_system.salvage, FoodSystem.STARTING_SALVAGE, "new wing receives the tuned salvage reserve")
+	_assert_equal(FoodSystem.STARTING_MEALS, 12, "first-session kit starts with twelve meals")
+	_assert_equal(FoodSystem.STARTING_RAW_FOOD, 4, "first-session kit starts with four raw food")
+	_assert_equal(FoodSystem.STARTING_SALVAGE, 42, "first-session kit starts with forty-two salvage")
 	_assert_approximately(game.oxygen_system.oxygen, OxygenSystem.STARTING_OXYGEN, 0.0001, "new wing starts with full oxygen")
 	_assert_true(game.tutorial_open, "opening briefing is visible")
+	_assert_true(game.player_orders.briefing_overlay.visible, "opening checklist overlay is visible")
 	_assert_true(game.is_simulation_paused(), "new wing starts paused")
 
 	var expected_floor_count := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
@@ -131,19 +138,57 @@ func _test_tool_hotkeys_and_help() -> void:
 	var pan_event := InputEventKey.new()
 	pan_event.physical_keycode = KEY_D
 	pan_event.pressed = true
-	game._unhandled_input(pan_event)
-	_assert_equal(game.active_tool, "select", "camera-right D does not select Dig")
-
 	var dig_event := InputEventKey.new()
 	dig_event.physical_keycode = KEY_E
 	dig_event.pressed = true
 	game._unhandled_input(dig_event)
+	_assert_equal(game.active_tool, "select", "opening briefing blocks map-tool hotkeys behind its overlay")
+	game.begin_shift()
+	game._unhandled_input(pan_event)
+	_assert_equal(game.active_tool, "select", "camera-right D does not select Dig")
+	game._unhandled_input(dig_event)
 	_assert_equal(game.active_tool, "dig", "configured E hotkey selects Dig")
 	_assert_equal(
 		game._tool_help("kitchen"),
-		"NUTRIENT STATION: cooks %d raw food into %d meal (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT],
+		"NUTRIENT STATION: powered Cook work turns %d raw into %d meal (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT],
 		"nutrient help is derived from the simulated recipe",
 	)
+	game.set_tool("dig")
+	game.status_message = "Transient order feedback"
+	game.status_message_left = 0.0
+	game.player_orders.refresh()
+	_assert_true("hauled rubble yields 3 salvage" in game.player_orders.tool_status.text, "active-tool help returns after transient feedback expires")
+	var elapsed_before_help := game.day_cycle.elapsed_seconds
+	game.player_orders.help_button.pressed.emit()
+	_assert_true(game.player_orders.is_help_open(), "Help reopens the live checklist after the shift begins")
+	_assert_true(game.is_simulation_paused(), "reopened Help pauses simulation behind the overlay")
+	_assert_false(game.user_paused, "Help does not overwrite the player's running pause state")
+	_assert_equal(game.active_tool, "dig", "opening Help preserves the active map tool")
+	_assert_equal(game.get_viewport().gui_get_focus_owner(), game.player_orders.briefing_close_button, "reopened Help focuses its close action")
+	for control: Control in [game.player_orders.briefing_close_button, game.player_orders.briefing_load_button]:
+		for neighbor_path: NodePath in [control.focus_previous, control.focus_next, control.focus_neighbor_left, control.focus_neighbor_top, control.focus_neighbor_right, control.focus_neighbor_bottom]:
+			var neighbor := control.get_node_or_null(neighbor_path)
+			_assert_true(neighbor != null and game.player_orders.briefing_overlay.is_ancestor_of(neighbor), "Help keeps keyboard focus inside its overlay")
+	var camera_before_help_input := game.world_camera.position
+	game._dragging_camera = true
+	Input.action_press("camera_right")
+	game._update_camera(0.5)
+	Input.action_release("camera_right")
+	_assert_equal(game.world_camera.position, camera_before_help_input, "WASD cannot pan the camera behind Help")
+	_assert_false(game._dragging_camera, "opening Help cancels an in-progress camera drag")
+	game._process(1.0)
+	_assert_approximately(game.day_cycle.elapsed_seconds, elapsed_before_help, 0.0001, "simulation time remains frozen while Help is open")
+	game.player_orders.briefing_close_button.pressed.emit()
+	_assert_false(game.player_orders.is_help_open(), "Close Help dismisses the checklist")
+	_assert_false(game.is_simulation_paused(), "closing Help resumes a previously running shift")
+	game.user_paused = true
+	game.player_orders.help_button.pressed.emit()
+	var escape_event := InputEventKey.new()
+	escape_event.physical_keycode = KEY_ESCAPE
+	escape_event.pressed = true
+	game._unhandled_input(escape_event)
+	_assert_false(game.player_orders.is_help_open(), "Escape closes reopened Help")
+	_assert_true(game.user_paused and game.is_simulation_paused(), "closing Help preserves a previously paused shift")
 	_dispose(game)
 
 
@@ -270,7 +315,7 @@ func _test_work_priorities_board() -> void:
 	game.set_tool("dig")
 	var orders := game.player_orders
 	orders.refresh()
-	_assert_equal(orders.command_grid.get_child_count(), 13, "priorities board does not displace or masquerade as a map tool")
+	_assert_equal(orders.command_grid.get_child_count(), 14, "Help does not displace or masquerade as a map tool")
 	_assert_false(orders.command_grid.is_ancestor_of(orders.work_priorities_button), "priorities opener lives with the roster rather than the map tools")
 	_assert_equal(orders.work_priority_buttons.size(), game.residents.size() * VaultResident.WORK_TYPES.size(), "board exposes one cell for every resident and work category")
 	_assert_equal(orders.work_priorities_grid.columns, 5, "board contains Resident plus the four in-game work kinds")
@@ -377,13 +422,30 @@ func _test_blueprint_build() -> void:
 	_assert_true(building.complete, "residents supply and assemble the blueprint")
 	_assert_equal(building.delivered, building.get_cost(), "completed fixture received its full salvage cost")
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 1, "completed bunk is counted")
-	_assert_equal(game.food_system.salvage, 30 - building.get_cost(), "construction consumes the expected salvage")
+	_assert_equal(game.food_system.salvage, FoodSystem.STARTING_SALVAGE - building.get_cost(), "construction consumes the expected tuned salvage")
 	_dispose(game)
 
 
 func _test_order_preview_and_checklist() -> void:
 	var game := _spawn_game()
 	game.begin_shift()
+	game.player_orders._refresh_checklist()
+	var checklist_text := game.player_orders.checklist.text
+	for expected_label in [
+		"Dig 12 connected rock tiles; rubble yields 3 salvage",
+		"Assemble at least 2 bunks",
+		"Build a Charge Node (+7 power)",
+		"Power Grow Tray + Nutrient Station; keep Cook enabled",
+		"Power an Air Recycler (3 power)",
+		"Reserve 4 salvage; keep Haul + Craft enabled",
+		"Patch and seal the maintenance hatch",
+		"Finish Day 7 with a sealed hatch and O2 >= 15%",
+		"Power a Rec Console; free 1 power if shed",
+		"PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled",
+	]:
+		_assert_true(expected_label in checklist_text, "checklist covers %s" % expected_label)
+	_assert_true("[OPTIONAL][/color]  Power a Rec Console" in checklist_text, "checklist marks recreation as optional")
+	_assert_true("[OPTIONAL][/color]  PRIORITIES [P]" in checklist_text, "checklist marks work specialization as optional")
 	var blueprint_cell := Vector2i(18, 12)
 	_assert_false(game.map_grid.is_preview_valid("bed", BreachSystem.HATCH_CELL), "reserved pressure hatch has an invalid build preview")
 	_assert_false(game.place_blueprint(VaultBuilding.Kind.BED, BreachSystem.HATCH_CELL), "reserved pressure hatch rejects blueprints")
@@ -398,14 +460,27 @@ func _test_order_preview_and_checklist() -> void:
 	game.player_orders._refresh_checklist()
 	_assert_false(grow_tray.powered, "grow tray is initially unpowered during overload")
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY), 0, "unpowered tray does not satisfy the powered count")
-	_assert_true("[    ][/color]  Power a grow tray" in game.player_orders.checklist.text, "checklist leaves an unpowered tray incomplete")
+	_assert_true("[    ][/color]  Power Grow Tray + Nutrient Station" in game.player_orders.checklist.text, "checklist leaves an unpowered food chain incomplete")
 
 	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(19, 12))
 	game.power_grid.recalculate(game.buildings)
 	game.player_orders._refresh_checklist()
 	_assert_true(grow_tray.powered, "charge capacity powers the grow tray")
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY), 1, "powered tray satisfies the powered count")
-	_assert_true("[DONE][/color]  Power a grow tray" in game.player_orders.checklist.text, "checklist completes only after the tray is powered")
+	_assert_true("[    ][/color]  Power Grow Tray + Nutrient Station" in game.player_orders.checklist.text, "powered grow tray alone does not complete the food chain")
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	game.power_grid.recalculate(game.buildings)
+	game.player_orders._refresh_checklist()
+	_assert_true(kitchen.powered, "charge capacity also powers the nutrient station")
+	_assert_true("[DONE][/color]  Power Grow Tray + Nutrient Station" in game.player_orders.checklist.text, "powered food fixtures with an eligible Cook complete the food chain")
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+	game.player_orders._refresh_checklist()
+	_assert_true("[    ][/color]  Power Grow Tray + Nutrient Station" in game.player_orders.checklist.text, "food chain becomes incomplete when every Cook is disabled")
+	game.residents[0].set_work_priority("cook", VaultResident.DEFAULT_WORK_PRIORITY)
+	game.food_system.salvage = BreachSystem.PATCH_COST - 1
+	game.player_orders._refresh_checklist()
+	_assert_true("[    ][/color]  Reserve 4 salvage; keep Haul + Craft enabled" in game.player_orders.checklist.text, "hatch readiness reports an insufficient reserve before the warning")
 	_dispose(game)
 
 
@@ -918,6 +993,15 @@ func _test_breach_response_jobs() -> void:
 	_assert_equal(competing_blueprint.delivered, 0, "a second hauler cannot divert the four reserved salvage")
 	_assert_true(game.residents[1].current_job_type != JobSystem.JobType.SUPPLY_BUILD, "ordinary blueprint supply waits behind the breach reserve")
 	for _index in 80:
+		if game.job_system.get_breach_supply_in_transit() > 0:
+			break
+		game.job_system.advance(VaultGame.SIMULATION_TICK)
+	_assert_equal(game.job_system.get_breach_supply_in_transit(), BreachSystem.PATCH_COST, "hatch salvage is tracked while its hauler is en route")
+	game.residents[2].work_allowed.craft = true
+	game.player_orders._refresh_checklist()
+	_assert_true("[DONE][/color]  Reserve 4 salvage; keep Haul + Craft enabled" in game.player_orders.checklist.text, "committed in-transit patch salvage keeps hatch readiness complete")
+	game.residents[2].work_allowed.craft = false
+	for _index in 80:
 		if game.breach_system.is_supplied():
 			break
 		game.job_system.advance(VaultGame.SIMULATION_TICK)
@@ -929,6 +1013,8 @@ func _test_breach_response_jobs() -> void:
 	game.residents[0].work_allowed.craft = true
 	game.job_system.advance(VaultGame.SIMULATION_TICK)
 	_assert_equal(game.residents[0].current_job_type, JobSystem.JobType.PATCH_BREACH, "urgent Craft job follows the Haul response")
+	game.player_orders._refresh_checklist()
+	_assert_true("[DONE][/color]  Reserve 4 salvage; keep Haul + Craft enabled" in game.player_orders.checklist.text, "delivered patch salvage keeps hatch readiness complete during Craft work")
 	for _index in 78:
 		game.job_system.advance(VaultGame.SIMULATION_TICK)
 	_assert_false(game.breach_system.is_sealed(), "pressure hatch remains unsealed one work tick before the eight-second patch completes")
@@ -1381,6 +1467,9 @@ func _test_day_seven_requires_sealed_breathable_wing() -> void:
 	_assert_false(game.ended, "completed clock does not win while the hatch remains unsealed")
 	_assert_equal(game.outcome, "", "unsealed completed wing has no premature outcome")
 	_assert_true(game.get_alive_count() > 0, "victory gate is the hatch rather than colony loss")
+	game.player_orders.refresh()
+	_assert_true("VICTORY PENDING // SEAL HATCH" in game.player_orders.objective_label.text, "completed clock names the unsealed hatch victory blocker")
+	_assert_true("VICTORY PENDING · SEAL HATCH" in game.player_orders.alert_label.text, "alerts keep the pending hatch action visible")
 
 	_assert_equal(game.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "late response accepts its four salvage")
 	_assert_true(game.breach_system.apply_patch_work(BreachSystem.PATCH_WORK_SECONDS), "late eight-second patch seals the hatch")
@@ -1390,6 +1479,9 @@ func _test_day_seven_requires_sealed_breathable_wing() -> void:
 	_assert_false(game.ended, "sealed day-seven wing cannot win with unbreathable oxygen")
 	_assert_equal(game.outcome, "", "unbreathable completed wing has no premature outcome")
 	_assert_true(game.get_alive_count() > 0, "oxygen victory gate is evaluated before suffocation becomes colony loss")
+	game.player_orders.refresh()
+	_assert_true("VICTORY PENDING // RESTORE O2 TO 15%" in game.player_orders.objective_label.text, "completed clock names the oxygen victory blocker")
+	_assert_true("VICTORY PENDING · O2 >= 15%" in game.player_orders.alert_label.text, "alerts state the exact breathable threshold")
 
 	game.oxygen_system.oxygen = OxygenSystem.STARTING_OXYGEN
 	game._simulation_step(VaultGame.SIMULATION_TICK)
@@ -1485,16 +1577,20 @@ func _test_unmanaged_loss() -> void:
 
 func _test_player_order_survival_plan() -> void:
 	var game := _spawn_game()
+	_assert_equal(game.food_system.meals, 12, "first-session route starts with the tuned meal headroom")
+	_assert_equal(game.food_system.raw_food, 4, "first-session route starts with the tuned raw-food headroom")
+	_assert_equal(game.food_system.salvage, 42, "first-session route starts with the tuned salvage headroom")
 	game.begin_shift()
 	game.set_tool("dig")
 	var dig_cells: Array[Vector2i] = []
-	for x in [16, 15, 14, 13, 12, 11]:
+	for x in [16, 15, 14, 13, 12]:
 		for y in [14, 15, 16]:
 			dig_cells.append(Vector2i(x, y))
 	for cell: Vector2i in dig_cells:
 		_assert_true(game.issue_order(cell), "planned expansion accepts dig designation at %s" % cell)
 	var plans := [
 		[VaultBuilding.Kind.BED, Vector2i(27, 12)],
+		[VaultBuilding.Kind.BED, Vector2i(26, 12)],
 		[VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12)],
 		[VaultBuilding.Kind.GENERATOR, Vector2i(21, 12)],
 		[VaultBuilding.Kind.KITCHEN, Vector2i(22, 12)],
@@ -1505,7 +1601,12 @@ func _test_player_order_survival_plan() -> void:
 		_assert_true(game.place_blueprint(int(plan[0]), plan[1]), "survival fixture blueprint is accepted")
 	var starting_lumen: VaultBuilding = game.get_building_at(Vector2i(22, 14))
 
-	game.step_simulation(200.0)
+	game.step_simulation(BreachSystem.WARNING_AT_SECONDS)
+	_assert_true(game.user_paused and game.player_orders.breach_warning_panel.visible, "first-session path reaches the unacknowledged hatch warning")
+	game.player_orders.breach_resume_button.pressed.emit()
+	_assert_true(game.breach_system.warning_acknowledged, "first-session path uses Resume Response to acknowledge the warning")
+	_assert_false(game.user_paused or game.player_orders.breach_warning_panel.visible, "Resume Response returns the first-session path to play")
+	game.step_simulation(200.0 - BreachSystem.WARNING_AT_SECONDS)
 	_assert_true(game.food_system.salvage >= 0, "ordered construction never overdraws salvage")
 	_assert_true(game.breach_system.is_sealed(), "player-order plan automatically contains the first breach")
 	var rec_console: VaultBuilding = game.get_building_at(Vector2i(20, 12))
@@ -1522,8 +1623,15 @@ func _test_player_order_survival_plan() -> void:
 		_assert_true(building != null and building.complete, "survival fixture at %s was supplied and assembled" % plan[1])
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER), 1, "player-order plan powers its air recycler")
 	_assert_true(game.oxygen_system.net_rate > 0.0, "ordered life support recovers oxygen after resident consumption")
+	_assert_true(game.ended, "first-session order path reaches a terminal outcome")
+	_assert_true(game.day_cycle.completed, "first-session order path completes all seven days")
 	_assert_equal(game.outcome, "win", "a player-order-only plan reaches day-seven victory")
-	_assert_true(game.get_alive_count() >= 1, "the ordered plan leaves at least one survivor")
+	_assert_equal(game.get_alive_count(), 4, "the forgiving first-session path preserves all four residents")
+	_assert_true(game.breach_system.is_sealed(), "the first-session win retains a sealed maintenance hatch")
+	_assert_true(game.oxygen_system.oxygen >= OxygenSystem.CRITICAL_OXYGEN_THRESHOLD, "the first-session win finishes at or above 15 percent oxygen")
+	_assert_true(game.oxygen_system.oxygen >= OxygenSystem.LOW_OXYGEN_THRESHOLD, "the managed path finishes with oxygen headroom above the low-air band")
+	_assert_true(game.food_system.meals > 0 or game.food_system.raw_food > 0, "the managed path finishes with food headroom")
+	_assert_true(game.food_system.salvage > 0, "the fifteen-tile expansion leaves salvage after the optional console and hatch patch")
 	_dispose(game)
 
 

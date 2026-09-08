@@ -7,16 +7,19 @@ const GROW_SECONDS := 9.0
 const GROW_YIELD := 1
 const COOK_INPUT := 1
 const COOK_OUTPUT := 1
+const STARTING_MEALS := 12
+const STARTING_RAW_FOOD := 4
+const STARTING_SALVAGE := 42
 
-var meals := 8
-var raw_food := 2
-var salvage := 30
+var meals := STARTING_MEALS
+var raw_food := STARTING_RAW_FOOD
+var salvage := STARTING_SALVAGE
 
 
 func reset() -> void:
-	meals = 8
-	raw_food = 2
-	salvage = 30
+	meals = STARTING_MEALS
+	raw_food = STARTING_RAW_FOOD
+	salvage = STARTING_SALVAGE
 	inventory_changed.emit()
 
 
@@ -74,7 +77,7 @@ func serialize() -> Dictionary:
 
 
 func deserialize(data: Dictionary) -> void:
-	meals = maxi(0, int(data.get("meals", 8)))
-	raw_food = maxi(0, int(data.get("raw_food", 2)))
-	salvage = maxi(0, int(data.get("salvage", 30)))
+	meals = maxi(0, int(data.get("meals", STARTING_MEALS)))
+	raw_food = maxi(0, int(data.get("raw_food", STARTING_RAW_FOOD)))
+	salvage = maxi(0, int(data.get("salvage", STARTING_SALVAGE)))
 	inventory_changed.emit()

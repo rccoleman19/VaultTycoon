@@ -2,7 +2,7 @@
 
 Vault Tycoon is an original underground colony-survival prototype built with Godot 4. A crew of four residents begins inside a sealed vault wing. Dig into the surrounding rock, recover salvage, furnish the new rooms, keep food, rest, mood, power, and shared oxygen stable, and contain the wing's first maintenance-hatch pressure breach through seven complete in-game days.
 
-This repository contains the first six desktop gameplay slices: the first-playable sealed wing, one deterministic environmental breach, one vault-wide oxygen percentage, deterministic power brownouts with priority shedding, per-resident mood with basic powered recreation, and a crew-wide work priorities board. Oxygen and power are deliberately vault-wide resources rather than spatial gas or wiring simulations. The project does not include a surface map, caravans, factions, combat, research, mods, multiplayer, IAP, ads, analytics, store packaging, final art or audio, mobile export, a multi-room sealed-door graph, or any other full atmosphere simulation.
+This repository contains the first seven desktop gameplay slices: the first-playable sealed wing, one deterministic environmental breach, one vault-wide oxygen percentage, deterministic power brownouts with priority shedding, per-resident mood with basic powered recreation, a crew-wide work priorities board, and first-session balance and help polish. Oxygen and power are deliberately vault-wide resources rather than spatial gas or wiring simulations. The project does not include a surface map, caravans, factions, combat, research, mods, multiplayer, IAP, ads, analytics, store packaging, final art or audio, mobile export, a medical system, a multi-room sealed-door graph, or any other full atmosphere simulation.
 
 ## Requirements
 
@@ -32,21 +32,23 @@ If your installation exposes `godot4` or an absolute executable path instead of 
 
 ## First shift
 
-The game opens paused on the seal-stabilization briefing. Select **BEGIN SHIFT**, then:
+The game opens paused on the seal-stabilization checklist. Select **BEGIN SHIFT** to play. Use **HELP** in the lower toolbar to reopen the checklist at any time; the simulation pauses while Help is visible, and closing it restores the prior running or paused state.
 
-1. Choose **PRIORITIES** or press **P** to open the work board. Every resident starts at priority 3 for Dig, Haul, Craft, and Cook. Click a cell to cycle `1 → 2 → 3 → 4 → OFF → 1`; 1 is highest, 4 is lowest, and OFF disables that category for that resident.
-2. Choose **DIG** or press **E**, then click or drag across rock connected to carved floor by adjacent dig designations. Residents whose Dig priority is not OFF excavate the reachable front of that chain.
-3. Excavated rubble becomes salvage after a resident hauls it to the Salvage Bay.
-4. Place blueprints only on carved floor. Residents whose Haul and Craft priorities are not OFF supply and assemble them.
-5. Build a Charge Node, then choose **AIR $14** and assemble an Air Recycler on carved floor. It uses 3 power, receives the grid's highest fixed consumer priority, and restores 0.8 oxygen percentage points per simulation second while powered. The 2-power emergency core cannot run the recycler without added capacity.
-6. Build bunks for rest and add a powered Grow Tray and Nutrient Station for food. Keep Cook above OFF for at least one resident; the tray produces raw food and the station converts raw food into meals.
-7. Add a Rec Console, then add another Charge Node or free at least 1 power by disabling or removing another consumer. Awake residents lose mood from daily strain, darkness, hunger, exhaustion, and low vault oxygen. At 35 mood or below they automatically reserve a powered free console, walk to it, and recover to 85. A console serves one resident at a time and its optional 1-power load is shed before production or life support.
-8. Watch **VAULT ATMOSPHERE** in the right HUD. Oxygen starts at 100%, and each living resident consumes 0.08 percentage points per simulation second. The HUD shows the current percentage, net rate, resident use, recycler output, and active hatch leak; at or below 35%, awake residents also lose an additional 24 mood per day. Oxygen becomes critical at or below 15%.
-9. Keep at least 4 salvage available and leave Haul and Craft above OFF for breach response. At exactly 60 simulation seconds, a maintenance-hatch pressure warning pauses the game, resets speed to 1×, focuses the breach, and interrupts recreation.
-10. Resume from the warning and watch the urgent response: a resident allowed to Haul delivers 4 salvage, then a resident allowed to Craft performs the 8-second patch. Emergency work preempts every numeric board priority. The right HUD reports the grace period through the exact 80-second opening boundary, patch progress, and any missing salvage, permission, or path blocker.
-11. If the hatch reaches 80 seconds unsealed, it opens and vents another 2.5 oxygen points per simulation second until patched. At or below 15% oxygen, every living resident takes 4 health damage per simulation second. To win after seven full days, keep at least one resident alive, seal the hatch, and finish with at least 15% oxygen.
+Follow this forgiving first-session route:
 
-The simulation starts with 8 meals, 2 raw food, 30 salvage, an emergency core, one lumen, and one Salvage Bay. Digging is part of the economy: each completed rock tile creates 3 salvage that must be hauled. The sustainable power, oxygen, and food chain costs more than the starting stock, so expansion is required.
+1. Choose **DIG** or press **E**, then click or drag across at least 12 rock tiles. Every designation must connect to carved floor, directly or through adjacent dig designations. Residents with Dig above OFF excavate the reachable front of the chain.
+2. Let residents haul the rubble to a Salvage Bay. Each completed rock tile yields 3 salvage only after it is hauled.
+3. Place at least two **BUNK $8** blueprints on carved floor. Residents with Haul above OFF deliver their salvage and residents with Craft above OFF assemble them.
+4. Build one **CHARGE $18** Charge Node. Together with the 2-power emergency core, it raises supply to 9 power.
+5. Build and power **AIR $14**. The Air Recycler uses 3 power, has the grid's highest fixed consumer priority, and restores 0.8 oxygen percentage points per simulation second. The emergency core cannot power it by itself.
+6. Build and power **GROW $12** and **NUTRI $10**. Keep Cook above OFF for at least one resident: the Grow Tray produces raw food and the powered Nutrient Station converts 1 raw food into 1 meal.
+7. Keep at least 4 salvage uncommitted and keep at least one living resident's Haul and Craft above OFF. At exactly 60 simulation seconds, the maintenance-hatch warning pauses the shift, resets speed to 1×, focuses the hatch, and interrupts recreation.
+8. Choose **RESUME RESPONSE**. Emergency work overrides numeric work ranks: an eligible hauler delivers the 4-salvage patch and an eligible crafter completes 8 seconds of patch work. The hatch opens at the exact 80-second boundary if the patch is unfinished, then vents 2.5 oxygen points per second until sealed.
+9. Optionally build **REC $8**. A Rec Console supports mood but is not required to win. The core and one Charge Node supply 9 power, exactly consumed by the starting Lumen, Grow Tray, Nutrient Station, and Air Recycler; disable the Lumen or build another Charge Node to serve the console's additional 1-power load. At 35 mood or below, a resident seeks a powered free console and recovers to 85.
+10. Optionally press **P** or choose **PRIORITIES [P]** to specialize ordinary work. Every resident starts at priority 3 for Dig, Haul, Craft, and Cook. A cell cycles `1 → 2 → 3 → 4 → OFF → 1`; 1 is highest, 4 is lowest, and OFF disables that category for that resident. Hatch work still overrides numbered ranks, but OFF remains a hard permission boundary.
+11. Keep at least one resident alive, seal the hatch, and finish seven full days with oxygen at or above 15%. If day seven completes before both final gates are satisfied, the HUD identifies whether the hatch or oxygen is still blocking victory.
+
+The simulation starts with 12 meals, 4 raw food, 42 salvage, 100% oxygen, an emergency core, one Lumen, and one Salvage Bay. Twelve excavations add 36 recoverable salvage, bringing the critical-route pool to 78: enough for two bunks, one Charge Node, one Grow Tray, one Nutrient Station, one Air Recycler, and the 4-salvage hatch patch, with 4 salvage left. A 15-tile expansion adds enough headroom for the optional Rec Console as well. Expansion is still required, and an untouched wing still fails before day seven.
 
 ## Controls
 
@@ -55,21 +57,22 @@ The simulation starts with 8 meals, 2 raw food, 30 salvage, an emergency core, o
 | Left click | Select a resident or fixture; repeated clicks cycle stacked residents and an occupied fixture; place the active order/blueprint |
 | Left-drag | Paint Dig or Cancel orders across multiple tiles |
 | Right click | Return to Select mode |
-| `Esc` | Close the priorities board if open; otherwise return to Select mode |
+| `Esc` | Close reopened Help or the priorities board if open; otherwise return to Select mode |
 | `E` | Activate Dig |
 | `X` | Activate Cancel Designation |
 | `P` | Open or close the crew work priorities board |
 | Roster **PRIORITIES [P]** | Open the crew work priorities board |
 | Work-priority cell | Cycle `1 → 2 → 3 → 4 → OFF → 1`; lower numbers run first |
 | Bottom build buttons | Place the selected fixture blueprint on carved floor; **AIR $14** selects the Air Recycler and **REC $8** the Rec Console |
+| Bottom **HELP** | Open the stabilization checklist and pause behind it; closing restores the prior run/pause state |
 | `W` `A` `S` `D` / arrow keys | Pan the camera |
 | Middle-drag | Pan the camera |
 | Mouse wheel | Zoom between the supported map limits |
-| `F` or `Home` | Center on the selected resident, or on the sealed chamber |
+| `F` or `Home` | Center on the selected resident or maintenance hatch, or on the sealed chamber |
 | `Space` | Pause/resume simulation |
 | `1` `2` `3` | Set 1×, 2×, or 3× speed and resume |
 
-Build tools and the work priorities board are available in the HUD. **P** toggles the board, the roster's **PRIORITIES** action opens it, and **CLOSE** or **Esc** dismisses it. When the board is closed, **Esc** returns to Select mode. Opening or editing the board does not change the current pause state, speed, selection, or map tool. The Air Recycler uses **AIR $14** and the Rec Console uses **REC $8**; neither has a keyboard shortcut. Selecting a completed consumer shows its fixed power priority and lets you disable or re-enable it; any completed non-core fixture can be removed for a 50% salvage refund. **Cancel** removes dig designations and unfinished blueprints; salvage already delivered to a canceled blueprint is refunded. The maintenance-hatch response creates its own urgent jobs and does not add a toolbar tool: use the right-HUD breach focus control and keep Haul and Craft above OFF.
+Build tools, Help, and the work priorities board are available in the HUD. Right-click or press **Esc** to return to Select mode; press **X** when you intend to activate Cancel. **P** toggles the board, the roster's **PRIORITIES** action opens it, and **CLOSE** or **Esc** dismisses it. Opening or editing the board does not change the current pause state, speed, selection, or map tool. Opening **HELP** pauses behind the checklist; **CLOSE** or **Esc** restores the simulation's prior running or paused state. Help has no keyboard shortcut. The active tool's instructions return after transient placement, warning, and error messages expire. The Air Recycler uses **AIR $14** and the Rec Console uses **REC $8**; neither has a keyboard shortcut. Selecting a completed consumer shows its fixed power priority and lets you disable or re-enable it; any completed non-core fixture can be removed for a 50% salvage refund. **Cancel** removes dig designations and unfinished blueprints; salvage already delivered to a canceled blueprint is refunded. The maintenance-hatch response creates its own urgent jobs and does not add a toolbar tool: use the right-HUD breach focus control and keep Haul and Craft above OFF.
 
 ## Gameplay systems
 
@@ -79,12 +82,12 @@ Build tools and the work priorities board are available in the HUD. **P** toggle
 - **Construction:** bunks cost 8 salvage, lumens 5, Charge Nodes 18, Grow Trays 12, Nutrient Stations 10, Salvage Bays 4, Air Recyclers 14, and Rec Consoles 8.
 - **PowerGrid:** the emergency core supplies 2 power and a completed Charge Node supplies 7. Lumens and Rec Consoles consume 1, Nutrient Stations 2, and Grow Trays and Air Recyclers 3. The HUD reports supply, enabled demand, served power, disabled demand, and any brownout shed load. Brownouts shed the lowest-priority enabled consumers first in this exact fixed order: Rec Consoles, Grow Trays, Nutrient Stations, Lumens, then Air Recyclers. Within a fixture kind, newer fixtures shed before older fixtures. Air Recyclers are always protected at the highest priority, but still go offline when available supply cannot satisfy their 3-power demand; that removes recycler output and can cascade into oxygen danger. Players can recover by disabling optional consumers, removing non-core fixtures for partial salvage, or adding Charge Node capacity.
 - **Mood and recreation:** recreation is autonomous self-care rather than a work permission. At 35 mood or below, a resident deterministically chooses the nearest reachable, powered, unoccupied Rec Console, with building ID as the tie-breaker. Mood recovers only after the resident reaches it, at 18 points per simulation second, until exactly 85. One console has one seat. Hunger, sleep, loss of power, deconstruction, death, and the pressure warning all release the reservation safely. Passive mood drain pauses during sleep and active console use.
-- **FoodSystem:** a powered Grow Tray yields 1 raw food every 9 simulation seconds. Four seconds of cooking converts 1 raw food into 1 meal, closely matching a four-resident wing's baseline demand.
+- **FoodSystem:** starts with 12 meals, 4 raw food, and 42 salvage. A powered Grow Tray yields 1 raw food every 9 simulation seconds. Four seconds of cooking at a powered Nutrient Station converts 1 raw food into 1 meal, closely matching a four-resident wing's baseline demand.
 - **OxygenSystem:** tracks one shared percentage for the entire vault, starting at 100% and clamped from 0% to 100%. Living residents consume 0.08 points per second each, every powered Air Recycler restores 0.8 points per second, and an open hatch vents 2.5 points per second. The low threshold is 35%; at or below the 15% critical threshold, all living residents take 4 health damage per second.
 - **DayCycle:** one game day lasts 40 simulation seconds. Pausing stops the clock; speed controls multiply it. Victory becomes available after 280 simulation seconds, when seven full days have elapsed, and requires at least one living resident, a sealed hatch, and breathable oxygen at or above 15%.
 - **Breach pressure:** one deterministic maintenance-hatch warning begins at exactly 60 simulation seconds. Its first appearance pauses the simulation, resets speed to 1×, and focuses the hatch. The hatch opens at exactly 80 seconds if the 4-salvage, 8-second patch is unfinished; while open, it adds a 2.5-point-per-second oxygen loss until sealed.
-- **PlayerOrders:** builds the 1280×720 HUD, briefing/checklist, roster and adjacent **PRIORITIES [P]** control, contextual inspector, alerts, lower map/build/save toolbar including **AIR $14** and **REC $8**, the complete crew-by-work priority board, power supply/demand/brownout readouts, every living resident's mood, active mood factors, fixed-priority fixture labels and recovery controls, vault-atmosphere meter and rate breakdown, breach pressure/blocker readout and focus control, and outcome screens in GDScript. The checklist explicitly tracks powered Air Recycler and Rec Console fixtures.
-- **SaveLoad:** uses a crash-recoverable temporary-file replacement for one versioned local JSON snapshot and restores the map, residents, per-category work priorities, fixtures (including manually disabled power loads), inventory, jobs, time, camera, breach state, oxygen, mood/recreation state, and outcome state. An interrupted replacement preserves a recoverable previous file. Slice 6 remains on schema version 1: numeric priorities are an optional compatible extension, older boolean work permissions migrate to priority 3 or OFF, earlier `light_mood` snapshots migrate to canonical mood, and missing recreation state defaults safely.
+- **PlayerOrders:** builds the 1280×720 HUD, reopenable Help/checklist, roster and adjacent **PRIORITIES [P]** control, contextual inspector, alerts, lower map/build/save toolbar including **AIR $14**, **REC $8**, and **HELP**, the complete crew-by-work priority board, power supply/demand/brownout readouts, every living resident's mood, active mood factors, fixed-priority fixture labels and recovery controls, vault-atmosphere meter and rate breakdown, breach pressure/blocker readout and focus control, day-seven victory blockers, and outcome screens in GDScript. The checklist distinguishes the required powered food and air chain from optional recreation and work specialization.
+- **SaveLoad:** uses a crash-recoverable temporary-file replacement for one versioned local JSON snapshot and restores the map, residents, per-category work priorities, fixtures (including manually disabled power loads), inventory, jobs, time, camera, breach state, oxygen, mood/recreation state, and outcome state. An interrupted replacement preserves a recoverable previous file. Slice 7 remains on schema version 1: numeric priorities are an optional compatible extension, older boolean work permissions migrate to priority 3 or OFF, earlier `light_mood` snapshots migrate to canonical mood, and missing recreation state defaults safely.
 
 The main scene keeps these systems as separate child nodes under `VaultGame`, with `VaultGame` coordinating a fixed 0.1-second simulation tick.
 
@@ -125,7 +128,7 @@ Turning a category OFF immediately releases that resident from a job in the disa
 | Console recovery | +18 mood per simulation second while physically present; finishes at exactly 85 |
 | Rec Console fixture | 8 salvage, 5-second assembly, 1 power, OPTIONAL priority, one resident |
 
-Slice 6 does not apply a recent-damage mood modifier because the current resident model has no damage-recency timer or saved history.
+Slice 7 does not apply a recent-damage mood modifier because the current resident model has no damage-recency timer or saved history.
 
 ## Local save
 
@@ -137,7 +140,29 @@ The one-slot save is `user://vault_wing_save.json`. With Godot's default per-pro
 - macOS: `~/Library/Application Support/Godot/app_userdata/Vault Tycoon/vault_wing_save.json`
 - Windows: `%APPDATA%\Godot\app_userdata\Vault Tycoon\vault_wing_save.json`
 
-Deleting or replacing this file resets or overwrites the only local slot. Save schema version 1 rejects malformed or incompatible files rather than partially loading them. Slice 6 keeps schema version 1: breach, oxygen, per-fixture manual-disable state, canonical mood, active recreation state, and numeric work priorities are compatible extensions. New saves retain the legacy boolean permission map alongside the numeric map. A legacy enabled permission becomes priority 3, a disabled permission becomes OFF, and a missing work-priority map defaults every category to 3. Legacy `light_mood` values migrate to mood; missing recreation state defaults to idle; stale console reservations are reconciled rather than left dangling.
+Deleting or replacing this file resets or overwrites the only local slot. Save schema version 1 rejects malformed or incompatible files rather than partially loading them. Slice 7 keeps schema version 1: breach, oxygen, per-fixture manual-disable state, canonical mood, active recreation state, and numeric work priorities remain compatible extensions. New saves retain the legacy boolean permission map alongside the numeric map. A legacy enabled permission becomes priority 3, a disabled permission becomes OFF, and a missing work-priority map defaults every category to 3. Legacy `light_mood` values migrate to mood; missing recreation state defaults to idle; stale console reservations are reconciled rather than left dangling.
+
+## Full headless verification
+
+Run the complete repository check from the repository root:
+
+```bash
+scripts/check.sh
+```
+
+That default form expects the development binary at `/tmp/godot-4.7.2/Godot_v4.7.2-stable_linux.x86_64`. On another installation, pass the Godot executable as the first argument:
+
+```bash
+scripts/check.sh /absolute/path/to/Godot_v4.7.2-stable_linux.x86_64
+```
+
+Or set `GODOT_BIN`:
+
+```bash
+GODOT_BIN=/absolute/path/to/godot scripts/check.sh
+```
+
+The script uses an isolated temporary user-data directory and runs every checked suite: headless editor import, the core gameplay suite, mood/recreation suite, work-priorities suite, breach-modal speed-key regression, and a five-frame main-scene boot. A successful run ends with `All Vault Tycoon headless checks passed.`
 
 ## Desktop exports
 
@@ -171,4 +196,4 @@ Cross-exporting creates the target files when the matching templates are install
 
 ## Scope boundary
 
-This slice intentionally ends at the sealed-wing day-seven survival objective, one deterministic maintenance-hatch pressure event, one aggregate oxygen percentage, one deterministic vault-wide power allocator with brownout shedding, one-seat basic recreation, and one numeric priority for each resident/work-category pair. It does not add resident skills or aptitudes, work speed traits, schedules or shifts, direct-move commands, player-authored job queues, priorities for individual blueprints or recipes, work zones, relationships, social recreation, memories, room beauty, comfort, recreation variety, wiring, circuits, batteries, fuel, spatial gas cells, multiple gases, diffusion, pressure zones, oxygen pipe networks, multiple independently sealed rooms, a sealed-door/room graph, or any other full atmosphere model. It also does not add surface expeditions, caravans, factions, research, mods, multiplayer, IAP, ads, analytics, final art or audio, mobile export, store packaging, raiders, enemies, weapons, combat, or repeated/procedural incidents.
+Slice 7 intentionally polishes the existing sealed-wing day-seven survival objective rather than adding another major system. The boundary remains one deterministic maintenance-hatch pressure event, one aggregate oxygen percentage, one deterministic vault-wide power allocator with brownout shedding, one-seat basic recreation, and one numeric priority for each resident/work-category pair. It does not add resident skills, aptitudes, or passions, work speed traits, schedules or shifts, direct-move commands, player-authored job queues, priorities for individual blueprints or recipes, work zones, relationships, social recreation, memories, room beauty, comfort, recreation variety, a medical system, wiring, circuits, batteries, fuel, spatial gas cells, multiple gases, diffusion, pressure zones, oxygen pipe networks, multiple independently sealed rooms, a sealed-door/room graph, or any other full atmosphere model. It also does not add surface expeditions, caravans, factions, research, mods, multiplayer, IAP, ads, analytics, final art or audio, mobile export, store packaging, raiders, enemies, weapons, combat, or repeated/procedural incidents.

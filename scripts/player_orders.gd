@@ -33,7 +33,12 @@ var command_buttons: Dictionary = {}
 var command_grid: GridContainer
 var tool_status: Label
 var checklist: RichTextLabel
+var briefing_overlay: Control
 var briefing_panel: PanelContainer
+var briefing_load_button: Button
+var briefing_begin_button: Button
+var briefing_close_button: Button
+var help_button: Button
 var breach_warning_panel: PanelContainer
 var breach_resume_button: Button
 var outcome_panel: PanelContainer
@@ -337,6 +342,12 @@ func _build_interface() -> void:
 	load_button.custom_minimum_size = Vector2(56, 36)
 	load_button.pressed.connect(func() -> void: game.load_game())
 	command_grid.add_child(load_button)
+	help_button = Button.new()
+	help_button.text = "HELP"
+	help_button.tooltip_text = "Pause behind the live first-shift checklist"
+	help_button.custom_minimum_size = Vector2(62, 36)
+	help_button.pressed.connect(open_help)
+	command_grid.add_child(help_button)
 
 	_build_work_priorities_board()
 	_build_briefing()
@@ -501,13 +512,23 @@ func get_work_priority_button(resident_id: int, work_type: String) -> Button:
 
 
 func _build_briefing() -> void:
+	briefing_overlay = Control.new()
+	briefing_overlay.name = "BriefingOverlay"
+	briefing_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	briefing_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	root.add_child(briefing_overlay)
+	var scrim := ColorRect.new()
+	scrim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	scrim.color = Color(0.025, 0.045, 0.055, 0.72)
+	scrim.mouse_filter = Control.MOUSE_FILTER_STOP
+	briefing_overlay.add_child(scrim)
 	briefing_panel = PanelContainer.new()
 	briefing_panel.set_anchors_preset(Control.PRESET_CENTER)
 	briefing_panel.position = Vector2(-320, -300)
 	briefing_panel.size = Vector2(640, 600)
 	briefing_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	briefing_panel.add_theme_stylebox_override("panel", _panel_style(Color("111b21"), Color("72cdb8"), 3))
-	root.add_child(briefing_panel)
+	briefing_overlay.add_child(briefing_panel)
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		margin.add_theme_constant_override(side, 22)
@@ -521,9 +542,9 @@ func _build_briefing() -> void:
 	title.add_theme_color_override("font_color", Color("75d4b4"))
 	content.add_child(title)
 	var intro := Label.new()
-	intro.text = "Four residents share one finite vault atmosphere and the strain of an underground shift. Build and power an Air Recycler, then provide food, bunks, light, and a powered Rec Console. Press P to specialize work; keep at least one resident's Haul and Craft above OFF for the hatch warning. Urgent response work preempts ordinary priorities and recreation."
+	intro.text = "Dig and haul salvage, add bunks, then power food and an Air Recycler. Reserve 4 salvage and keep Haul + Craft enabled for the hatch warning. Recreation and work specialization help, but neither is required to win."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	intro.custom_minimum_size.y = 78
+	intro.custom_minimum_size.y = 62
 	content.add_child(intro)
 	checklist = RichTextLabel.new()
 	checklist.bbcode_enabled = true
@@ -532,21 +553,25 @@ func _build_briefing() -> void:
 	checklist.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(checklist)
 	var controls := Label.new()
-	controls.text = "LMB order/select · RMB/Esc cancel tool · P priorities · WASD pan · wheel zoom · Space pause · 1/2/3 speed · F recenter"
+	controls.text = "LMB order/select · RMB/Esc return to Select · X cancel orders/blueprints · P priorities · WASD pan · wheel zoom · Space pause · 1/2/3 speed · F recenter"
 	controls.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	controls.add_theme_color_override("font_color", Color("a9bec3"))
 	content.add_child(controls)
 	var buttons := HBoxContainer.new()
 	buttons.alignment = BoxContainer.ALIGNMENT_END
 	content.add_child(buttons)
-	var load_button := Button.new()
-	load_button.text = "LOAD LOCAL SAVE"
-	load_button.pressed.connect(func() -> void: game.load_game())
-	buttons.add_child(load_button)
-	var begin_button := Button.new()
-	begin_button.text = "BEGIN SHIFT"
-	begin_button.pressed.connect(func() -> void: game.begin_shift())
-	buttons.add_child(begin_button)
+	briefing_load_button = Button.new()
+	briefing_load_button.text = "LOAD LOCAL SAVE"
+	briefing_load_button.pressed.connect(func() -> void: game.load_game())
+	buttons.add_child(briefing_load_button)
+	briefing_close_button = Button.new()
+	briefing_close_button.text = "CLOSE HELP [ESC]"
+	briefing_close_button.pressed.connect(show_briefing.bind(false))
+	buttons.add_child(briefing_close_button)
+	briefing_begin_button = Button.new()
+	briefing_begin_button.text = "BEGIN SHIFT"
+	briefing_begin_button.pressed.connect(func() -> void: game.begin_shift())
+	buttons.add_child(briefing_begin_button)
 
 
 func _build_outcome() -> void:
@@ -641,15 +666,23 @@ func refresh() -> void:
 		return
 	clock_label.text = game.day_cycle.get_clock_text()
 	resource_label.text = "MEALS %d  RAW %d  SALVAGE %d" % [game.food_system.meals, game.food_system.raw_food, game.food_system.salvage]
+	_refresh_objective()
 	power_label.text = game.power_grid.get_status_text()
 	power_label.add_theme_color_override("font_color", Color("ef6860") if game.power_grid.brownout_active else Color("75d4b4"))
 	_refresh_power_detail()
 	pause_button.text = "RESUME" if game.user_paused else "PAUSE"
-	tool_status.text = "%s // %s" % [game.active_tool.to_upper(), game.status_message]
+	var active_help := game.status_message if game.status_message_left > 0.0 else game._tool_help(game.active_tool)
+	tool_status.text = "%s // %s" % [game.active_tool.to_upper(), active_help]
 	for key: String in command_buttons:
 		var button: Button = command_buttons[key]
-		button.disabled = game.tutorial_open or game.ended
+		button.disabled = game.tutorial_open or is_help_open() or game.ended
 		button.modulate = Color("efc56b") if key == game.active_tool else Color.WHITE
+	if help_button != null:
+		help_button.disabled = (
+			game.tutorial_open
+			or game.ended
+			or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
+		)
 	if work_priorities_button != null:
 		work_priorities_button.disabled = (
 			game.tutorial_open
@@ -664,6 +697,20 @@ func refresh() -> void:
 	_refresh_inspector()
 	_refresh_alerts()
 	_refresh_checklist()
+
+
+func _refresh_objective() -> void:
+	if game.day_cycle.completed and not game.ended:
+		var blockers: Array[String] = []
+		if not game.breach_system.is_sealed():
+			blockers.append("SEAL HATCH")
+		if not game.oxygen_system.is_breathable():
+			blockers.append("RESTORE O2 TO 15%")
+		objective_label.text = "VICTORY PENDING // %s" % " + ".join(blockers)
+		objective_label.add_theme_color_override("font_color", Color("ef6860"))
+		return
+	objective_label.text = "OBJECTIVE // 7 DAYS · SEAL · O2"
+	objective_label.add_theme_color_override("font_color", Color("efc56b"))
 
 
 func _refresh_roster() -> void:
@@ -812,6 +859,13 @@ func _refresh_inspector() -> void:
 
 func _refresh_alerts() -> void:
 	var alerts: Array[String] = []
+	if game.day_cycle.completed and not game.ended:
+		var victory_blockers: Array[String] = []
+		if not game.breach_system.is_sealed():
+			victory_blockers.append("SEAL HATCH")
+		if not game.oxygen_system.is_breathable():
+			victory_blockers.append("O2 >= 15%")
+		alerts.append("VICTORY PENDING · %s" % " + ".join(victory_blockers))
 	if game.oxygen_system.is_critical():
 		alerts.append("OXYGEN CRITICAL")
 	elif game.oxygen_system.is_low():
@@ -965,23 +1019,52 @@ func _refresh_checklist() -> void:
 	if checklist == null:
 		return
 	var initial_floor_count := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
+	var cook_enabled := _has_eligible_worker("cook")
+	var hatch_ready := (
+		game.breach_system.is_sealed()
+		or (
+			game.food_system.salvage
+				+ game.breach_system.patch_delivered
+				+ game.job_system.get_breach_supply_in_transit()
+				>= BreachSystem.PATCH_COST
+			and _has_eligible_worker("haul")
+			and _has_eligible_worker("craft")
+		)
+	)
+	var food_chain_ready := (
+		game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) >= 1
+		and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) >= 1
+		and cook_enabled
+	)
 	var checks := [
-		[game.selected_resident_id >= 0, "Select a resident"],
-		[game.map_grid.get_floor_cells().size() >= initial_floor_count + 6, "Complete six excavations"],
-		[game.get_completed_building_count(VaultBuilding.Kind.BED) >= 2, "Assemble at least two bunks"],
-		[game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) >= 1, "Add a charge node"],
-		[game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) >= 1, "Power an air recycler"],
-		[game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) >= 1, "Power a grow tray"],
-		[game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) >= 1, "Assemble a nutrient station"],
-		[game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) >= 1, "Power a rec console"],
-		[game.breach_system.is_sealed(), "Contain the first pressure breach"],
-		[game.day_cycle.completed, "Survive seven full days"],
+		[game.map_grid.get_floor_cells().size() >= initial_floor_count + 12, "Dig 12 connected rock tiles; rubble yields 3 salvage"],
+		[game.get_completed_building_count(VaultBuilding.Kind.BED) >= 2, "Assemble at least 2 bunks"],
+		[game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) >= 1, "Build a Charge Node (+7 power)"],
+		[food_chain_ready, "Power Grow Tray + Nutrient Station; keep Cook enabled"],
+		[game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) >= 1, "Power an Air Recycler (3 power)"],
+		[hatch_ready, "Reserve 4 salvage; keep Haul + Craft enabled"],
+		[game.breach_system.is_sealed(), "Patch and seal the maintenance hatch"],
+		[
+			game.day_cycle.completed and game.breach_system.is_sealed() and game.oxygen_system.is_breathable(),
+			"Finish Day 7 with a sealed hatch and O2 >= 15%",
+		],
 	]
-	var lines: Array[String] = ["[color=#8faeb7]STABILIZATION CHECKLIST[/color]"]
+	var lines: Array[String] = ["[color=#8faeb7]STABILIZATION CHECKLIST // REQUIRED[/color]"]
 	for check in checks:
 		var marker := "[color=#75d4b4][DONE][/color]" if check[0] else "[color=#efc56b][    ][/color]"
 		lines.append("%s  %s" % [marker, check[1]])
+	var rec_done := game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) >= 1
+	var rec_marker := "[color=#75d4b4][DONE][/color]" if rec_done else "[color=#8faeb7][OPTIONAL][/color]"
+	lines.append("%s  Power a Rec Console; free 1 power if shed" % rec_marker)
+	lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled")
 	checklist.text = "\n".join(lines)
+
+
+func _has_eligible_worker(work_type: String) -> bool:
+	for resident: VaultResident in game.residents:
+		if resident.alive and resident.get_work_priority(work_type) != VaultResident.PRIORITY_DISABLED:
+			return true
+	return false
 
 
 func _refresh_work_priorities_board() -> void:
@@ -1045,17 +1128,84 @@ func _set_priority_button_color(button: Button, priority: int) -> void:
 			button.modulate = Color("d68b8b")
 
 
-func show_briefing(visible: bool) -> void:
-	if briefing_panel != null:
-		briefing_panel.visible = visible
-		if visible:
-			show_work_priorities(false)
+func show_briefing(visible: bool, opening := false) -> void:
+	if briefing_overlay == null or briefing_panel == null:
+		return
+	var was_visible := briefing_overlay.visible
+	briefing_overlay.visible = visible
+	briefing_panel.visible = visible
+	if briefing_begin_button != null:
+		briefing_begin_button.visible = opening
+	if briefing_close_button != null:
+		briefing_close_button.visible = not opening
+	if visible:
+		show_work_priorities(false)
+		_configure_briefing_focus(opening)
+		_focus_first_briefing_control(opening)
+	elif was_visible:
+		get_viewport().gui_release_focus()
+
+
+func _briefing_focus_controls(opening: bool) -> Array[Control]:
+	var controls: Array[Control] = []
+	var primary: Button = briefing_begin_button if opening else briefing_close_button
+	if primary != null and primary.visible and not primary.disabled:
+		controls.append(primary)
+	if briefing_load_button != null and briefing_load_button.visible and not briefing_load_button.disabled:
+		controls.append(briefing_load_button)
+	return controls
+
+
+func _configure_briefing_focus(opening: bool) -> void:
+	var controls := _briefing_focus_controls(opening)
+	if controls.is_empty():
+		return
+	for index in controls.size():
+		var control := controls[index]
+		var previous := controls[(index - 1 + controls.size()) % controls.size()]
+		var next := controls[(index + 1) % controls.size()]
+		control.focus_previous = control.get_path_to(previous)
+		control.focus_next = control.get_path_to(next)
+		control.focus_neighbor_left = control.get_path_to(previous)
+		control.focus_neighbor_top = control.get_path_to(previous)
+		control.focus_neighbor_right = control.get_path_to(next)
+		control.focus_neighbor_bottom = control.get_path_to(next)
+
+
+func _focus_first_briefing_control(opening: bool) -> void:
+	var controls := _briefing_focus_controls(opening)
+	if not controls.is_empty():
+		controls[0].grab_focus()
+
+
+func open_help() -> void:
+	if (
+		game == null
+		or game.tutorial_open
+		or game.ended
+		or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
+	):
+		return
+	show_briefing(true, false)
+
+
+func is_help_open() -> bool:
+	return (
+		is_briefing_open()
+		and game != null
+		and not game.tutorial_open
+	)
+
+
+func is_briefing_open() -> bool:
+	return briefing_overlay != null and briefing_overlay.visible
 
 
 func show_breach_warning(visible: bool) -> void:
 	if breach_warning_panel != null:
 		breach_warning_panel.visible = visible
 		if visible and breach_resume_button != null:
+			show_briefing(false)
 			show_work_priorities(false)
 			if right_scroll != null:
 				right_scroll.scroll_vertical = 0
@@ -1070,6 +1220,7 @@ func show_work_priorities(visible: bool) -> void:
 	if visible and (
 		game == null
 		or game.tutorial_open
+		or is_help_open()
 		or game.ended
 		or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
 	):
@@ -1108,7 +1259,7 @@ func _reveal_fixture_controls() -> void:
 
 
 func show_outcome(won: bool, survivors: int) -> void:
-	briefing_panel.visible = false
+	show_briefing(false)
 	show_work_priorities(false)
 	show_breach_warning(false)
 	outcome_panel.visible = true
