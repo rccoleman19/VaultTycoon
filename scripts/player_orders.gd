@@ -20,6 +20,9 @@ var breach_label: Label
 var breach_bar: ProgressBar
 var breach_focus_button: Button
 var right_scroll: ScrollContainer
+var details_box: VBoxContainer
+var details_toggle: Button
+var _details_expanded := false
 var roster_box: VBoxContainer
 var inspector_title: Label
 var inspector_state: Label
@@ -143,31 +146,43 @@ func _build_interface() -> void:
 	summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rail.add_child(summary)
 	objective_label = Label.new()
-	objective_label.text = "OBJECTIVE // 7 DAYS · SEAL · O2"
+	objective_label.text = "NEXT // Begin shift"
+	objective_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	objective_label.add_theme_color_override("font_color", Color("efc56b"))
 	objective_label.add_theme_font_size_override("font_size", 16)
+	objective_label.custom_minimum_size.y = 42
 	summary.add_child(objective_label)
 	alert_label = Label.new()
 	alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	alert_label.custom_minimum_size.y = 38
+	alert_label.custom_minimum_size.y = 34
 	summary.add_child(alert_label)
+	details_toggle = Button.new()
+	details_toggle.text = "DETAILS ▸"
+	details_toggle.tooltip_text = "Show or hide mood, power, air, hatch, and light readouts."
+	details_toggle.custom_minimum_size.y = 26
+	details_toggle.pressed.connect(_toggle_details_rail)
+	summary.add_child(details_toggle)
+	details_box = VBoxContainer.new()
+	details_box.add_theme_constant_override("separation", 4)
+	details_box.visible = false
+	summary.add_child(details_box)
 	var mood_header := Label.new()
 	mood_header.text = "CREW MOOD"
 	mood_header.add_theme_color_override("font_color", Color("8faeb7"))
-	summary.add_child(mood_header)
+	details_box.add_child(mood_header)
 	crew_mood_label = Label.new()
 	crew_mood_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	crew_mood_label.custom_minimum_size.y = 38
-	summary.add_child(crew_mood_label)
+	details_box.add_child(crew_mood_label)
 	crew_mood_bar = ProgressBar.new()
 	crew_mood_bar.min_value = 0.0
 	crew_mood_bar.max_value = 100.0
 	crew_mood_bar.show_percentage = false
 	crew_mood_bar.custom_minimum_size.y = 10
-	summary.add_child(crew_mood_bar)
+	details_box.add_child(crew_mood_bar)
 	var lighting_row := HBoxContainer.new()
 	lighting_row.add_theme_constant_override("separation", 6)
-	summary.add_child(lighting_row)
+	details_box.add_child(lighting_row)
 	lighting_label = Label.new()
 	lighting_label.custom_minimum_size = Vector2(188, 26)
 	lighting_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -183,44 +198,44 @@ func _build_interface() -> void:
 	var power_header := Label.new()
 	power_header.text = "POWER GRID"
 	power_header.add_theme_color_override("font_color", Color("8faeb7"))
-	summary.add_child(power_header)
+	details_box.add_child(power_header)
 	power_detail_label = Label.new()
 	power_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	power_detail_label.custom_minimum_size.y = 62
-	summary.add_child(power_detail_label)
+	details_box.add_child(power_detail_label)
 	var oxygen_header := Label.new()
 	oxygen_header.text = "VAULT ATMOSPHERE"
 	oxygen_header.add_theme_color_override("font_color", Color("8faeb7"))
-	summary.add_child(oxygen_header)
+	details_box.add_child(oxygen_header)
 	oxygen_label = Label.new()
 	oxygen_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	oxygen_label.custom_minimum_size.y = 38
-	summary.add_child(oxygen_label)
+	details_box.add_child(oxygen_label)
 	oxygen_bar = ProgressBar.new()
 	oxygen_bar.min_value = 0.0
 	oxygen_bar.max_value = OxygenSystem.MAX_OXYGEN
 	oxygen_bar.show_percentage = false
 	oxygen_bar.custom_minimum_size.y = 10
-	summary.add_child(oxygen_bar)
+	details_box.add_child(oxygen_bar)
 	var breach_header := Label.new()
 	breach_header.text = "PRESSURE HATCH"
 	breach_header.add_theme_color_override("font_color", Color("8faeb7"))
-	summary.add_child(breach_header)
+	details_box.add_child(breach_header)
 	breach_label = Label.new()
 	breach_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	breach_label.custom_minimum_size.y = 64
-	summary.add_child(breach_label)
+	details_box.add_child(breach_label)
 	breach_bar = ProgressBar.new()
 	breach_bar.min_value = 0.0
 	breach_bar.max_value = 100.0
 	breach_bar.show_percentage = false
 	breach_bar.custom_minimum_size.y = 10
-	summary.add_child(breach_bar)
+	details_box.add_child(breach_bar)
 	breach_focus_button = Button.new()
 	breach_focus_button.text = "FOCUS HATCH"
 	breach_focus_button.custom_minimum_size.y = 26
 	breach_focus_button.pressed.connect(func() -> void: game.focus_breach())
-	summary.add_child(breach_focus_button)
+	details_box.add_child(breach_focus_button)
 	summary.add_child(HSeparator.new())
 	right_scroll = ScrollContainer.new()
 	right_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -747,13 +762,30 @@ func refresh() -> void:
 	_refresh_power_detail()
 	pause_button.text = "RESUME" if game.user_paused else "PAUSE"
 	var active_help := game.status_message if game.status_message_left > 0.0 else game._tool_help(game.active_tool)
+	var step: Dictionary = _primary_next_step()
 	if game.status_message_left <= 0.0 and game.active_tool == "select":
-		active_help = "Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job."
+		var select_help := "Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job."
+		if not game.tutorial_open and not game.ended:
+			var next_help := str(step.get("help", "")).strip_edges()
+			if not next_help.is_empty():
+				active_help = "%s %s" % [next_help, select_help]
+			else:
+				active_help = select_help
+		else:
+			active_help = select_help
 	tool_status.text = "%s // %s" % [game.active_tool.to_upper(), active_help]
+	var suggested := str(step.get("tool", ""))
+	for key: String in command_buttons:
+		var button: Button = command_buttons[key]
+		if key == game.active_tool:
+			button.modulate = Color("efc56b")
+		elif key == suggested and not game.tutorial_open and not game.ended:
+			button.modulate = Color("75d4b4")
+		else:
+			button.modulate = Color.WHITE
 	for key: String in command_buttons:
 		var button: Button = command_buttons[key]
 		button.disabled = game.tutorial_open or is_help_open() or game.ended
-		button.modulate = Color("efc56b") if key == game.active_tool else Color.WHITE
 	if help_button != null:
 		help_button.disabled = (
 			game.tutorial_open
@@ -784,6 +816,103 @@ func refresh() -> void:
 	_refresh_checklist()
 
 
+func _toggle_details_rail() -> void:
+	_details_expanded = not _details_expanded
+	if details_box != null:
+		details_box.visible = _details_expanded
+	if details_toggle != null:
+		details_toggle.text = "DETAILS ▾" if _details_expanded else "DETAILS ▸"
+
+
+func _primary_next_step() -> Dictionary:
+	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
+	var floor_count := game.map_grid.get_floor_cells().size()
+	if floor_count < initial_floor + 12:
+		return {
+			"text": "NEXT // Dig rock beside the chamber [E]",
+			"help": "Select DIG [E], mark rock next to the blue chamber, then wait for a digger.",
+			"tool": "dig",
+		}
+	if game.get_completed_building_count(VaultBuilding.Kind.BED) < 2:
+		return {
+			"text": "NEXT // Build 2 bunks on carved floor",
+			"help": "Select BUNK, place on empty carved floor, and let Craft finish both beds.",
+			"tool": "bed",
+		}
+	if game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) < 1:
+		return {
+			"text": "NEXT // Build a Charge Node for power",
+			"help": "Select CHARGE, place it, and wait for supply + build. It adds +7 power.",
+			"tool": "generator",
+		}
+	var cook_ok := _has_eligible_worker("cook")
+	var haul_ok := _has_eligible_worker("haul")
+	var food_ready := (
+		game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) >= 1
+		and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) >= 1
+		and cook_ok
+		and haul_ok
+	)
+	if not food_ready:
+		if game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY) < 1:
+			return {
+				"text": "NEXT // Build and power a Grow Tray",
+				"help": "Select GROW, place it, power it, and keep Haul enabled so output is stored.",
+				"tool": "grow",
+			}
+		if game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) < 1:
+			return {
+				"text": "NEXT // Build and power a Nutrient Station",
+				"help": "Select NUTRI, place it, power it, and keep Cook + Haul enabled.",
+				"tool": "kitchen",
+			}
+		return {
+			"text": "NEXT // Power food chain; keep Cook + Haul on",
+			"help": "Enable Grow Tray + Nutrient Station power and leave Cook/Haul above OFF.",
+			"tool": "select",
+		}
+	if game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) < 1:
+		return {
+			"text": "NEXT // Power an Air Recycler (AIR $14)",
+			"help": "Select AIR, build it, and keep it powered (3 power).",
+			"tool": "air",
+		}
+	var hatch_ready := (
+		game.breach_system.is_sealed()
+		or (
+			game.food_system.salvage
+				+ game.breach_system.patch_delivered
+				+ game.job_system.get_breach_supply_in_transit()
+				>= BreachSystem.PATCH_COST
+			and _has_eligible_worker("haul")
+			and _has_eligible_worker("craft")
+		)
+	)
+	if not hatch_ready:
+		return {
+			"text": "NEXT // Keep 4 salvage + Haul/Craft ready for hatch",
+			"help": "Reserve 4 salvage and leave Haul + Craft above OFF before the hatch warning.",
+			"tool": "select",
+		}
+	if not game.breach_system.is_sealed():
+		return {
+			"text": "NEXT // Patch and seal the maintenance hatch",
+			"help": "When the hatch warns, keep Haul + Craft working until the patch completes.",
+			"tool": "select",
+		}
+	if not game.day_cycle.completed:
+		return {
+			"text": "NEXT // Hold the wing through Day 7",
+			"help": "Keep food, power, air, and the sealed hatch stable until Day 7 completes.",
+			"tool": "select",
+		}
+	return {
+		"text": "NEXT // Wing stable — check victory blockers",
+		"help": "Seal and breathable O2 remain required at Day 7.",
+		"tool": "select",
+	}
+
+
 func _refresh_objective() -> void:
 	if game.day_cycle.completed and not game.ended:
 		var blockers: Array[String] = []
@@ -794,8 +923,20 @@ func _refresh_objective() -> void:
 		objective_label.text = "VICTORY PENDING // %s" % " + ".join(blockers)
 		objective_label.add_theme_color_override("font_color", Color("ef6860"))
 		return
-	objective_label.text = "OBJECTIVE // 7 DAYS · SEAL · O2"
+	var step: Dictionary = _primary_next_step()
+	objective_label.text = str(step.get("text", "NEXT // Survive"))
 	objective_label.add_theme_color_override("font_color", Color("efc56b"))
+	if (
+		game.breach_system.phase == BreachSystem.Phase.WARNING
+		or game.breach_system.phase == BreachSystem.Phase.OPEN
+		or game.power_grid.brownout_active
+		or game.oxygen_system.is_low()
+	):
+		if details_box != null and not _details_expanded:
+			_details_expanded = true
+			details_box.visible = true
+			if details_toggle != null:
+				details_toggle.text = "DETAILS ▾"
 
 
 func _refresh_roster() -> void:
