@@ -4,9 +4,13 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GODOT_BIN="${1:-${GODOT_BIN:-/tmp/godot-4.7.2/Godot_v4.7.2-stable_linux.x86_64}}"
 TEST_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vault-tycoon-headless.XXXXXX")"
+COLD_ROOT=""
 
 cleanup() {
 	rm -rf -- "$TEST_DATA_DIR"
+	if [[ -n "${COLD_ROOT}" ]]; then
+		rm -rf -- "$COLD_ROOT"
+	fi
 }
 trap cleanup EXIT
 
@@ -29,6 +33,8 @@ run_godot_check() {
 	fi
 }
 
+cd "$PROJECT_ROOT"
+
 run_godot_check import --editor --quit
 run_godot_check tests --script res://tests/test_runner.gd
 run_godot_check mood-recreation --script res://tests/test_mood_recreation.gd
@@ -40,5 +46,23 @@ run_godot_check food-hauling --script res://tests/test_food_hauling.gd
 run_godot_check lighting-darkness --script res://tests/test_lighting_darkness.gd
 run_godot_check manual-draft-forced-orders --script res://tests/test_manual_draft_forced_orders.gd
 run_godot_check boot --quit-after 5
+
+# Fresh-clone cold boot: class cache must resolve global GDScript classes without an editor visit.
+COLD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vault-tycoon-cold.XXXXXX")"
+git archive HEAD | tar -x -C "$COLD_ROOT"
+if [[ ! -f "$COLD_ROOT/.godot/global_script_class_cache.cfg" ]]; then
+	echo "Missing committed .godot/global_script_class_cache.cfg in archive." >&2
+	exit 1
+fi
+COLD_LOG="$TEST_DATA_DIR/cold_boot.log"
+if ! XDG_DATA_HOME="$TEST_DATA_DIR/cold_userdata" timeout 60s "$GODOT_BIN" --headless --path "$COLD_ROOT" --quit-after 2 2>&1 | tee "$COLD_LOG"; then
+	echo "Cold-boot Godot launch failed." >&2
+	exit 1
+fi
+if grep -E -q 'SCRIPT ERROR:|Parse Error:|Failed to load script' "$COLD_LOG"; then
+	echo "Cold-boot launch logged script/parse errors (HUD would be missing)." >&2
+	exit 1
+fi
+echo "Cold-boot class-cache check passed."
 
 echo "All Vault Tycoon headless checks passed."

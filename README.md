@@ -30,6 +30,8 @@ godot --path .
 
 If your installation exposes `godot4` or an absolute executable path instead of `godot`, substitute that command in the examples. Confirm the exact engine version with `godot --version`; use 4.7.2 to match this project.
 
+Fresh clones include `.godot/global_script_class_cache.cfg` so `godot --path .` resolves global GDScript classes without opening the editor first. If that file is missing, open the project once with `godot --editor --path .` (or re-checkout tip) before a bare `--path` playtest; otherwise scripts fail to load and you only see the map grid with no HUD.
+
 ## First shift
 
 The game opens paused on the seal-stabilization checklist. Select **BEGIN SHIFT** to play. Use **HELP** in the lower toolbar to reopen the checklist at any time; the simulation pauses while Help is visible, and closing it restores the prior running or paused state.
