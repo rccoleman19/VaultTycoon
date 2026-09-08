@@ -1037,7 +1037,7 @@ func _refresh_checklist() -> void:
 		and cook_enabled
 	)
 	var checks := [
-		[game.map_grid.get_floor_cells().size() >= initial_floor_count + 12, "Dig 12 connected rock tiles; rubble yields 3 salvage"],
+		[game.map_grid.get_floor_cells().size() >= initial_floor_count + 12, "Excavate at least 12 connected tiles; haul rubble for salvage"],
 		[game.get_completed_building_count(VaultBuilding.Kind.BED) >= 2, "Assemble at least 2 bunks"],
 		[game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) >= 1, "Build a Charge Node (+7 power)"],
 		[food_chain_ready, "Power Grow Tray + Nutrient Station; keep Cook enabled"],

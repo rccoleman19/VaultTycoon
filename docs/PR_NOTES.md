@@ -2,7 +2,7 @@
 
 ## Summary
 
-This change tunes Vault Tycoon's existing Godot 4.7.x desktop prototype so a competent first session can reach a managed day-seven victory without perfect play. The starting kit now provides 12 meals, 4 raw food, and 42 salvage while retaining 100% starting oxygen, the 2-power emergency core, one Lumen, and one Salvage Bay. Expansion remains necessary, and an untouched wing remains designed to fail.
+This change tunes Vault Tycoon's existing Godot 4.7.x desktop prototype so a competent first session can reach a managed day-seven victory without perfect play. The starting kit now provides 12 meals, 4 raw food, and 48 salvage while retaining 100% starting oxygen, the 2-power emergency core, one Lumen, and one Salvage Bay. Expansion remains necessary, and an untouched wing remains designed to fail.
 
 The in-game checklist now follows the actual survival path: connected excavation, bunks, added power, powered food production, powered air recycling, and preparation for the maintenance-hatch patch. **HELP** in the bottom toolbar reopens that checklist and pauses the simulation while it is visible. Closing Help restores the prior running or paused state. Recreation and numeric work specialization are clearly marked as optional support tools rather than victory requirements.
 
@@ -26,14 +26,14 @@ This is a polish and balance slice, not a new major system. It preserves the sea
 | --- | ---: |
 | Meals | 12 |
 | Raw food | 4 |
-| Salvage | 42 |
+| Salvage | 48 |
 | Vault oxygen | 100% |
 | Emergency Core | 2 power |
 | Lumen | Built; 1-power demand |
 | Salvage Bay | Built |
 | Salvage per excavated tile | 3 after rubble is hauled |
 
-The checklist asks for at least 12 connected excavations. Their 36 recoverable salvage brings the route's total pool to 78.
+The checklist asks for at least 12 connected excavations. Their 36 recoverable salvage brings the route's total pool to 84.
 
 | Critical-route spend | Salvage |
 | --- | ---: |
@@ -45,7 +45,7 @@ The checklist asks for at least 12 connected excavations. Their 36 recoverable s
 | Maintenance-hatch patch | 4 |
 | **Total** | **74** |
 
-That leaves 4 salvage beyond the complete critical route. A 15-tile expansion yields 45 salvage and a total pool of 87, enough to add the optional 8-salvage Rec Console while preserving hatch-patch stock and a small buffer.
+That leaves 10 salvage beyond the complete critical route, enough to absorb one unnecessary small fixture or another minor first-session mistake. A 15-tile expansion yields 45 salvage and a total pool of 93, leaving 7 salvage after adding the optional 8-salvage Rec Console and completing the hatch patch.
 
 Blueprint placement does not spend salvage immediately. Residents with Haul enabled supply queued fixtures as material becomes available, then residents with Craft enabled assemble them. Players must still recover excavated rubble and avoid committing the 4 salvage reserved for the hatch response.
 
@@ -181,7 +181,7 @@ godot --editor --path .
 
 Run the project with **F5**, then exercise this route:
 
-1. Confirm a new wing opens paused with 12 meals, 4 raw food, 42 salvage, 100% oxygen, four living residents, a 2-power emergency core, one Lumen, and one Salvage Bay.
+1. Confirm a new wing opens paused with 12 meals, 4 raw food, 48 salvage, 100% oxygen, four living residents, a 2-power emergency core, one Lumen, and one Salvage Bay.
 2. Start the shift, reopen **HELP**, and confirm simulation time does not advance while the checklist is visible. Close it with **CLOSE** and **Esc** in separate checks; confirm each restores the prior running or paused state.
 3. Confirm tool guidance explains that right-click/**Esc** returns to Select and **X** activates Cancel, and that the active tool's help returns after transient messages.
 4. Designate a connected excavation chain. Confirm rubble yields 3 salvage per completed tile only after hauling and the checklist advances at 12 completed excavations.
@@ -215,7 +215,7 @@ GODOT_BIN=/absolute/path/to/godot scripts/check.sh
 
 The full command runs the headless editor import, core gameplay suite, mood/recreation suite, work-priorities suite, breach-modal speed-key regression, and five-frame boot check in an isolated temporary user-data directory.
 
-The core acceptance coverage includes both sides of the balance target: an order-driven 15-excavation route with two Bunks and optional recreation must preserve all four residents, seal the hatch, and finish at or above 15% oxygen, while an untouched wing must still fail before day seven.
+The core acceptance coverage includes both sides of the balance target: a staged 12-excavation required route must preserve all four residents, seal the hatch, finish above the low-air band, retain food, and leave at least 10 salvage; a 15-designation optional-recreation route must also win with at least 7 salvage; and an untouched wing must still fail before day seven.
 
 ## Save and compatibility contract
 

@@ -9,7 +9,7 @@ const COOK_INPUT := 1
 const COOK_OUTPUT := 1
 const STARTING_MEALS := 12
 const STARTING_RAW_FOOD := 4
-const STARTING_SALVAGE := 42
+const STARTING_SALVAGE := 48
 
 var meals := STARTING_MEALS
 var raw_food := STARTING_RAW_FOOD

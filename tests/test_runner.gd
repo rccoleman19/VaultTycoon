@@ -51,7 +51,8 @@ func _run() -> void:
 	_run_case("save and load preserve a deterministic simulation", _test_save_load_round_trip)
 	_run_case("interrupted save writes preserve the prior slot", _test_atomic_save_recovery)
 	_run_case("an unmanaged wing fails before day seven", _test_unmanaged_loss)
-	_run_case("a first-session order path reaches a comfortable day-seven win", _test_player_order_survival_plan)
+	_run_case("the twelve-dig required path reaches day seven with recovery margin", _test_required_first_session_path)
+	_run_case("the optional recreation path reaches a comfortable day-seven win", _test_player_order_survival_plan)
 	_run_case("a managed wing survives to the day-seven win", _test_managed_day_seven_win)
 
 	print("")
@@ -103,7 +104,7 @@ func _test_scene_boot_and_initial_state() -> void:
 	_assert_equal(game.food_system.salvage, FoodSystem.STARTING_SALVAGE, "new wing receives the tuned salvage reserve")
 	_assert_equal(FoodSystem.STARTING_MEALS, 12, "first-session kit starts with twelve meals")
 	_assert_equal(FoodSystem.STARTING_RAW_FOOD, 4, "first-session kit starts with four raw food")
-	_assert_equal(FoodSystem.STARTING_SALVAGE, 42, "first-session kit starts with forty-two salvage")
+	_assert_equal(FoodSystem.STARTING_SALVAGE, 48, "first-session kit starts with forty-eight salvage")
 	_assert_approximately(game.oxygen_system.oxygen, OxygenSystem.STARTING_OXYGEN, 0.0001, "new wing starts with full oxygen")
 	_assert_true(game.tutorial_open, "opening briefing is visible")
 	_assert_true(game.player_orders.briefing_overlay.visible, "opening checklist overlay is visible")
@@ -432,7 +433,7 @@ func _test_order_preview_and_checklist() -> void:
 	game.player_orders._refresh_checklist()
 	var checklist_text := game.player_orders.checklist.text
 	for expected_label in [
-		"Dig 12 connected rock tiles; rubble yields 3 salvage",
+		"Excavate at least 12 connected tiles; haul rubble for salvage",
 		"Assemble at least 2 bunks",
 		"Build a Charge Node (+7 power)",
 		"Power Grow Tray + Nutrient Station; keep Cook enabled",
@@ -1575,11 +1576,54 @@ func _test_unmanaged_loss() -> void:
 	_dispose(game)
 
 
+func _test_required_first_session_path() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.set_tool("dig")
+	var dig_cells: Array[Vector2i] = []
+	for x in [16, 15, 14, 13]:
+		for y in [14, 15, 16]:
+			dig_cells.append(Vector2i(x, y))
+	for cell: Vector2i in dig_cells:
+		_assert_true(game.issue_order(cell), "required expansion accepts dig designation at %s" % cell)
+	game.step_simulation(40.0)
+	var plans := [
+		[VaultBuilding.Kind.BED, Vector2i(27, 12)],
+		[VaultBuilding.Kind.BED, Vector2i(26, 12)],
+		[VaultBuilding.Kind.GENERATOR, Vector2i(21, 12)],
+		[VaultBuilding.Kind.KITCHEN, Vector2i(22, 12)],
+		[VaultBuilding.Kind.GROW_TRAY, Vector2i(23, 12)],
+		[VaultBuilding.Kind.AIR_RECYCLER, Vector2i(24, 12)],
+	]
+	for plan in plans:
+		_assert_true(game.place_blueprint(int(plan[0]), plan[1]), "required fixture blueprint is accepted")
+	game.step_simulation(BreachSystem.WARNING_AT_SECONDS - game.day_cycle.elapsed_seconds + VaultGame.SIMULATION_TICK)
+	_assert_true(game.user_paused and game.player_orders.breach_warning_panel.visible, "required path reaches the hatch warning")
+	game.player_orders.breach_resume_button.pressed.emit()
+	_assert_true(game.breach_system.warning_acknowledged, "required path acknowledges the hatch warning")
+
+	var remaining := DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE - game.day_cycle.elapsed_seconds
+	game.step_simulation(remaining + 1.0)
+
+	for cell: Vector2i in dig_cells:
+		_assert_equal(game.map_grid.get_tile(cell), MapGrid.Tile.FLOOR, "required expansion tile was excavated")
+	for plan in plans:
+		var building: VaultBuilding = game.get_building_at(plan[1])
+		_assert_true(building != null and building.complete, "required fixture at %s was supplied and assembled" % plan[1])
+	_assert_equal(game.outcome, "win", "the twelve-dig required path reaches day-seven victory")
+	_assert_equal(game.get_alive_count(), 4, "the required path preserves all four residents")
+	_assert_true(game.breach_system.is_sealed(), "the required path finishes with a sealed hatch")
+	_assert_true(game.oxygen_system.oxygen >= OxygenSystem.LOW_OXYGEN_THRESHOLD, "the required path finishes above the low-air band")
+	_assert_true(game.food_system.meals > 0 or game.food_system.raw_food > 0, "the required path retains food")
+	_assert_true(game.food_system.salvage >= 10, "the required path retains ten salvage for one recoverable mistake")
+	_dispose(game)
+
+
 func _test_player_order_survival_plan() -> void:
 	var game := _spawn_game()
 	_assert_equal(game.food_system.meals, 12, "first-session route starts with the tuned meal headroom")
 	_assert_equal(game.food_system.raw_food, 4, "first-session route starts with the tuned raw-food headroom")
-	_assert_equal(game.food_system.salvage, 42, "first-session route starts with the tuned salvage headroom")
+	_assert_equal(game.food_system.salvage, 48, "first-session route starts with the tuned salvage headroom")
 	game.begin_shift()
 	game.set_tool("dig")
 	var dig_cells: Array[Vector2i] = []
@@ -1616,8 +1660,8 @@ func _test_player_order_survival_plan() -> void:
 
 	var remaining := DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE - game.day_cycle.elapsed_seconds
 	game.step_simulation(remaining + VaultGame.SIMULATION_TICK)
-	for cell: Vector2i in dig_cells:
-		_assert_equal(game.map_grid.get_tile(cell), MapGrid.Tile.FLOOR, "planned expansion tile was excavated")
+	var initial_floor_count := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
+	_assert_true(game.map_grid.get_floor_cells().size() >= initial_floor_count + 12, "optional route completes at least the twelve-tile expansion target")
 	for plan in plans:
 		var building: VaultBuilding = game.get_building_at(plan[1])
 		_assert_true(building != null and building.complete, "survival fixture at %s was supplied and assembled" % plan[1])
@@ -1631,7 +1675,7 @@ func _test_player_order_survival_plan() -> void:
 	_assert_true(game.oxygen_system.oxygen >= OxygenSystem.CRITICAL_OXYGEN_THRESHOLD, "the first-session win finishes at or above 15 percent oxygen")
 	_assert_true(game.oxygen_system.oxygen >= OxygenSystem.LOW_OXYGEN_THRESHOLD, "the managed path finishes with oxygen headroom above the low-air band")
 	_assert_true(game.food_system.meals > 0 or game.food_system.raw_food > 0, "the managed path finishes with food headroom")
-	_assert_true(game.food_system.salvage > 0, "the fifteen-tile expansion leaves salvage after the optional console and hatch patch")
+	_assert_true(game.food_system.salvage >= 7, "the fifteen-tile expansion leaves at least seven salvage after the optional console and hatch patch")
 	_dispose(game)
 
 
