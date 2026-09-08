@@ -929,21 +929,30 @@ func _refresh_objective() -> void:
 			blockers.append("RESTORE O2 TO 15%")
 		objective_label.text = "VICTORY PENDING // %s" % " + ".join(blockers)
 		objective_label.add_theme_color_override("font_color", Color("ef6860"))
+		_expand_details_on_urgency()
 		return
 	var step: Dictionary = _primary_next_step()
 	objective_label.text = str(step.get("text", "NEXT // Survive"))
 	objective_label.add_theme_color_override("font_color", Color("efc56b"))
-	if (
+	_expand_details_on_urgency()
+
+
+func _expand_details_on_urgency() -> void:
+	if not (
 		game.breach_system.phase == BreachSystem.Phase.WARNING
 		or game.breach_system.phase == BreachSystem.Phase.OPEN
 		or game.power_grid.brownout_active
 		or game.oxygen_system.is_low()
+		or (game.day_cycle.completed and not game.ended and (
+			not game.breach_system.is_sealed() or not game.oxygen_system.is_breathable()
+		))
 	):
-		if details_box != null and not _details_expanded:
-			_details_expanded = true
-			details_box.visible = true
-			if details_toggle != null:
-				details_toggle.text = "DETAILS ▾"
+		return
+	if details_box != null and not _details_expanded:
+		_details_expanded = true
+		details_box.visible = true
+		if details_toggle != null:
+			details_toggle.text = "DETAILS ▾"
 
 
 func _refresh_roster() -> void:
