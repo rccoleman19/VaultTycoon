@@ -160,7 +160,6 @@ func _simulation_step(delta_seconds: float) -> void:
 	if ended:
 		return
 	power_grid.recalculate(buildings)
-	refresh_lighting()
 	job_system.reconcile_recreation_state()
 	for resident in residents:
 		if not resident.alive:
@@ -215,7 +214,6 @@ func _simulation_step(delta_seconds: float) -> void:
 		breach_system.advance(0.0, next_elapsed)
 	food_system.advance(delta_seconds, buildings)
 	power_grid.recalculate(buildings)
-	refresh_lighting()
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	day_cycle.advance(delta_seconds)
@@ -387,7 +385,6 @@ func toggle_building_enabled(building_id: int) -> bool:
 			if resident.medical_bed_id == building_id:
 				job_system.release_resident(resident)
 	power_grid.recalculate(buildings)
-	refresh_lighting()
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	var state := "disabled" if building.manually_disabled else "enabled"
@@ -791,7 +788,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("lighting_overlay"):
-		toggle_lighting_overlay()
+		var repeated_key: bool = event is InputEventKey and event.echo
+		var warning_blocked := (
+			breach_system.phase == BreachSystem.Phase.WARNING
+			and not breach_system.warning_acknowledged
+		)
+		if not repeated_key and not tutorial_open and not ended and not warning_blocked:
+			toggle_lighting_overlay()
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("pause_game"):
@@ -925,7 +928,6 @@ func _remove_building(building: VaultBuilding, salvage_refund: int, message: Str
 	buildings.erase(building)
 	building.free()
 	power_grid.recalculate(buildings)
-	refresh_lighting()
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	status_message = message

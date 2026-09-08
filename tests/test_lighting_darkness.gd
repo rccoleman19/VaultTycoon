@@ -11,6 +11,7 @@ func _run() -> void:
 	_run_case("brownout shedding removes lumen coverage until power recovers", _test_brownout_and_recovery)
 	_run_case("lighting is derived across active and legacy snapshots", _test_derived_save_and_legacy_state)
 	_run_case("coverage display control does not mutate the simulation", _test_display_only_control)
+	await _run_layout_case()
 
 	print("")
 	if _failure_count == 0:
@@ -24,6 +25,46 @@ func _run() -> void:
 			_assertion_count,
 		])
 		quit(1)
+
+
+func _run_layout_case() -> void:
+	_case_count += 1
+	_current_case = "lighting HUD preserves controls and roster space at 1280 by 720"
+	var failures_before := _failure_count
+	print("[TEST] %s" % _current_case)
+	await _test_1280_by_720_layout()
+	if _failure_count == failures_before:
+		print("[PASS] %s" % _current_case)
+	else:
+		_failed_case_count += 1
+
+
+func _test_1280_by_720_layout() -> void:
+	root.size = Vector2i(1280, 720)
+	var game := _spawn_game()
+	game.begin_shift()
+	game.player_orders.refresh()
+	await process_frame
+	await process_frame
+	var viewport_rect := root.get_viewport().get_visible_rect()
+	_assert_equal(viewport_rect.size, Vector2(1280, 720), "layout test uses the supported desktop viewport")
+	var speed_three := _find_button_by_text(game.player_orders.root, "3x")
+	_assert_true(speed_three != null, "top bar retains the 3x speed control")
+	if speed_three != null:
+		_assert_true(speed_three.get_global_rect().end.x <= viewport_rect.end.x, "3x speed control remains inside the viewport")
+	var light_button_rect := game.player_orders.lighting_overlay_button.get_global_rect()
+	_assert_true(light_button_rect.end.x <= viewport_rect.end.x, "Light Map button remains inside the viewport")
+	_assert_true(game.player_orders.right_scroll.size.y >= 100.0, "right HUD preserves meaningful roster and inspector scroll space")
+	_assert_true(game.player_orders.right_scroll.get_global_rect().end.y <= viewport_rect.end.y, "right HUD scroll area remains inside the viewport")
+	_dispose(game)
+
+
+func _find_button_by_text(parent: Node, target_text: String) -> Button:
+	for candidate: Node in parent.find_children("*", "Button", true, false):
+		var button := candidate as Button
+		if button != null and button.text == target_text:
+			return button
+	return null
 
 
 func _test_coverage_geometry_and_starting_counts() -> void:
@@ -50,13 +91,16 @@ func _test_coverage_geometry_and_starting_counts() -> void:
 		game.map_grid.get_floor_cells().size(),
 		"lit and dark counts partition all carved floor",
 	)
+	_assert_true(game.map_grid.z_index < lighting.z_index, "darkness renders above carved floor")
+	_assert_true(lighting.z_index < game.building_root.z_index, "darkness renders below fixtures")
+	_assert_true(lighting.z_index < game.resident_root.z_index, "darkness renders below residents and their status labels")
 	for resident: VaultResident in game.residents:
 		_assert_true(lighting.is_cell_lit(resident.get_cell(game.map_grid)), "%s starts in powered light" % resident.resident_name)
 
 	game.player_orders.refresh()
-	_assert_true("FLOOR 99/120 LIT" in game.player_orders.lighting_label.text, "right HUD reports exact starting floor coverage")
-	_assert_true("LUMENS 1/1 ONLINE" in game.player_orders.lighting_label.text, "right HUD reports powered and completed Lumens")
-	_assert_true("CREW UNLIT 0" in game.player_orders.lighting_label.text, "right HUD reports that every starting resident is lit")
+	_assert_true("LIT 99/120" in game.player_orders.lighting_label.text, "right HUD reports exact starting floor coverage")
+	_assert_true("L1/1" in game.player_orders.lighting_label.text, "right HUD reports powered and completed Lumens")
+	_assert_true("D0" in game.player_orders.lighting_label.text, "right HUD reports that every starting resident is lit")
 	_assert_true(game.player_orders.lighting_overlay_button.text.ends_with("OFF"), "right HUD reports the default Light Map state")
 	var starting_lumen: VaultBuilding = game.get_building_at(Vector2i(22, 14))
 	game.select_building(starting_lumen.building_id)
@@ -68,8 +112,17 @@ func _test_coverage_geometry_and_starting_counts() -> void:
 	var dark_resident: VaultResident = game.residents[0]
 	dark_resident.position = game.map_grid.cell_to_world(Vector2i(28, 20))
 	game.player_orders.refresh()
-	_assert_true("CREW UNLIT 1" in game.player_orders.lighting_label.text, "right HUD updates when one resident enters darkness")
+	_assert_true("D1" in game.player_orders.lighting_label.text, "right HUD updates when one resident enters darkness")
 	_assert_true("DARKNESS · 1 CREW UNLIT" in game.player_orders.alert_label.text, "darkness alert reports the affected crew count")
+
+	var dark_rock := Vector2i(29, 20)
+	var topology_before := game.map_grid.topology_revision
+	_assert_true(game.map_grid.queue_dig(dark_rock), "a dark rock cell adjacent to the chamber can be queued")
+	_assert_true(game.map_grid.apply_dig_work(dark_rock, 8.0), "dark excavation completes through the map API")
+	_assert_equal(game.map_grid.topology_revision, topology_before + 1, "excavation advances the topology revision")
+	_assert_true(lighting.is_floor_dark(dark_rock), "new dark floor appears in the lighting cache immediately")
+	_assert_equal(lighting.get_lit_floor_count(), 99, "dark excavation does not change powered coverage")
+	_assert_equal(lighting.get_dark_floor_count(), 22, "dark excavation immediately expands the darkness count")
 	_dispose(game)
 
 
@@ -87,7 +140,7 @@ func _test_lumen_lifecycle_and_overlap() -> void:
 	game.user_paused = true
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.LAMP, target), "Lumen blueprint accepts empty carved floor")
 	var first_lumen: VaultBuilding = game.get_building_at(target)
-	game.refresh_lighting()
+	game.power_grid.recalculate(game.buildings)
 	_assert_equal(lighting.get_completed_lumen_count(), 1, "unfinished blueprint is excluded from completed Lumen count")
 	_assert_equal(lighting.get_powered_lumen_count(), 0, "unfinished blueprint cannot provide powered light")
 	_assert_false(lighting.is_cell_lit(target), "unfinished Lumen does not light its own cell")
@@ -95,7 +148,6 @@ func _test_lumen_lifecycle_and_overlap() -> void:
 	first_lumen.add_delivery(first_lumen.get_cost())
 	first_lumen.apply_build_work(first_lumen.get_build_time())
 	game.power_grid.recalculate(game.buildings)
-	game.refresh_lighting()
 	_assert_true(first_lumen.complete and first_lumen.powered, "supplied and assembled Lumen receives power")
 	_assert_equal(lighting.get_completed_lumen_count(), 2, "finished Lumen joins the completed count")
 	_assert_equal(lighting.get_powered_lumen_count(), 1, "finished Lumen joins powered coverage")
@@ -103,7 +155,6 @@ func _test_lumen_lifecycle_and_overlap() -> void:
 
 	var second_lumen := _add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(26, 20))
 	game.power_grid.recalculate(game.buildings)
-	game.refresh_lighting()
 	_assert_equal(lighting.get_completed_lumen_count(), 3, "overlapping fixture is counted independently")
 	_assert_equal(lighting.get_powered_lumen_count(), 2, "both enabled overlapping Lumens receive emergency power")
 	_assert_true(lighting.is_cell_lit(target), "overlapping powered Lumens cover the target")
@@ -174,7 +225,6 @@ func _test_brownout_and_recovery() -> void:
 	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(20, 12))
 	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(21, 12))
 	game.power_grid.recalculate(game.buildings)
-	game.refresh_lighting()
 	_assert_equal(game.power_grid.supply, 9, "brownout fixture has nine available power")
 	_assert_equal(game.power_grid.demand, 10, "three critical recyclers and one Lumen demand ten power")
 	_assert_true(game.power_grid.is_building_shed(lumen.building_id), "critical recycler load sheds the lower-priority Lumen")
@@ -234,6 +284,13 @@ func _test_derived_save_and_legacy_state() -> void:
 	_assert_equal(loaded.lighting_system.get_powered_lumen_count(), 1, "legacy load rebuilds the powered source count")
 	_assert_equal(loaded.lighting_system.get_lit_floor_count(), 99, "legacy load rebuilds exact coverage")
 	_assert_equal(loaded.lighting_system.get_dark_floor_count(), 21, "legacy load rebuilds the complementary dark count")
+	_assert_true(loaded.toggle_lighting_overlay(), "coverage can be shown before a rejected load")
+	var invalid_snapshot: Dictionary = legacy_snapshot.duplicate(true)
+	invalid_snapshot.map.cells.pop_back()
+	_assert_false(loaded.apply_snapshot(invalid_snapshot), "structurally invalid snapshot is rejected")
+	_assert_true(loaded.lighting_system.is_coverage_overlay_visible(), "rejected load preserves transient coverage visibility")
+	_assert_equal(loaded.lighting_system.get_lit_floor_count(), 99, "rejected load preserves derived lit coverage")
+	_assert_equal(loaded.lighting_system.get_dark_floor_count(), 21, "rejected load preserves derived dark coverage")
 
 	var file_loaded := _spawn_game()
 	_assert_true(file_loaded.toggle_lighting_overlay(), "fresh load target can show transient coverage guides")
@@ -266,6 +323,27 @@ func _test_display_only_control() -> void:
 	var lighting_event := InputEventKey.new()
 	lighting_event.physical_keycode = KEY_L
 	lighting_event.pressed = true
+	lighting_event.echo = true
+	game._unhandled_input(lighting_event)
+	_assert_false(game.lighting_system.is_coverage_overlay_visible(), "repeated L key events do not flicker the coverage view")
+	lighting_event.echo = false
+	game.player_orders.show_work_priorities(true)
+	game._unhandled_input(lighting_event)
+	_assert_false(game.lighting_system.is_coverage_overlay_visible(), "work-priority modal blocks the Light Map shortcut")
+	game.player_orders.show_work_priorities(false)
+	game.player_orders.show_briefing(true, false)
+	game._unhandled_input(lighting_event)
+	_assert_false(game.lighting_system.is_coverage_overlay_visible(), "Help blocks the Light Map shortcut")
+	game.player_orders.show_briefing(false)
+	game.breach_system.phase = BreachSystem.Phase.WARNING
+	game.breach_system.warning_acknowledged = false
+	game._unhandled_input(lighting_event)
+	_assert_false(game.lighting_system.is_coverage_overlay_visible(), "unacknowledged breach warning blocks the Light Map shortcut")
+	game.breach_system.phase = BreachSystem.Phase.DORMANT
+	game.ended = true
+	game._unhandled_input(lighting_event)
+	_assert_false(game.lighting_system.is_coverage_overlay_visible(), "outcome state blocks the Light Map shortcut")
+	game.ended = false
 	game._unhandled_input(lighting_event)
 	_assert_true(game.lighting_system.is_coverage_overlay_visible(), "dispatching L shows powered-Lumen coverage")
 	_assert_false(game.is_simulation_paused(), "showing coverage does not pause a running shift")

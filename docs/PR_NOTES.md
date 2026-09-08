@@ -64,7 +64,7 @@ by resident mood.
 Validation completed with Godot 4.7.2 via `./scripts/check.sh`:
 
 - Lighting/darkness focused suite (`tests/test_lighting_darkness.gd`): **PASS**,
-  7 cases and 132 assertions
+  8 cases and 157 assertions
 - Existing core and focused regressions: **PASS**
 - Headless editor import and five-frame main-scene boot: **PASS**
 

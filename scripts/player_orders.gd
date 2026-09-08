@@ -158,20 +158,20 @@ func _build_interface() -> void:
 	crew_mood_bar.show_percentage = false
 	crew_mood_bar.custom_minimum_size.y = 10
 	summary.add_child(crew_mood_bar)
-	var lighting_header := Label.new()
-	lighting_header.text = "LIGHTING"
-	lighting_header.add_theme_color_override("font_color", Color("8faeb7"))
-	summary.add_child(lighting_header)
+	var lighting_row := HBoxContainer.new()
+	lighting_row.add_theme_constant_override("separation", 6)
+	summary.add_child(lighting_row)
 	lighting_label = Label.new()
-	lighting_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	lighting_label.custom_minimum_size.y = 38
-	summary.add_child(lighting_label)
+	lighting_label.custom_minimum_size = Vector2(188, 26)
+	lighting_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lighting_label.add_theme_font_size_override("font_size", 14)
+	lighting_row.add_child(lighting_label)
 	lighting_overlay_button = Button.new()
-	lighting_overlay_button.text = "LIGHT MAP [L]"
+	lighting_overlay_button.text = "[L] MAP OFF"
 	lighting_overlay_button.tooltip_text = "Show exact powered-Lumen floor coverage without changing simulation lighting."
-	lighting_overlay_button.custom_minimum_size.y = 26
+	lighting_overlay_button.custom_minimum_size = Vector2(82, 26)
 	lighting_overlay_button.pressed.connect(func() -> void: game.toggle_lighting_overlay())
-	summary.add_child(lighting_overlay_button)
+	lighting_row.add_child(lighting_overlay_button)
 	var power_header := Label.new()
 	power_header.text = "POWER GRID"
 	power_header.add_theme_color_override("font_color", Color("8faeb7"))
@@ -1033,16 +1033,21 @@ func _refresh_lighting() -> void:
 	var dark_floor := lighting.get_dark_floor_count()
 	var total_floor := lit_floor + dark_floor
 	var dark_residents := game.get_dark_resident_count()
-	lighting_label.text = "FLOOR %d/%d LIT · %d%%\nLUMENS %d/%d ONLINE · CREW UNLIT %d" % [
+	lighting_label.text = "LIT %d/%d · L%d/%d · D%d" % [
 		lit_floor,
 		total_floor,
+		lighting.get_powered_lumen_count(),
+		lighting.get_completed_lumen_count(),
+		dark_residents,
+	]
+	lighting_label.tooltip_text = "%d%% of carved floor lit · %d/%d Lumens online · %d living residents dark" % [
 		roundi(lighting.get_floor_coverage_percent()),
 		lighting.get_powered_lumen_count(),
 		lighting.get_completed_lumen_count(),
 		dark_residents,
 	]
 	lighting_label.add_theme_color_override("font_color", Color("efc56b") if dark_residents > 0 else Color("75d4b4"))
-	lighting_overlay_button.text = "LIGHT MAP [L] · %s" % ("ON" if lighting.is_coverage_overlay_visible() else "OFF")
+	lighting_overlay_button.text = "[L] MAP %s" % ("ON" if lighting.is_coverage_overlay_visible() else "OFF")
 	lighting_overlay_button.modulate = Color("efc56b") if lighting.is_coverage_overlay_visible() else Color.WHITE
 
 
