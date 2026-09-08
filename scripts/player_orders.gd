@@ -9,6 +9,8 @@ var power_label: Label
 var pause_button: Button
 var objective_label: Label
 var alert_label: Label
+var crew_mood_label: Label
+var crew_mood_bar: ProgressBar
 var power_detail_label: Label
 var oxygen_label: Label
 var oxygen_bar: ProgressBar
@@ -28,6 +30,7 @@ var need_labels: Dictionary = {}
 var need_bars: Dictionary = {}
 var work_buttons: Dictionary = {}
 var command_buttons: Dictionary = {}
+var command_grid: GridContainer
 var tool_status: Label
 var checklist: RichTextLabel
 var briefing_panel: PanelContainer
@@ -39,6 +42,7 @@ var outcome_text: Label
 
 var _last_roster_signature := ""
 var _last_inspected_resident_id := -1
+var _last_inspected_building_id := -1
 
 
 func setup(game_node: VaultGame) -> void:
@@ -107,66 +111,89 @@ func _build_interface() -> void:
 	right_margin.add_theme_constant_override("margin_top", 10)
 	right_margin.add_theme_constant_override("margin_bottom", 10)
 	right_panel.add_child(right_margin)
-	right_scroll = ScrollContainer.new()
-	right_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	right_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	right_margin.add_child(right_scroll)
-	var side := VBoxContainer.new()
-	side.add_theme_constant_override("separation", 4)
-	side.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right_scroll.add_child(side)
+	var rail := VBoxContainer.new()
+	rail.add_theme_constant_override("separation", 4)
+	rail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rail.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	right_margin.add_child(rail)
+	var summary := VBoxContainer.new()
+	summary.add_theme_constant_override("separation", 4)
+	summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rail.add_child(summary)
 	objective_label = Label.new()
 	objective_label.text = "OBJECTIVE // 7 DAYS · SEAL · O2"
 	objective_label.add_theme_color_override("font_color", Color("efc56b"))
 	objective_label.add_theme_font_size_override("font_size", 16)
-	side.add_child(objective_label)
+	summary.add_child(objective_label)
 	alert_label = Label.new()
 	alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	alert_label.custom_minimum_size.y = 38
-	side.add_child(alert_label)
+	summary.add_child(alert_label)
+	var mood_header := Label.new()
+	mood_header.text = "CREW MOOD"
+	mood_header.add_theme_color_override("font_color", Color("8faeb7"))
+	summary.add_child(mood_header)
+	crew_mood_label = Label.new()
+	crew_mood_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	crew_mood_label.custom_minimum_size.y = 38
+	summary.add_child(crew_mood_label)
+	crew_mood_bar = ProgressBar.new()
+	crew_mood_bar.min_value = 0.0
+	crew_mood_bar.max_value = 100.0
+	crew_mood_bar.show_percentage = false
+	crew_mood_bar.custom_minimum_size.y = 10
+	summary.add_child(crew_mood_bar)
 	var power_header := Label.new()
 	power_header.text = "POWER GRID"
 	power_header.add_theme_color_override("font_color", Color("8faeb7"))
-	side.add_child(power_header)
+	summary.add_child(power_header)
 	power_detail_label = Label.new()
 	power_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	power_detail_label.custom_minimum_size.y = 62
-	side.add_child(power_detail_label)
+	summary.add_child(power_detail_label)
 	var oxygen_header := Label.new()
 	oxygen_header.text = "VAULT ATMOSPHERE"
 	oxygen_header.add_theme_color_override("font_color", Color("8faeb7"))
-	side.add_child(oxygen_header)
+	summary.add_child(oxygen_header)
 	oxygen_label = Label.new()
 	oxygen_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	oxygen_label.custom_minimum_size.y = 38
-	side.add_child(oxygen_label)
+	summary.add_child(oxygen_label)
 	oxygen_bar = ProgressBar.new()
 	oxygen_bar.min_value = 0.0
 	oxygen_bar.max_value = OxygenSystem.MAX_OXYGEN
 	oxygen_bar.show_percentage = false
 	oxygen_bar.custom_minimum_size.y = 10
-	side.add_child(oxygen_bar)
+	summary.add_child(oxygen_bar)
 	var breach_header := Label.new()
 	breach_header.text = "PRESSURE HATCH"
 	breach_header.add_theme_color_override("font_color", Color("8faeb7"))
-	side.add_child(breach_header)
+	summary.add_child(breach_header)
 	breach_label = Label.new()
 	breach_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	breach_label.custom_minimum_size.y = 64
-	side.add_child(breach_label)
+	summary.add_child(breach_label)
 	breach_bar = ProgressBar.new()
 	breach_bar.min_value = 0.0
 	breach_bar.max_value = 100.0
 	breach_bar.show_percentage = false
 	breach_bar.custom_minimum_size.y = 10
-	side.add_child(breach_bar)
+	summary.add_child(breach_bar)
 	breach_focus_button = Button.new()
 	breach_focus_button.text = "FOCUS HATCH"
 	breach_focus_button.custom_minimum_size.y = 26
 	breach_focus_button.pressed.connect(func() -> void: game.focus_breach())
-	side.add_child(breach_focus_button)
-	side.add_child(HSeparator.new())
+	summary.add_child(breach_focus_button)
+	summary.add_child(HSeparator.new())
+	right_scroll = ScrollContainer.new()
+	right_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	right_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	rail.add_child(right_scroll)
+	var side := VBoxContainer.new()
+	side.add_theme_constant_override("separation", 4)
+	side.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right_scroll.add_child(side)
 	var roster_header := Label.new()
 	roster_header.text = "RESIDENT ROSTER"
 	roster_header.add_theme_color_override("font_color", Color("8faeb7"))
@@ -183,7 +210,7 @@ func _build_interface() -> void:
 	inspector_state.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	inspector_state.custom_minimum_size.y = 36
 	side.add_child(inspector_state)
-	for need_name in ["food", "rest", "light_mood", "health"]:
+	for need_name in ["food", "rest", "mood", "health"]:
 		var need_row := HBoxContainer.new()
 		var need_label := Label.new()
 		need_label.custom_minimum_size.x = 62
@@ -251,8 +278,9 @@ func _build_interface() -> void:
 	tool_status.text = "SELECT"
 	tool_status.add_theme_color_override("font_color", Color("efc56b"))
 	bottom_content.add_child(tool_status)
-	var command_grid := GridContainer.new()
-	command_grid.columns = 6
+	command_grid = GridContainer.new()
+	command_grid.name = "CommandGrid"
+	command_grid.columns = 7
 	command_grid.add_theme_constant_override("h_separation", 5)
 	command_grid.add_theme_constant_override("v_separation", 4)
 	bottom_content.add_child(command_grid)
@@ -267,6 +295,7 @@ func _build_interface() -> void:
 		["kitchen", "NUTRI $10", "Nutrient Station: 2 power; cooks meals", 96],
 		["stockpile", "BAY $4", "Salvage Bay: hauling destination", 64],
 		["air", "AIR $14", "Air Recycler: 3 power; restores vault oxygen", 86],
+		["rec", "REC $8", "Rec Console: 1 power; restores one resident's mood", 82],
 	]
 	for definition in tools:
 		var button := Button.new()
@@ -298,8 +327,8 @@ func _build_interface() -> void:
 func _build_briefing() -> void:
 	briefing_panel = PanelContainer.new()
 	briefing_panel.set_anchors_preset(Control.PRESET_CENTER)
-	briefing_panel.position = Vector2(-300, -225)
-	briefing_panel.size = Vector2(600, 450)
+	briefing_panel.position = Vector2(-320, -300)
+	briefing_panel.size = Vector2(640, 600)
 	briefing_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	briefing_panel.add_theme_stylebox_override("panel", _panel_style(Color("111b21"), Color("72cdb8"), 3))
 	root.add_child(briefing_panel)
@@ -316,14 +345,14 @@ func _build_briefing() -> void:
 	title.add_theme_color_override("font_color", Color("75d4b4"))
 	content.add_child(title)
 	var intro := Label.new()
-	intro.text = "Four residents share one finite vault atmosphere. Build and power an Air Recycler while stabilizing food, rest, light, and power. When the hatch warning interrupts the shift, Haul four salvage and keep Craft enabled: an open breach rapidly vents oxygen, and critically low air causes suffocation."
+	intro.text = "Four residents share one finite vault atmosphere and the strain of an underground shift. Build and power an Air Recycler, then provide food, bunks, light, and a powered Rec Console. Residents seek recreation automatically at 35 mood. Keep Haul and Craft enabled for the hatch warning: urgent response work preempts recreation."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	intro.custom_minimum_size.y = 78
 	content.add_child(intro)
 	checklist = RichTextLabel.new()
 	checklist.bbcode_enabled = true
-	checklist.fit_content = false
-	checklist.custom_minimum_size.y = 210
+	checklist.fit_content = true
+	checklist.custom_minimum_size.y = 238
 	checklist.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(checklist)
 	var controls := Label.new()
@@ -446,6 +475,7 @@ func refresh() -> void:
 		button.disabled = game.tutorial_open or game.ended
 		button.modulate = Color("efc56b") if key == game.active_tool else Color.WHITE
 	_refresh_roster()
+	_refresh_crew_mood()
 	_refresh_oxygen()
 	_refresh_breach()
 	_refresh_inspector()
@@ -460,7 +490,7 @@ func _refresh_roster() -> void:
 			resident.resident_id,
 			floori(resident.needs.food),
 			floori(resident.needs.rest),
-			floori(resident.needs.light_mood),
+			floori(resident.needs.mood),
 			floori(resident.needs.health),
 			resident.state,
 		])
@@ -472,8 +502,10 @@ func _refresh_roster() -> void:
 		child.queue_free()
 	for resident in game.residents:
 		var button := Button.new()
-		var urgent := minf(resident.needs.food, minf(resident.needs.rest, resident.needs.health))
-		button.text = "%s  |  %s  |  LOW %d" % [resident.resident_name, resident.state, floori(urgent)] if resident.alive else "%s  |  DECEASED" % resident.resident_name
+		var urgent := minf(resident.needs.food, minf(resident.needs.rest, minf(resident.needs.mood, resident.needs.health)))
+		button.text = "%s · MOOD %d · %s · LOW %d" % [resident.resident_name, floori(resident.needs.mood), resident.state, floori(urgent)] if resident.alive else "%s · DECEASED" % resident.resident_name
+		button.tooltip_text = button.text
+		button.clip_text = true
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.disabled = not resident.alive
 		button.pressed.connect(_on_resident_pressed.bind(resident.resident_id))
@@ -483,15 +515,31 @@ func _refresh_roster() -> void:
 func _refresh_inspector() -> void:
 	var resident := game.get_resident_by_id(game.selected_resident_id)
 	if resident != null:
+		_last_inspected_building_id = -1
 		if _last_inspected_resident_id != resident.resident_id:
 			_last_inspected_resident_id = resident.resident_id
 			call_deferred("_reveal_work_permissions")
 		work_header.visible = true
 		inspector_title.text = "%s // RESIDENT" % resident.resident_name.to_upper()
-		inspector_state.text = "Current task: %s\nWork speed: %d%%" % [resident.state, roundi(resident.get_work_multiplier() * 100.0)]
+		var resident_cell := resident.get_cell(game.map_grid)
+		var is_lit := game.power_grid.is_cell_lit(resident_cell, game.buildings)
+		var mood_factors := resident.needs.get_mood_factors(is_lit, resident.sleeping, game.oxygen_system.is_low())
+		if resident.recreating:
+			if game.job_system.is_recreation_running(resident):
+				mood_factors = "Rec Console · +%.0f mood/s" % ResidentNeeds.RECREATION_RECOVERY_PER_SECOND
+			elif game.job_system.is_actively_recreating(resident):
+				mood_factors = "Rec Console · paused"
+			else:
+				mood_factors = "Seeking Rec Console · %s" % resident.needs.get_mood_factors(is_lit, false, game.oxygen_system.is_low())
+		inspector_state.text = "Current task: %s\nWork speed: %d%%\nMood: %s\n%s" % [
+			resident.state,
+			roundi(resident.get_work_multiplier() * 100.0),
+			resident.needs.get_mood_state(),
+			mood_factors,
+		]
 		_set_need("food", "FOOD", resident.needs.food)
 		_set_need("rest", "REST", resident.needs.rest)
-		_set_need("light_mood", "LIGHT", resident.needs.light_mood)
+		_set_need("mood", "MOOD", resident.needs.mood)
 		_set_need("health", "HEALTH", resident.needs.health)
 		for key: String in work_buttons:
 			var button: Button = work_buttons[key]
@@ -502,6 +550,7 @@ func _refresh_inspector() -> void:
 		return
 	_last_inspected_resident_id = -1
 	if game.selected_breach:
+		_last_inspected_building_id = -1
 		inspector_title.text = "MAINTENANCE HATCH"
 		match game.breach_system.phase:
 			BreachSystem.Phase.WARNING:
@@ -525,6 +574,9 @@ func _refresh_inspector() -> void:
 		return
 	var building := game.get_building_by_id(game.selected_building_id)
 	if building != null:
+		if _last_inspected_building_id != building.building_id:
+			_last_inspected_building_id = building.building_id
+			call_deferred("_reveal_fixture_controls")
 		inspector_title.text = building.get_display_name().to_upper()
 		if building.complete:
 			var power_text := "NO DEMAND"
@@ -546,12 +598,27 @@ func _refresh_inspector() -> void:
 				inspector_state.text += "\nRecipe: %d raw -> %d meal" % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
 			elif building.kind == VaultBuilding.Kind.AIR_RECYCLER:
 				inspector_state.text += "\nO2 recovery: +%.1f%%/s" % OxygenSystem.RECYCLER_OUTPUT_PER_SECOND
+			elif building.kind == VaultBuilding.Kind.RECREATION_CONSOLE:
+				inspector_state.text += "\nMood recovery: +%.0f/s · one resident" % ResidentNeeds.RECREATION_RECOVERY_PER_SECOND
+				var console_user := _get_recreation_user(building.building_id)
+				if not building.powered:
+					inspector_state.text += "\nRecreation: OFFLINE"
+				elif console_user != null:
+					var use_state := "RESERVED"
+					if game.job_system.is_recreation_running(console_user):
+						use_state = "IN USE"
+					elif game.job_system.is_actively_recreating(console_user):
+						use_state = "PAUSED"
+					inspector_state.text += "\nRecreation: %s · %s" % [use_state, console_user.resident_name]
+				else:
+					inspector_state.text += "\nRecreation: AVAILABLE · seek at %d%%" % roundi(ResidentNeeds.RECREATION_SEEK_THRESHOLD)
 			_show_fixture_controls(building)
 		else:
 			inspector_state.text = "Blueprint · Salvage %d/%d\nAssembly remaining: %.1fs" % [building.delivered, building.get_cost(), building.construction_left]
 			_hide_fixture_controls()
 		_hide_needs_and_work()
 		return
+	_last_inspected_building_id = -1
 	inspector_title.text = "INSPECTOR"
 	inspector_state.text = "Select a resident or fixture. Dig and build orders are completed through work permissions."
 	_hide_needs_and_work()
@@ -574,6 +641,25 @@ func _refresh_alerts() -> void:
 		alerts.append("POWER BROWNOUT · SHED %s" % game.power_grid.get_shed_summary())
 	if game.get_completed_building_count(VaultBuilding.Kind.BED) < game.get_alive_count():
 		alerts.append("BED SHORTAGE")
+	var lowest_mood_resident: VaultResident = null
+	var recreation_needed := false
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			continue
+		if resident.needs.wants_recreation():
+			recreation_needed = true
+		if lowest_mood_resident == null or resident.needs.mood < lowest_mood_resident.needs.mood:
+			lowest_mood_resident = resident
+	if recreation_needed:
+		if game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) <= 0:
+			alerts.append("NO REC CONSOLE")
+		elif game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) <= 0:
+			alerts.append("REC CONSOLE OFFLINE")
+	if lowest_mood_resident != null:
+		if lowest_mood_resident.needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD:
+			alerts.append("MOOD BREAK RISK · %s" % lowest_mood_resident.resident_name)
+		elif lowest_mood_resident.needs.mood < 40.0:
+			alerts.append("MOOD STRESSED · %s" % lowest_mood_resident.resident_name)
 	var cook_enabled := false
 	for resident in game.residents:
 		if resident.alive and bool(resident.work_allowed.cook):
@@ -603,6 +689,36 @@ func _refresh_power_detail() -> void:
 	else:
 		power_detail_label.text += "\nALL CONSUMERS SERVED"
 	power_detail_label.add_theme_color_override("font_color", Color("ef6860") if power.brownout_active else Color("75d4b4"))
+
+
+func _refresh_crew_mood() -> void:
+	var lowest: VaultResident = null
+	var mood_total := 0.0
+	var living_count := 0
+	var recreation_count := 0
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			continue
+		living_count += 1
+		mood_total += resident.needs.mood
+		if lowest == null or resident.needs.mood < lowest.needs.mood:
+			lowest = resident
+		if game.job_system.is_recreation_running(resident):
+			recreation_count += 1
+	if lowest == null:
+		crew_mood_label.text = "NO LIVING RESIDENTS"
+		crew_mood_bar.value = 0.0
+		crew_mood_bar.modulate = Color("ef6860")
+		return
+	crew_mood_label.text = "LOW %s %d%% · %s\nAVERAGE %d%% · %d RECREATING" % [
+		lowest.resident_name.to_upper(),
+		roundi(lowest.needs.mood),
+		lowest.needs.get_mood_state(),
+		roundi(mood_total / float(living_count)),
+		recreation_count,
+	]
+	crew_mood_bar.value = lowest.needs.mood
+	crew_mood_bar.modulate = Color("ef5a54") if lowest.needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD else (Color("efc56b") if lowest.needs.mood < 70.0 else Color("75d4b4"))
 
 
 func _refresh_oxygen() -> void:
@@ -672,6 +788,7 @@ func _refresh_checklist() -> void:
 		[game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) >= 1, "Power an air recycler"],
 		[game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) >= 1, "Power a grow tray"],
 		[game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) >= 1, "Assemble a nutrient station"],
+		[game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) >= 1, "Power a rec console"],
 		[game.breach_system.is_sealed(), "Contain the first pressure breach"],
 		[game.day_cycle.completed, "Survive seven full days"],
 	]
@@ -702,9 +819,16 @@ func _reveal_work_permissions() -> void:
 	await get_tree().process_frame
 	if right_scroll == null or game == null or game.get_resident_by_id(game.selected_resident_id) == null:
 		return
-	var last_work_button := work_buttons.get("cook") as Control
-	if last_work_button != null:
-		right_scroll.ensure_control_visible(last_work_button)
+	if inspector_title != null:
+		right_scroll.scroll_vertical = roundi(inspector_title.position.y)
+
+
+func _reveal_fixture_controls() -> void:
+	await get_tree().process_frame
+	if right_scroll == null or game == null or game.get_building_by_id(game.selected_building_id) == null:
+		return
+	if inspector_title != null:
+		right_scroll.scroll_vertical = roundi(inspector_title.position.y)
 
 
 func show_outcome(won: bool, survivors: int) -> void:
@@ -733,7 +857,17 @@ func _set_need(key: String, label_text: String, value: float) -> void:
 	bar.visible = true
 	label.text = label_text
 	bar.value = value
-	bar.modulate = Color("ef6860") if value < 25.0 else (Color("efc56b") if value < 50.0 else Color("75d4b4"))
+	if key == "mood":
+		bar.modulate = Color("ef6860") if value <= ResidentNeeds.BREAK_MOOD_THRESHOLD else (Color("efc56b") if value < 70.0 else Color("75d4b4"))
+	else:
+		bar.modulate = Color("ef6860") if value < 25.0 else (Color("efc56b") if value < 50.0 else Color("75d4b4"))
+
+
+func _get_recreation_user(building_id: int) -> VaultResident:
+	for resident: VaultResident in game.residents:
+		if resident.alive and resident.recreating and resident.recreation_id == building_id:
+			return resident
+	return null
 
 
 func _hide_needs_and_work() -> void:

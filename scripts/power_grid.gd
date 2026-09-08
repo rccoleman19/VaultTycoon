@@ -115,7 +115,7 @@ func get_disabled_summary() -> String:
 
 
 func get_shed_order_text() -> String:
-	return "Grow Trays -> Nutrient Stations -> Lumens -> Air Recyclers; newer fixtures shed first within each priority."
+	return "Rec Consoles -> Grow Trays -> Nutrient Stations -> Lumens -> Air Recyclers; newer fixtures shed first within each priority."
 
 
 func get_shed_order(buildings: Array[VaultBuilding]) -> Array[VaultBuilding]:

@@ -1,8 +1,8 @@
 class_name VaultBuilding
 extends Node2D
 
-enum Kind { BED, LAMP, GENERATOR, GROW_TRAY, KITCHEN, STOCKPILE, AIR_RECYCLER }
-enum PowerPriority { CRITICAL, HIGH, NORMAL, LOW }
+enum Kind { BED, LAMP, GENERATOR, GROW_TRAY, KITCHEN, STOCKPILE, AIR_RECYCLER, RECREATION_CONSOLE }
+enum PowerPriority { CRITICAL, HIGH, NORMAL, LOW, OPTIONAL }
 
 const KIND_NAMES := {
 	Kind.BED: "Bunk",
@@ -12,6 +12,7 @@ const KIND_NAMES := {
 	Kind.KITCHEN: "Nutrient Station",
 	Kind.STOCKPILE: "Salvage Bay",
 	Kind.AIR_RECYCLER: "Air Recycler",
+	Kind.RECREATION_CONSOLE: "Rec Console",
 }
 const COSTS := {
 	Kind.BED: 8,
@@ -21,6 +22,7 @@ const COSTS := {
 	Kind.KITCHEN: 10,
 	Kind.STOCKPILE: 4,
 	Kind.AIR_RECYCLER: 14,
+	Kind.RECREATION_CONSOLE: 8,
 }
 const POWER_DEMAND := {
 	Kind.BED: 0,
@@ -30,12 +32,14 @@ const POWER_DEMAND := {
 	Kind.KITCHEN: 2,
 	Kind.STOCKPILE: 0,
 	Kind.AIR_RECYCLER: 3,
+	Kind.RECREATION_CONSOLE: 1,
 }
 const POWER_PRIORITY_NAMES := {
 	PowerPriority.CRITICAL: "CRITICAL",
 	PowerPriority.HIGH: "HIGH",
 	PowerPriority.NORMAL: "NORMAL",
 	PowerPriority.LOW: "LOW",
+	PowerPriority.OPTIONAL: "OPTIONAL",
 }
 
 var building_id := 0
@@ -79,7 +83,7 @@ func get_deconstruct_refund() -> int:
 
 
 func get_build_time() -> float:
-	return 5.0 if kind in [Kind.LAMP, Kind.STOCKPILE] else 8.0
+	return 5.0 if kind in [Kind.LAMP, Kind.STOCKPILE, Kind.RECREATION_CONSOLE] else 8.0
 
 
 func get_power_demand() -> int:
@@ -110,6 +114,7 @@ static func get_default_power_priority(building_kind: int) -> PowerPriority:
 		Kind.LAMP: return PowerPriority.HIGH
 		Kind.KITCHEN: return PowerPriority.NORMAL
 		Kind.GROW_TRAY: return PowerPriority.LOW
+		Kind.RECREATION_CONSOLE: return PowerPriority.OPTIONAL
 	return PowerPriority.NORMAL
 
 
@@ -210,6 +215,12 @@ func _draw() -> void:
 			draw_circle(Vector2.ZERO, 3.0, Color("24434a"))
 			for direction in [Vector2.UP, Vector2.RIGHT, Vector2.DOWN, Vector2.LEFT]:
 				draw_line(direction * 3.0, direction * 7.0, Color("24434a"), 2.0)
+		Kind.RECREATION_CONSOLE:
+			var screen_color := Color("83dfc4") if powered else Color("4d5f5b")
+			draw_rect(Rect2(-8, -7, 16, 13), Color("513b5b"))
+			draw_rect(Rect2(-6, -5, 12, 7), screen_color)
+			draw_circle(Vector2(-4, 7), 1.5, Color("efc56b"))
+			draw_circle(Vector2(4, 7), 1.5, Color("8faeb7"))
 	if get_base_power_demand() > 0 and manually_disabled:
 		draw_rect(rect.grow(-3.0), Color(0.11, 0.16, 0.18, 0.68))
 		draw_line(Vector2(-6, 0), Vector2(6, 0), Color("8faeb7"), 2.0)
@@ -227,4 +238,5 @@ func _kind_color() -> Color:
 		Kind.KITCHEN: return Color("d5d9d7")
 		Kind.STOCKPILE: return Color("b78b52")
 		Kind.AIR_RECYCLER: return Color("8fcbd3")
+		Kind.RECREATION_CONSOLE: return Color("b48ac4")
 	return Color.WHITE

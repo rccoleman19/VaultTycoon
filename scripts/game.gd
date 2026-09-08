@@ -15,6 +15,7 @@ const BUILD_KIND_BY_TOOL := {
 	"kitchen": VaultBuilding.Kind.KITCHEN,
 	"stockpile": VaultBuilding.Kind.STOCKPILE,
 	"air": VaultBuilding.Kind.AIR_RECYCLER,
+	"rec": VaultBuilding.Kind.RECREATION_CONSOLE,
 }
 
 @onready var map_grid: MapGrid = $MapGrid
@@ -141,7 +142,7 @@ func begin_shift() -> void:
 	tutorial_open = false
 	user_paused = false
 	player_orders.show_briefing(false)
-	status_message = "Shift running. Dig, furnish, power life support, feed, and watch the seal monitor."
+	status_message = "Shift running. Dig, furnish, sustain mood and life support, and watch the seal monitor."
 	status_message_left = 5.0
 
 
@@ -149,6 +150,7 @@ func _simulation_step(delta_seconds: float) -> void:
 	if ended:
 		return
 	power_grid.recalculate(buildings)
+	job_system.reconcile_recreation_state()
 	for resident in residents:
 		if not resident.alive:
 			continue
@@ -156,7 +158,13 @@ func _simulation_step(delta_seconds: float) -> void:
 		var lit := power_grid.is_cell_lit(resident_cell, buildings)
 		var assigned_bed := get_building_by_id(resident.bed_id)
 		var in_bed := assigned_bed != null and assigned_bed.complete and resident_cell == assigned_bed.cell
-		resident.advance_needs(delta_seconds / DayCycle.SECONDS_PER_DAY, lit, in_bed)
+		resident.advance_needs(
+			delta_seconds / DayCycle.SECONDS_PER_DAY,
+			lit,
+			in_bed,
+			job_system.is_actively_recreating(resident),
+			oxygen_system.is_low(),
+		)
 	var next_elapsed := minf(
 		day_cycle.elapsed_seconds + delta_seconds,
 		DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE,
@@ -196,6 +204,7 @@ func _simulation_step(delta_seconds: float) -> void:
 		breach_system.advance(0.0, next_elapsed)
 	food_system.advance(delta_seconds, buildings)
 	power_grid.recalculate(buildings)
+	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	day_cycle.advance(delta_seconds)
 	if day_cycle.completed and breach_system.is_sealed() and oxygen_system.is_breathable():
@@ -231,7 +240,7 @@ func set_speed(speed: int) -> void:
 
 
 func set_tool(tool: String) -> void:
-	active_tool = tool if tool in ["select", "dig", "cancel", "bed", "lamp", "generator", "grow", "kitchen", "stockpile", "air"] else "select"
+	active_tool = tool if tool in ["select", "dig", "cancel", "bed", "lamp", "generator", "grow", "kitchen", "stockpile", "air", "rec"] else "select"
 	status_message = _tool_help(active_tool)
 	status_message_left = 4.0
 	map_grid.preview_tool = active_tool
@@ -314,6 +323,7 @@ func toggle_building_enabled(building_id: int) -> bool:
 		return false
 	building.manually_disabled = not building.manually_disabled
 	power_grid.recalculate(buildings)
+	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	var state := "disabled" if building.manually_disabled else "enabled"
 	status_message = "%s %s. Power grid recalculated." % [building.get_display_name(), state]
@@ -481,9 +491,10 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	if camera_data.size() >= 3:
 		world_camera.position = Vector2(float(camera_data[0]), float(camera_data[1]))
 		world_camera.zoom = Vector2.ONE * clampf(float(camera_data[2]), 0.75, 1.8)
-	job_system.rebuild_from_state(snapshot.get("jobs", {}))
 	power_grid.reset()
 	power_grid.recalculate(buildings)
+	job_system.rebuild_from_state(snapshot.get("jobs", {}))
+	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	selected_resident_id = -1
 	selected_building_id = -1
@@ -530,14 +541,25 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 		return false
 	var living_residents := 0
 	for entry: Variant in resident_data:
-		if not entry is Dictionary or not entry.get("position") is Array or not entry.get("needs") is Dictionary:
+		if not entry is Dictionary or not entry.get("position") is Array or not ResidentNeeds.is_serialized_data_valid(entry.get("needs")):
 			return false
 		if entry.position.size() < 2:
 			return false
+		if entry.has("recreating") and typeof(entry.recreating) != TYPE_BOOL:
+			return false
+		if entry.has("recreation_id") and not _is_integer_in_range(entry.recreation_id, -1, 2_147_483_647):
+			return false
+		if entry.has("recreation_sessions") and not _is_integer_in_range(entry.recreation_sessions, 0, 2_147_483_647):
+			return false
+		if bool(entry.get("recreating", false)):
+			if not bool(entry.get("alive", true)) or int(entry.get("recreation_id", -1)) <= 0 or bool(entry.get("sleeping", false)):
+				return false
 		if bool(entry.get("alive", true)):
 			living_residents += 1
 	for entry: Variant in building_data:
 		if not entry is Dictionary or not entry.get("cell") is Array or entry.cell.size() < 2:
+			return false
+		if not _is_integer_in_range(entry.get("kind"), VaultBuilding.Kind.BED, VaultBuilding.Kind.RECREATION_CONSOLE):
 			return false
 		if entry.has("manually_disabled") and typeof(entry.manually_disabled) != TYPE_BOOL:
 			return false
@@ -596,11 +618,24 @@ func _select_at(cell: Vector2i) -> bool:
 			resident.queue_redraw()
 		breach_system.queue_redraw()
 		return true
-	for resident in residents:
-		if resident.alive and resident.get_cell(map_grid) == cell:
-			select_resident(resident.resident_id)
-			return true
 	var building := get_building_at(cell)
+	var residents_at_cell: Array[VaultResident] = []
+	for resident: VaultResident in residents:
+		if resident.alive and resident.get_cell(map_grid) == cell:
+			residents_at_cell.append(resident)
+	if not residents_at_cell.is_empty():
+		for index in residents_at_cell.size():
+			if residents_at_cell[index].resident_id != selected_resident_id:
+				continue
+			if index + 1 < residents_at_cell.size():
+				select_resident(residents_at_cell[index + 1].resident_id)
+			elif building != null:
+				select_building(building.building_id)
+			else:
+				select_resident(residents_at_cell[0].resident_id)
+			return true
+		select_resident(residents_at_cell[0].resident_id)
+		return true
 	if building != null:
 		select_building(building.building_id)
 		return true
@@ -720,6 +755,8 @@ func _remove_building(building: VaultBuilding, salvage_refund: int, message: Str
 		if resident.bed_id == building.building_id:
 			resident.bed_id = -1
 			resident.sleeping = false
+		if resident.recreation_id == building.building_id:
+			job_system.release_resident(resident)
 		if resident.current_job_id >= 0:
 			var target_job := job_system._find_job(resident.current_job_id)
 			if not target_job.is_empty() and int(target_job.get("building_id", -1)) == building.building_id:
@@ -729,6 +766,7 @@ func _remove_building(building: VaultBuilding, salvage_refund: int, message: Str
 	buildings.erase(building)
 	building.free()
 	power_grid.recalculate(buildings)
+	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	status_message = message
 	status_message_left = 3.0
@@ -829,4 +867,12 @@ func _tool_help(tool: String) -> String:
 		"kitchen": return "NUTRIENT STATION: cooks %d raw food into %d meal (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
 		"stockpile": return "SALVAGE BAY: hauling destination (4 salvage)."
 		"air": return "AIR RECYCLER: restores vault oxygen when powered (14 salvage, 3 power)."
+		"rec": return "REC CONSOLE: restores one resident's mood at a time (8 salvage, 1 power)."
 	return ""
+
+
+func _is_integer_in_range(value: Variant, minimum: int, maximum: int) -> bool:
+	if typeof(value) not in [TYPE_INT, TYPE_FLOAT]:
+		return false
+	var number := float(value)
+	return is_finite(number) and number == floorf(number) and number >= minimum and number <= maximum

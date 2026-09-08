@@ -20,11 +20,15 @@ var carrying := 0
 var work_accumulator := 0.0
 var sleeping := false
 var bed_id := -1
+var recreating := false
+var recreation_id := -1
+var recreation_sessions := 0
 var stress_break_left := 0.0
 
 var _path: Array[Vector2i] = []
 var _path_index := 0
 var _path_destination := Vector2i(-999, -999)
+var _recreation_effect_was_running := false
 
 
 func configure(new_id: int, new_name: String, spawn_cell: Vector2i, map_grid: MapGrid) -> void:
@@ -38,10 +42,16 @@ func get_cell(map_grid: MapGrid) -> Vector2i:
 	return map_grid.world_to_cell(position)
 
 
-func advance_needs(day_fraction: float, lit: bool, in_bed: bool) -> void:
+func advance_needs(
+	day_fraction: float,
+	lit: bool,
+	in_bed: bool,
+	recreation_active := false,
+	low_oxygen := false,
+) -> void:
 	if not alive:
 		return
-	needs.advance(day_fraction, lit, sleeping, in_bed)
+	needs.advance(day_fraction, lit, sleeping, in_bed, recreation_active, low_oxygen)
 	if needs.health <= 0.0:
 		kill()
 	queue_redraw()
@@ -62,7 +72,7 @@ func get_work_multiplier() -> float:
 		multiplier *= 0.75
 	if needs.rest < 25.0:
 		multiplier *= 0.65
-	if needs.light_mood < 30.0:
+	if needs.mood < ResidentNeeds.LOW_MOOD_THRESHOLD:
 		multiplier *= 0.70
 	return maxf(0.35, multiplier)
 
@@ -99,8 +109,28 @@ func clear_job() -> void:
 	job_phase = ""
 	work_accumulator = 0.0
 	clear_path()
-	if alive and not sleeping:
+	if alive and not sleeping and not recreating and stress_break_left <= 0.0:
 		state = "Idle"
+
+
+func begin_recreation(building_id: int) -> void:
+	recreating = true
+	recreation_id = building_id
+	sleeping = false
+	bed_id = -1
+	stress_break_left = 0.0
+	state = "Seeking recreation"
+	clear_path()
+	queue_redraw()
+
+
+func stop_recreation() -> void:
+	recreating = false
+	recreation_id = -1
+	clear_path()
+	if alive and not sleeping and stress_break_left <= 0.0:
+		state = "Idle"
+	queue_redraw()
 
 
 func kill() -> void:
@@ -109,6 +139,8 @@ func kill() -> void:
 	alive = false
 	sleeping = false
 	died.emit(self)
+	recreating = false
+	recreation_id = -1
 	state = "Deceased"
 	modulate = Color(0.42, 0.42, 0.42, 0.8)
 	queue_redraw()
@@ -124,6 +156,9 @@ func serialize() -> Dictionary:
 		"work_allowed": work_allowed.duplicate(),
 		"sleeping": sleeping,
 		"bed_id": bed_id,
+		"recreating": recreating,
+		"recreation_id": recreation_id,
+		"recreation_sessions": recreation_sessions,
 		"stress_break_left": stress_break_left,
 	}
 
@@ -140,8 +175,14 @@ func deserialize(data: Dictionary) -> void:
 		work_allowed[key] = bool(saved_work.get(key, true))
 	sleeping = bool(data.get("sleeping", false)) and alive
 	bed_id = int(data.get("bed_id", -1))
-	stress_break_left = float(data.get("stress_break_left", 0.0))
-	state = "Sleeping" if sleeping else ("Idle" if alive else "Deceased")
+	recreating = bool(data.get("recreating", false)) and alive and not sleeping
+	recreation_id = int(data.get("recreation_id", -1)) if recreating else -1
+	recreation_sessions = maxi(0, int(data.get("recreation_sessions", 0)))
+	stress_break_left = maxf(0.0, float(data.get("stress_break_left", 0.0))) if alive and not recreating else 0.0
+	state = (
+		"Sleeping" if sleeping
+		else ("Seeking recreation" if recreating else ("Idle" if alive else "Deceased"))
+	)
 	if not alive:
 		modulate = Color(0.42, 0.42, 0.42, 0.8)
 	clear_job()
@@ -157,5 +198,26 @@ func _draw() -> void:
 	draw_rect(Rect2(-6, 2, 12, 7), body_color)
 	if carrying > 0:
 		draw_rect(Rect2(4, 1, 6, 6), Color("bd8f52"))
+	if alive:
+		var mood_color := Color("ef5a54") if needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD else (Color("efc56b") if needs.mood < 70.0 else Color("75d4b4"))
+		draw_rect(Rect2(-8, 10, 16, 2), Color("17242b"))
+		draw_rect(Rect2(-8, 10, 16.0 * needs.mood / 100.0, 2), mood_color)
+		if _is_recreation_effect_running():
+			var pulse := 0.55 + 0.25 * sin(float(Time.get_ticks_msec()) * 0.008)
+			draw_arc(Vector2.ZERO, 9.0, 0.0, TAU, 24, Color(0.46, 0.88, 0.76, pulse), 1.5)
 	var font := ThemeDB.fallback_font
 	draw_string(font, Vector2(-11, -12), resident_name.left(2).to_upper(), HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color("e8f0ef"))
+
+
+func _process(_delta: float) -> void:
+	var recreation_effect_running := _is_recreation_effect_running()
+	if recreation_effect_running or recreation_effect_running != _recreation_effect_was_running:
+		queue_redraw()
+	_recreation_effect_was_running = recreation_effect_running
+
+
+func _is_recreation_effect_running() -> bool:
+	if not alive or not recreating or state != "Recreating":
+		return false
+	var game_node := get_parent().get_parent() as VaultGame
+	return game_node != null and not game_node.is_simulation_paused()

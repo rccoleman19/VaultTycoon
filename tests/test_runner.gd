@@ -1305,35 +1305,40 @@ func _test_player_order_survival_plan() -> void:
 	game.begin_shift()
 	game.set_tool("dig")
 	var dig_cells: Array[Vector2i] = []
-	for x in [16, 15, 14, 13, 12]:
+	for x in [16, 15, 14, 13, 12, 11]:
 		for y in [14, 15, 16]:
 			dig_cells.append(Vector2i(x, y))
 	for cell: Vector2i in dig_cells:
 		_assert_true(game.issue_order(cell), "planned expansion accepts dig designation at %s" % cell)
 	var plans := [
-		[VaultBuilding.Kind.BED, Vector2i(18, 12)],
-		[VaultBuilding.Kind.BED, Vector2i(19, 12)],
-		[VaultBuilding.Kind.GENERATOR, Vector2i(20, 12)],
-		[VaultBuilding.Kind.AIR_RECYCLER, Vector2i(21, 12)],
-		[VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12)],
-		[VaultBuilding.Kind.KITCHEN, Vector2i(23, 12)],
+		[VaultBuilding.Kind.BED, Vector2i(27, 12)],
+		[VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12)],
+		[VaultBuilding.Kind.GENERATOR, Vector2i(21, 12)],
+		[VaultBuilding.Kind.KITCHEN, Vector2i(22, 12)],
+		[VaultBuilding.Kind.GROW_TRAY, Vector2i(23, 12)],
+		[VaultBuilding.Kind.AIR_RECYCLER, Vector2i(24, 12)],
 	]
 	for plan in plans:
 		_assert_true(game.place_blueprint(int(plan[0]), plan[1]), "survival fixture blueprint is accepted")
+	var starting_lumen: VaultBuilding = game.get_building_at(Vector2i(22, 14))
 
-	game.step_simulation(160.0)
+	game.step_simulation(200.0)
+	_assert_true(game.food_system.salvage >= 0, "ordered construction never overdraws salvage")
+	_assert_true(game.breach_system.is_sealed(), "player-order plan automatically contains the first breach")
+	var rec_console: VaultBuilding = game.get_building_at(Vector2i(20, 12))
+	_assert_true(game.power_grid.is_building_shed(rec_console.building_id), "full survival load sheds optional recreation first")
+	_assert_true(game.toggle_building_enabled(starting_lumen.building_id), "player frees one power by disabling the starting lumen")
+	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 1, "freed capacity restores the rec console")
+
+	var remaining := DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE - game.day_cycle.elapsed_seconds
+	game.step_simulation(remaining + VaultGame.SIMULATION_TICK)
 	for cell: Vector2i in dig_cells:
 		_assert_equal(game.map_grid.get_tile(cell), MapGrid.Tile.FLOOR, "planned expansion tile was excavated")
 	for plan in plans:
 		var building: VaultBuilding = game.get_building_at(plan[1])
 		_assert_true(building != null and building.complete, "survival fixture at %s was supplied and assembled" % plan[1])
-	_assert_true(game.food_system.salvage >= 0, "ordered construction never overdraws salvage")
-	_assert_true(game.breach_system.is_sealed(), "player-order plan automatically contains the first breach")
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER), 1, "player-order plan powers its air recycler")
 	_assert_true(game.oxygen_system.net_rate > 0.0, "ordered life support recovers oxygen after resident consumption")
-
-	var remaining := DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE - game.day_cycle.elapsed_seconds
-	game.step_simulation(remaining + VaultGame.SIMULATION_TICK)
 	_assert_equal(game.outcome, "win", "a player-order-only plan reaches day-seven victory")
 	_assert_true(game.get_alive_count() >= 1, "the ordered plan leaves at least one survivor")
 	_dispose(game)
@@ -1349,6 +1354,8 @@ func _test_managed_day_seven_win() -> void:
 	]
 	for cell: Vector2i in bed_cells:
 		_add_completed_building(game, VaultBuilding.Kind.BED, cell)
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(22, 12))
+	var console := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(23, 12))
 	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(25, 12))
 	var grow_tray := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(26, 12))
 	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(27, 12))
@@ -1358,7 +1365,7 @@ func _test_managed_day_seven_win() -> void:
 	game.begin_shift()
 
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 4, "managed wing has one bunk per resident")
-	_assert_true(grow_tray.powered and kitchen.powered and recycler.powered, "food and oxygen production fixtures start powered")
+	_assert_true(console.powered and grow_tray.powered and kitchen.powered and recycler.powered, "mood, food, and oxygen fixtures start powered")
 	_assert_true(game.oxygen_system.net_rate > 0.0, "managed recycler exceeds resident oxygen demand")
 	game.step_simulation(DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE + VaultGame.SIMULATION_TICK)
 
@@ -1368,6 +1375,10 @@ func _test_managed_day_seven_win() -> void:
 	_assert_true(game.breach_system.is_sealed(), "managed wing contains the first breach before victory")
 	_assert_true(game.oxygen_system.is_breathable(), "managed wing remains breathable at victory")
 	_assert_true(game.get_alive_count() >= 1, "at least one resident survives")
+	var recreation_sessions := 0
+	for resident: VaultResident in game.residents:
+		recreation_sessions += resident.recreation_sessions
+	_assert_true(recreation_sessions > 0, "managed residents use recreation before day seven")
 	_assert_true(game.food_system.meals > 0 or game.food_system.raw_food > 0, "food loop remains productive")
 	_dispose(game)
 

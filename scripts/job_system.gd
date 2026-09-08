@@ -59,6 +59,7 @@ func cancel_building(building_id: int) -> void:
 
 
 func release_resident(resident: VaultResident) -> void:
+	_release_recreation(resident)
 	if resident.current_job_id >= 0:
 		var job := _find_job(resident.current_job_id)
 		if not job.is_empty():
@@ -88,9 +89,48 @@ func advance(delta_seconds: float) -> void:
 
 func start_breach_response() -> void:
 	for resident: VaultResident in game.residents:
-		if resident.alive and resident.current_job_id >= 0:
+		if resident.alive and (resident.current_job_id >= 0 or resident.recreating or resident.stress_break_left > 0.0):
+			resident.stress_break_left = 0.0
 			release_resident(resident)
 	_ensure_state_jobs()
+
+
+func reconcile_recreation_state() -> void:
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.RECREATION_CONSOLE:
+			building.reserved_by = -1
+			building.queue_redraw()
+	var ordered_residents: Array[VaultResident] = game.residents.duplicate()
+	ordered_residents.sort_custom(func(a: VaultResident, b: VaultResident) -> bool:
+		return a.resident_id < b.resident_id
+	)
+	for resident: VaultResident in ordered_residents:
+		if not resident.recreating:
+			continue
+		if resident.needs.is_recreation_satisfied():
+			resident.stop_recreation()
+			continue
+		var console := game.get_building_by_id(resident.recreation_id) as VaultBuilding
+		if not _can_use_recreation_console(resident, console):
+			resident.stop_recreation()
+			continue
+		console.reserved_by = resident.resident_id
+		console.queue_redraw()
+
+
+func is_actively_recreating(resident: VaultResident) -> bool:
+	if resident == null or not resident.alive or not resident.recreating:
+		return false
+	var console := game.get_building_by_id(resident.recreation_id) as VaultBuilding
+	return (
+		_can_use_recreation_console(resident, console)
+		and console.reserved_by == resident.resident_id
+		and resident.get_cell(map_grid) == console.cell
+	)
+
+
+func is_recreation_running(resident: VaultResident) -> bool:
+	return is_actively_recreating(resident) and not game.is_simulation_paused()
 
 
 func rebuild_from_state(saved_data: Dictionary = {}) -> void:
@@ -287,7 +327,7 @@ func _handle_survival(resident: VaultResident, delta_seconds: float) -> bool:
 		var wake_threshold := 86.0 if resident.bed_id >= 0 else 44.0
 		if resident.needs.rest >= wake_threshold:
 			if resident.bed_id < 0:
-				resident.needs.light_mood = maxf(0.0, resident.needs.light_mood - 12.0)
+				resident.needs.mood = maxf(0.0, resident.needs.mood - 12.0)
 			resident.sleeping = false
 			resident.bed_id = -1
 			resident.state = "Idle"
@@ -307,14 +347,45 @@ func _handle_survival(resident: VaultResident, delta_seconds: float) -> bool:
 		resident.bed_id = -1
 		resident.state = "Collapsed on floor"
 		return true
+	# Emergency hatch work outranks recreation and a nonessential stress break.
+	if breach != null and breach.is_response_active():
+		if resident.recreating:
+			release_resident(resident)
+		if resident.stress_break_left > 0.0:
+			resident.stress_break_left = 0.0
+			resident.state = "Idle"
+		return false
+	if resident.recreating:
+		var recreation_console := game.get_building_by_id(resident.recreation_id) as VaultBuilding
+		if not _can_use_recreation_console(resident, recreation_console):
+			release_resident(resident)
+		else:
+			recreation_console.reserved_by = resident.resident_id
+			if not resident.move_to(recreation_console.cell, map_grid, delta_seconds):
+				resident.state = "Seeking recreation"
+				return true
+			resident.state = "Recreating"
+			resident.needs.recreate(delta_seconds)
+			if resident.needs.is_recreation_satisfied():
+				resident.needs.finish_recreation()
+				resident.recreation_sessions += 1
+				_release_recreation(resident)
+			return true
+	if resident.needs.wants_recreation():
+		var available_console := _find_free_recreation_console(resident)
+		if available_console != null:
+			release_resident(resident)
+			available_console.reserved_by = resident.resident_id
+			resident.begin_recreation(available_console.building_id)
+			return true
 	if resident.stress_break_left > 0.0:
 		resident.stress_break_left = maxf(0.0, resident.stress_break_left - delta_seconds)
 		resident.state = "Stress break"
 		if resident.stress_break_left <= 0.0:
-			resident.needs.light_mood = minf(100.0, resident.needs.light_mood + 16.0)
+			resident.needs.take_unstructured_break()
 			resident.state = "Idle"
 		return true
-	if resident.needs.light_mood <= 9.0:
+	if resident.needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD:
 		release_resident(resident)
 		resident.stress_break_left = 7.0
 		resident.state = "Stress break"
@@ -334,6 +405,38 @@ func _find_free_bed(resident: VaultResident) -> int:
 		if not occupied:
 			return building.building_id
 	return -1
+
+
+func _find_free_recreation_console(resident: VaultResident) -> VaultBuilding:
+	var best: VaultBuilding = null
+	var best_distance := 1_000_000
+	for building: VaultBuilding in game.buildings:
+		if not _can_use_recreation_console(resident, building) or building.reserved_by >= 0:
+			continue
+		var path := map_grid.find_path(resident.get_cell(map_grid), building.cell)
+		var distance := path.size()
+		if best == null or distance < best_distance or (distance == best_distance and building.building_id < best.building_id):
+			best = building
+			best_distance = distance
+	return best
+
+
+func _can_use_recreation_console(resident: VaultResident, building: VaultBuilding) -> bool:
+	if building == null or not building.complete or building.kind != VaultBuilding.Kind.RECREATION_CONSOLE or not building.powered:
+		return false
+	if building.reserved_by >= 0 and building.reserved_by != resident.resident_id:
+		return false
+	return not map_grid.find_path(resident.get_cell(map_grid), building.cell).is_empty()
+
+
+func _release_recreation(resident: VaultResident) -> void:
+	if not resident.recreating:
+		return
+	var building := game.get_building_by_id(resident.recreation_id) as VaultBuilding
+	if building != null and building.reserved_by == resident.resident_id:
+		building.reserved_by = -1
+		building.queue_redraw()
+	resident.stop_recreation()
 
 
 func _claim_best_job(resident: VaultResident) -> void:
@@ -604,6 +707,7 @@ func _restore_breach_assignment(
 	type: int,
 	phase_name: String,
 ) -> void:
+	_release_recreation(resident)
 	job.reserved_by = resident.resident_id
 	resident.current_job_id = int(job.id)
 	resident.current_job_type = type
