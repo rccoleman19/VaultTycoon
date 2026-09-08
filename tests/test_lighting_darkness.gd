@@ -56,6 +56,10 @@ func _test_1280_by_720_layout() -> void:
 	_assert_true(light_button_rect.end.x <= viewport_rect.end.x, "Light Map button remains inside the viewport")
 	_assert_true(game.player_orders.right_scroll.size.y >= 100.0, "right HUD preserves meaningful roster and inspector scroll space")
 	_assert_true(game.player_orders.right_scroll.get_global_rect().end.y <= viewport_rect.end.y, "right HUD scroll area remains inside the viewport")
+	game.player_orders.set_process(false)
+	game.player_orders.lighting_label.text = "LIT 1800/1800 · L999/999 · D5"
+	await process_frame
+	_assert_true(game.player_orders.lighting_overlay_button.get_global_rect().end.x <= viewport_rect.end.x, "late-game lighting counts cannot displace the Light Map button")
 	_dispose(game)
 
 

@@ -164,6 +164,7 @@ func _build_interface() -> void:
 	lighting_label = Label.new()
 	lighting_label.custom_minimum_size = Vector2(188, 26)
 	lighting_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lighting_label.clip_text = true
 	lighting_label.add_theme_font_size_override("font_size", 14)
 	lighting_row.add_child(lighting_label)
 	lighting_overlay_button = Button.new()
