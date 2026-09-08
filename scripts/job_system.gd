@@ -73,7 +73,9 @@ func release_resident(resident: VaultResident) -> void:
 
 func advance(delta_seconds: float) -> void:
 	_ensure_state_jobs()
-	for resident: VaultResident in game.residents:
+	var ordered_residents: Array[VaultResident] = game.residents.duplicate()
+	ordered_residents.sort_custom(_resident_claims_before)
+	for resident: VaultResident in ordered_residents:
 		if not resident.alive:
 			continue
 		if _handle_survival(resident, delta_seconds):
@@ -451,15 +453,7 @@ func _claim_best_job(resident: VaultResident) -> void:
 		resident.state = "Idle"
 		return
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		var priority_a := _job_priority(int(a.type))
-		var priority_b := _job_priority(int(b.type))
-		if priority_a != priority_b:
-			return priority_a < priority_b
-		var distance_a: int = _job_distance(resident, a)
-		var distance_b: int = _job_distance(resident, b)
-		if distance_a != distance_b:
-			return distance_a < distance_b
-		return int(a.id) < int(b.id)
+		return _job_claims_before(resident, a, b)
 	)
 	var job := candidates[0]
 	job.reserved_by = resident.resident_id
@@ -471,6 +465,67 @@ func _claim_best_job(resident: VaultResident) -> void:
 		resident.carrying = int(job.in_transit)
 	resident.work_accumulator = 0.0
 	resident.state = str(JOB_NAMES.get(int(job.type), "Working"))
+
+
+func _resident_claims_before(a: VaultResident, b: VaultResident) -> bool:
+	var key_a := _best_claim_key(a)
+	var key_b := _best_claim_key(b)
+	for index in key_a.size():
+		if int(key_a[index]) != int(key_b[index]):
+			return int(key_a[index]) < int(key_b[index])
+	return a.resident_id < b.resident_id
+
+
+func _best_claim_key(resident: VaultResident) -> Array[int]:
+	var best: Array[int] = [9, 99]
+	if not resident.alive:
+		return best
+	if resident.current_job_id >= 0 and resident.current_job_type not in [JobType.SUPPLY_BREACH, JobType.PATCH_BREACH]:
+		best = [1, resident.get_work_priority(_work_type_for_job(resident.current_job_type))]
+	for job: Dictionary in jobs:
+		if int(job.reserved_by) >= 0 or bool(job.get("done", false)):
+			continue
+		var type := int(job.type)
+		if resident.current_job_id >= 0 and type not in [JobType.SUPPLY_BREACH, JobType.PATCH_BREACH]:
+			continue
+		if not _resident_allows(resident, type) or not _job_available(resident, job):
+			continue
+		var candidate: Array[int] = [
+			0 if type in [JobType.SUPPLY_BREACH, JobType.PATCH_BREACH] else 1,
+			resident.get_work_priority(_work_type_for_job(type)),
+		]
+		if _claim_key_before(candidate, best):
+			best = candidate
+	return best
+
+
+func _claim_key_before(a: Array[int], b: Array[int]) -> bool:
+	for index in a.size():
+		if a[index] != b[index]:
+			return a[index] < b[index]
+	return false
+
+
+func _job_claims_before(resident: VaultResident, a: Dictionary, b: Dictionary) -> bool:
+	var type_a := int(a.type)
+	var type_b := int(b.type)
+	var emergency_a := 0 if type_a in [JobType.SUPPLY_BREACH, JobType.PATCH_BREACH] else 1
+	var emergency_b := 0 if type_b in [JobType.SUPPLY_BREACH, JobType.PATCH_BREACH] else 1
+	if emergency_a != emergency_b:
+		return emergency_a < emergency_b
+	var work_priority_a := resident.get_work_priority(_work_type_for_job(type_a))
+	var work_priority_b := resident.get_work_priority(_work_type_for_job(type_b))
+	if work_priority_a != work_priority_b:
+		return work_priority_a < work_priority_b
+	var kind_priority_a := _job_priority(type_a)
+	var kind_priority_b := _job_priority(type_b)
+	if kind_priority_a != kind_priority_b:
+		return kind_priority_a < kind_priority_b
+	var distance_a := _job_distance(resident, a)
+	var distance_b := _job_distance(resident, b)
+	if distance_a != distance_b:
+		return distance_a < distance_b
+	return int(a.id) < int(b.id)
 
 
 func _job_available(resident: VaultResident, job: Dictionary) -> bool:
@@ -643,12 +698,21 @@ func _stockpile_cell() -> Vector2i:
 
 
 func _resident_allows(resident: VaultResident, type: int) -> bool:
+	var work_type := _work_type_for_job(type)
+	return not work_type.is_empty() and resident.get_work_priority(work_type) != VaultResident.PRIORITY_DISABLED
+
+
+func _work_type_for_job(type: int) -> String:
 	match type:
-		JobType.DIG: return bool(resident.work_allowed.dig)
-		JobType.HAUL_RUBBLE, JobType.SUPPLY_BUILD, JobType.SUPPLY_BREACH: return bool(resident.work_allowed.haul)
-		JobType.BUILD, JobType.PATCH_BREACH: return bool(resident.work_allowed.craft)
-		JobType.COOK: return bool(resident.work_allowed.cook)
-	return false
+		JobType.DIG: return "dig"
+		JobType.HAUL_RUBBLE, JobType.SUPPLY_BUILD, JobType.SUPPLY_BREACH: return "haul"
+		JobType.BUILD, JobType.PATCH_BREACH: return "craft"
+		JobType.COOK: return "cook"
+	return ""
+
+
+func get_work_type_for_job(type: int) -> String:
+	return _work_type_for_job(type)
 
 
 func _job_priority(type: int) -> int:
@@ -695,10 +759,19 @@ func _has_claimable_breach_job(resident: VaultResident) -> bool:
 
 
 func _first_allowed_resident(type: int) -> VaultResident:
+	var candidates: Array[VaultResident] = []
 	for resident: VaultResident in game.residents:
 		if resident.alive and _resident_allows(resident, type):
-			return resident
-	return null
+			candidates.append(resident)
+	if candidates.is_empty():
+		return null
+	var work_type := _work_type_for_job(type)
+	candidates.sort_custom(func(a: VaultResident, b: VaultResident) -> bool:
+		var priority_a := a.get_work_priority(work_type)
+		var priority_b := b.get_work_priority(work_type)
+		return priority_a < priority_b if priority_a != priority_b else a.resident_id < b.resident_id
+	)
+	return candidates[0]
 
 
 func _restore_breach_assignment(
@@ -754,6 +827,11 @@ func _saved_resident_can_work(saved_residents: Array, resident_id: int, permissi
 			continue
 		if not bool(entry.get("alive", true)):
 			return false
+		var priorities: Variant = entry.get("work_priorities", {})
+		if priorities is Dictionary and priorities.has(permission):
+			var saved_priority: Variant = priorities[permission]
+			if _is_integer_in_range(saved_priority, VaultResident.PRIORITY_DISABLED, VaultResident.PRIORITY_LOWEST):
+				return int(saved_priority) != VaultResident.PRIORITY_DISABLED
 		var work: Variant = entry.get("work_allowed", {})
 		return work is Dictionary and bool(work.get(permission, true))
 	return false

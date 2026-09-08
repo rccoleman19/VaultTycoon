@@ -1,51 +1,78 @@
-# PR: Slice 5 — colonist mood and basic recreation
+# PR: Slice 6 — work priorities board
 
 ## Summary
 
-This change extends Vault Tycoon's Godot 4.7.2 desktop prototype with a deterministic overall mood need and autonomous basic recreation. Awake residents now lose mood from baseline shift strain, darkness, hunger, exhaustion, and low vault oxygen. Low mood reduces work speed; critically low mood still causes disruptive stress breaks and can eventually damage health.
+This change extends Vault Tycoon's Godot 4.7.2 desktop prototype with a crew-wide work priorities board. Press **P** or choose **PRIORITIES** to view every resident against the four existing work categories: Dig, Haul, Craft, and Cook. Each cell holds OFF or a priority from 1 through 4, where 1 is highest. New residents start at priority 3 in every category.
 
-Players can build an 8-salvage Rec Console. At 35 mood or below, a resident interrupts ordinary work, reserves the nearest reachable free console, walks to it, and recovers mood only while physically present. Each powered console serves one resident at a time and releases them at exactly 85 mood. Recreation requires no work permission.
+The automatic scheduler now lets the resident with the strongest available category priority claim first, then applies its existing deterministic job-kind, distance, and job-ID tie-breaks for that resident. Resident ID resolves equal worker claims. This lets the player specialize the crew without issuing direct movement or individual job commands. Numeric changes affect the next job claim; switching a category OFF safely releases a resident already doing that category.
 
-Rec Consoles consume 1 power at the new fixed OPTIONAL priority. They shed before Grow Trays, Nutrient Stations, Lumens, and Air Recyclers, keeping food production and life support protected. A shed or disabled console immediately releases its user. The pressure-hatch response also cancels recreation and stress breaks so eligible residents can claim urgent Haul or Craft work.
+Maintenance-hatch supply and patch work remain absolute emergency overrides. An enabled Haul or Craft category responds regardless of whether its numeric value is 1 or 4, while OFF remains a real permission boundary and continues to produce the existing Haul/Craft blocker readout. Eating, sleeping, recreation, stress behavior, power allocation, oxygen, and every prior survival rule retain their established precedence.
 
 ## Focused Scope
 
-- Canonical per-resident mood from 0–100, with deterministic awake modifiers
-- Mood-state and active-factor readouts in the resident inspector
-- Existing low-mood work penalty, severe-mood health damage, and stress-break fallback
-- One-tile Rec Console blueprint, cost, construction, deconstruction, drawing, and inspector state
-- Autonomous recreation with exact seek and completion thresholds
-- Nearest-path selection, building-ID tie-break, and one-resident console capacity
-- No remote recovery while a resident is still walking
-- Lowest-priority 1-power recreation load and immediate brownout/disable recovery behavior
-- Hunger, rest, death, deconstruction, and breach-response interruption cleanup
-- Save/load support for canonical mood and active recreation reservations
-- Schema-one compatibility with prior `light_mood` snapshots and missing recreation fields
-- HUD build control, powered-console checklist item, explicit mood in every living resident row, crew summary, active factors, and low-mood alerts
-- Prior Slice 1–4 behavior and breach-warning modal regression remain in scope
-- No relationships, traits, memories, schedules, social simulation, recreation variety, final art, or final audio
+- Canonical per-resident priorities for Dig, Haul, Craft, and Cook
+- Five states per resident/category pair: OFF and numeric priorities 1–4
+- Priority 1 as highest, priority 4 as lowest, and priority 3 as the uniform new-game default
+- A complete resident-by-work board available from both **P** and the right-rail roster's **PRIORITIES [P]** control
+- Fixed cell cycle `1 → 2 → 3 → 4 → OFF → 1`, with a visible legend and explicit close action
+- Live eligible-resident counts for all four categories, with a missing-coverage warning
+- Resident inspector controls that show the same numeric/OFF values as the crew board
+- Ordinary job selection by personal work priority before the established deterministic fallbacks
+- Immediate, reservation-safe release only when the active job's category is switched OFF
+- Emergency hatch work above every numeric priority, while OFF Haul or Craft still blocks response
+- Schema-one persistence for numeric priorities plus migration from legacy boolean work permissions
+- Prior Slice 1–5 behavior, deterministic survival, and breach-warning modal regression remain in scope
+- No skills, schedules, direct work orders, individual-job priorities, or broader management simulation
 
-## Balance Contract
+## Work Priority Contract
 
-- Mood range and starting value: 0–100, starting at 72 for every resident
-- Awake baseline mood: -18 points per 40-second day
-- Darkness: an additional -30 points per day
-- Food below 35: an additional -12 points per day
-- Rest below 30: an additional -12 points per day
-- Vault oxygen at or below 35%: an additional -24 points per day
-- Fully stacked awake pressure: -96 points per day
-- Sleeping and physically active console use: passive mood loss is suspended
-- Waking from unbedded floor sleep: -12 mood once
-- Mood below 30: 0.70× work multiplier; all combined need penalties retain a 0.35 floor
-- HUD tiers: STEADY at 70+, STRAINED at 40–69.999, STRESSED above 9 and below 40, BREAK RISK at 9 or lower
-- Recreation seek threshold: mood at or below 35
-- Rec Console recovery: +18 mood per simulation second while on the console cell
-- Recreation completion: exactly 85 mood
-- Critical fallback: mood at or below 9 starts a 7-second unstructured stress break that grants 8 mood
-- Severe mood: mood at or below 5 costs 5 health per day
-- Rec Console: 8 salvage, 5-second assembly, 1 power, OPTIONAL priority, one user
+| Value | Meaning |
+| --- | --- |
+| `OFF` / `0` | This resident cannot claim work in the category |
+| `1` | Highest enabled ordinary-work priority |
+| `2` | Considered after that resident's priority-1 work |
+| `3` | Normal new-game and legacy-enabled default |
+| `4` | Lowest enabled ordinary-work priority |
 
-There is no recent-damage mood modifier in Slice 5 because the current runtime and schema do not track when damage occurred.
+The four board columns map to runtime jobs as follows:
+
+| Board category | Jobs governed |
+| --- | --- |
+| **DIG** | Excavating designated rock |
+| **HAUL** | Recovering rubble, supplying blueprints, and delivering emergency patch salvage |
+| **CRAFT** | Assembling supplied fixtures and patching the maintenance hatch |
+| **COOK** | Preparing meals at a powered Nutrient Station |
+
+Available residents claim in this deterministic order:
+
+1. A resident able to claim emergency hatch work before residents limited to ordinary work
+2. The resident whose best available work has the lower numeric priority
+3. Lower resident ID when those claim keys match
+
+That resident chooses a job in this deterministic order:
+
+1. Emergency hatch work before all ordinary work
+2. Lower numeric work priority before higher numeric work priority
+3. Existing fixed job-kind order: blueprint supply, fixture assembly, cooking, rubble hauling, then excavation
+4. Shorter target distance
+5. Lower job ID
+
+OFF pairs never enter assignment. Equal values therefore reproduce the prior ordinary job-kind order, and the default priority-3 matrix preserves the existing first-playable route. Changing 1–4 while a resident is working does not interrupt that job; the new value applies at the next claim. Changing the active category to OFF releases the assignment immediately, clears its reservation, and safely restores or re-exposes any carried material for another eligible worker.
+
+Emergency patch delivery and hatch patching are evaluated before the numeric board value and may preempt ordinary work, recreation, or a nonessential stress break. They still require Haul or Craft to be above OFF. Survival behavior remains autonomous: eating and sleeping are not board categories, and recreation remains autonomous self-care rather than work.
+
+## Board Behavior
+
+- **P** opens or closes the board; the right-rail roster's **PRIORITIES [P]** control opens it.
+- Each row identifies one resident; each column identifies one of the four work categories.
+- Clicking a cell advances only that resident/category through the fixed priority cycle.
+- The displayed value and color update immediately and remain synchronized with the selected-resident inspector.
+- A live **COVERAGE** summary counts eligible living residents by category and identifies categories with no eligible crew.
+- **CLOSE**, **Esc**, or **P** dismisses the board.
+- Opening, editing, or closing the board does not change simulation pause, speed, selected resident or fixture, or active map tool.
+- The board captures its own pointer input so clicks do not place blueprints or map orders underneath it.
+- Cells for deceased residents are noninteractive; living residents remain editable while the simulation is paused or running.
+- The maintenance-hatch warning retains modal precedence, its focused Resume action, its exact 1× reset, and the speed-key acknowledgement guard.
 
 ## How To Review
 
@@ -57,47 +84,62 @@ godot --editor --path .
 
 Run the project with **F5**, select **BEGIN SHIFT**, then exercise this route:
 
-1. Select each resident and confirm every roster row shows **MOOD**, while the inspector shows the mood state, current factors, and work speed.
-2. Build a Rec Console with **REC $8**. With only the emergency core and starting lumen, confirm both 1-power loads are served.
-3. Let a resident reach 35 mood. Confirm they reserve the console, walk to it without recovering remotely, then use it until mood reaches 85.
-4. Lower two residents' mood with one console available. Confirm only one uses it; the other can claim it after the first leaves.
-5. Lower vault oxygen to 35%. Confirm an awake lit resident's inspector reports **low O2** and **-42 mood/day**: -18 baseline plus -24 low oxygen.
-6. Build the regular Charge Node, Air Recycler, Grow Tray, and Nutrient Station. At 10 demand against 9 supply, confirm only the OPTIONAL Rec Console sheds.
-7. Add another Charge Node or disable an optional competing load. Confirm the console powers up and a low-mood resident can seek it again.
-8. Disable or remove an occupied console. Confirm recreation stops immediately, its reservation clears, and removal refunds 4 salvage.
-9. Trigger the maintenance-hatch warning while a resident is recreating. Confirm the console is released immediately and urgent Haul/Craft response takes priority after resuming.
-10. Save during a walk to recreation or an active console session, then load. Confirm the one-seat reservation, mood, position, power allocation, and continued simulation restore deterministically.
-11. Load a compatible schema-one snapshot containing `light_mood` but no Slice 5 recreation fields. Confirm its value becomes mood and the resident safely defaults to no recreation target.
+1. Press **P**. Confirm the board fits the 1280×720 reference viewport, lists Ari, Bo, Cyra, and Dax against Dig, Haul, Craft, and Cook, and starts every living cell at 3. Confirm the legend says that 1 is highest and OFF disables work.
+2. Reopen the board with **P** and the right-rail roster's **PRIORITIES [P]** control, then close it with **P**, **CLOSE**, and **Esc**. Confirm these actions preserve the current pause state, speed, selection, and map tool, and that clicks on the open board do not reach the map.
+3. Click a default-3 cell repeatedly. Confirm it advances through 4, OFF, 1, 2, and back to 3, changes only the intended resident/category, and matches the selected-resident inspector. Turn a complete column OFF and confirm its coverage count reaches zero and raises the no-eligible-crew message.
+4. Prepare reachable jobs in two categories. Give one category a lower number even when its target is farther away; confirm the lower numeric priority claims first. Give categories the same value and confirm the established job-kind, distance, and job-ID tie-breaks remain stable. Give two residents the same best claim and confirm lower resident ID claims first.
+5. Change an enabled numeric priority while its resident works. Confirm the current job finishes and the new order applies to the next claim. Then switch the active category OFF and confirm the job releases immediately without losing salvage, duplicating work, or leaving a stale reservation.
+6. Set a resident's Dig, Haul, or Cook category OFF in separate checks. Confirm that resident no longer claims the corresponding work and that **NO COOK ENABLED** appears only when every living resident has Cook OFF.
+7. Leave Haul and Craft at priority 4, queue priority-1 ordinary work, and trigger the 60-second hatch warning. After resuming, confirm emergency patch delivery and patching preempt the ordinary work. Set every living resident's required category OFF and confirm the existing **BLOCKED · ENABLE HAUL** or **BLOCKED · ENABLE CRAFT** status appears instead.
+8. Trigger the hatch warning while the priorities board is open. Confirm the warning retains focus, stays paused at 1×, and cannot be dismissed by the `1`, `2`, or `3` speed keys.
+9. Save a mix of OFF and priorities 1–4, then load it. Confirm every cell round-trips and the loaded game remains deterministic and paused. Load a compatible schema-one save with only legacy boolean permissions; confirm `true` becomes 3 and `false` becomes OFF.
+10. Load compatible saves with no work-priority data, active recreation, and in-flight breach response. Confirm missing priorities default to 3, console and emergency reservations reconcile safely, and no material is duplicated or lost.
+11. Continue a managed wing through day seven and confirm numeric specialization does not change the established victory gates: at least one living resident, a sealed hatch, and oxygen at or above 15%.
 
-## Testing Status
+## Automated Verification
 
-- `scripts/check.sh` runs the import check, the full native regression suite, focused mood/recreation coverage, the breach-warning speed-key regression, and a boot smoke.
-- Godot 4.7.2 final result: native suite **31 cases / 541 assertions**; focused mood/recreation suite **9 cases / 231 assertions**; breach-modal speed-key regression and five-second boot smoke passed.
-- Focused coverage includes exact mood rates and bounds, threshold inclusivity, console fixture/power priority, no remote or unpowered recovery, occupied-console brownout cleanup, deterministic selection and capacity, hunger/rest/death interruption, the critical fallback break, HUD states, breach preemption, and active/legacy/malformed save states.
-- Prior Slice 1–4 suites continue to cover scene boot, controls, dig/build/cancel jobs, food, oxygen, breach timing/response, power allocation and recovery, save/load atomicity, unmanaged loss, player-order survival, and managed day-seven victory.
-- A live 1280×720 GL Compatibility smoke checked the briefing, two-row toolbar, per-resident mood rows, low-O2 factor text, mood bars, active recreation feedback, and Rec Console inspector.
-- No export, store package, signing, notarization, mobile package, network service, analytics, ad SDK, payment SDK, or final art/audio validation was performed.
-
-Reproduction:
+Run the complete repository check:
 
 ```bash
 scripts/check.sh
 ```
 
+- Godot 4.7.2 completed the headless editor import and five-second boot without script or runtime errors.
+- The core suite passes **34 cases / 617 assertions**; the focused work-priorities suite passes **9 cases / 237 assertions**; the mood/recreation suite passes **9 cases / 231 assertions**; and the breach-modal speed-key regression passes.
+- `scripts/check.sh` runs all four suites between the import and boot checks.
+- Three integrated cases in `tests/test_runner.gd` cover core scheduling, save compatibility, and HUD regressions. The focused `tests/test_work_priorities.gd` suite covers OFF and priorities 1–4; the uniform 4×4 defaults and fixed cycle; ordinary priority ordering plus intrinsic job-kind, distance, job-ID, and resident-ID ties; worker specialization; enabled-priority continuity; immediate OFF release and in-transit salvage refunds; urgent hatch override with OFF blockers; 4×4 HUD edits, deceased rows, keyboard focus trapping, and modal input behavior; numeric save round trips; legacy boolean and missing-field migration; and malformed-priority atomic rejection.
+
+The existing suites remain responsible for scene boot, tools, construction, food, power, oxygen, breach timing and response, mood and recreation, save replacement atomicity, unmanaged loss, the player-order survival plan, and the managed day-seven win.
+
+## Save and Compatibility Contract
+
+- Save schema version remains **1**.
+- Each resident writes a numeric `work_priorities` map with integer values from 0 through 4.
+- New saves also retain the legacy boolean `work_allowed` map so earlier schema-one readers still receive enabled/disabled meaning.
+- A legacy `work_allowed: true` value migrates to priority 3; `false` migrates to OFF.
+- A missing numeric map migrates from the legacy booleans, defaulting any missing legacy category to priority 3.
+- When a numeric map is present, it must contain all four categories; a partial map is malformed rather than silently mixed with defaults.
+- When both maps are present, their enabled/OFF meaning must agree; a disagreement is rejected atomically.
+- Malformed explicit priority maps or out-of-range/non-integral values are rejected before mutating the active wing.
+- Saved emergency carriers remain valid only when their corresponding migrated Haul or Craft category is above OFF; an ineligible saved carrier is rejected before mutating the active wing. Existing compatible two-field emergency payloads retain their safe bind-or-refund migration.
+- Prior optional breach, oxygen, power-disable, canonical mood, and recreation fields retain their Slice 1–5 migration behavior.
+- Loading still returns the game in a paused state, resets transient UI selection, and reconstructs jobs and reservations from canonical state.
+
 ## Known Limitations
 
-- Mood is one aggregate need, not a thought, memory, trait, relationship, beauty, comfort, or social system.
-- The Rec Console provides one generic activity and one seat. There is no recreation variety or tolerance.
-- Recreation is autonomous; there are no player-authored schedules or manual resident commands.
-- A resident whose console becomes unavailable resumes other behavior and waits until still at or below the seek threshold before choosing another.
-- Placeholder resident mood bars, console power states, and active-recreation pulses are included; final art, animation polish, and sound are not.
-- Recent damage does not affect mood because the prototype has no damage-recency state yet.
-- Keyboard and mouse are required. There is no mobile export or touch/safe-area adaptation.
+- Priorities rank four broad work categories only. There are no per-blueprint, per-recipe, per-fixture, or per-designation priorities.
+- Residents have no work skills, aptitudes, passions, qualifications, equipment modifiers, or category-specific speed bonuses.
+- There are no schedules, shifts, work zones, quotas, direct movement commands, forced jobs, or player-authored job queues.
+- Numeric changes do not interrupt an enabled job already in progress; only OFF releases it immediately.
+- Emergency hatch work has a fixed override and cannot be numerically demoted, though its required category can be turned OFF.
+- Recreation, eating, and sleeping remain autonomous and do not appear on the work board.
+- The board targets the fixed-density 1280×720 keyboard-and-mouse interface; there is no mobile, touch, handheld-safe-area, or small-screen adaptation.
+- Placeholder geometry, colors, resident markers, and controls remain; final art, animation, sound, and effects are outside this slice.
 
 ## Next Steps
 
-1. Record a complete interactive Linux day-seven smoke with a deliberate recreation brownout and recovery.
-2. Tune mood decay, console throughput, power contention, and construction timing against the seven-day route.
-3. Consider richer mood modifiers only after the basic recreation loop is stable and legible.
+1. Record a complete interactive Linux day-seven smoke using distinct resident specialties and an emergency override.
+2. Tune default specialization examples only after observing full-run construction, hauling, cooking, mood, and hatch contention.
+3. Consider schedules, work skills, or narrower job controls only as separately scoped slices.
 
-Surface play, caravans, factions, research, mods, multiplayer, IAP, ads, analytics, store packaging, final art/audio, and mobile export remain out of scope. So do relationships, social simulation, traits, memories, schedules, recreation variety, raiders, enemies, weapons, combat, repeated/procedural incidents, spatial gas or pressure zones, oxygen networks, multiple-room sealing, and a sealed-door graph.
+Surface play, caravans, factions, research, mods, multiplayer, IAP, ads, analytics, store packaging, final art/audio, and mobile export remain out of scope. So do relationships, social simulation, traits, memories, schedules, direct orders, work skills, work zones, job bills, raiders, enemies, weapons, combat, repeated/procedural incidents, spatial gas or pressure zones, oxygen networks, multiple-room sealing, and a sealed-door graph.

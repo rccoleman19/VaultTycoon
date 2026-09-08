@@ -46,6 +46,10 @@ tool_dig={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"physical_keycode":69)]
 }
+work_priorities={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":80)]
+}
 pause_game={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"physical_keycode":32)]

@@ -86,6 +86,7 @@ func _process(delta: float) -> void:
 
 
 func new_game(show_tutorial := false) -> void:
+	player_orders.show_work_priorities(false)
 	for building in buildings:
 		building.free()
 	for resident in residents:
@@ -377,13 +378,39 @@ func select_building(building_id: int) -> void:
 		resident.queue_redraw()
 
 
+func set_work_priority(resident_id: int, work_type: String, priority: int) -> bool:
+	var resident := get_resident_by_id(resident_id)
+	if resident == null or not resident.set_work_priority(work_type, priority):
+		return false
+	if priority == VaultResident.PRIORITY_DISABLED and resident.current_job_id >= 0 and not job_system._resident_allows(resident, resident.current_job_type):
+		job_system.release_resident(resident)
+	status_message = "%s %s priority: %s." % [resident.resident_name, work_type.capitalize(), resident.get_work_priority_label(work_type)]
+	status_message_left = 3.0
+	return true
+
+
+func cycle_work_priority(resident_id: int, work_type: String) -> int:
+	var resident := get_resident_by_id(resident_id)
+	if resident == null or work_type not in VaultResident.WORK_TYPES:
+		return -1
+	var priority := resident.cycle_work_priority(work_type)
+	if priority == VaultResident.PRIORITY_DISABLED and resident.current_job_id >= 0 and not job_system._resident_allows(resident, resident.current_job_type):
+		job_system.release_resident(resident)
+	status_message = "%s %s priority: %s." % [resident.resident_name, work_type.capitalize(), resident.get_work_priority_label(work_type)]
+	status_message_left = 3.0
+	return priority
+
+
 func toggle_work(resident_id: int, work_type: String) -> void:
 	var resident := get_resident_by_id(resident_id)
-	if resident == null or not resident.work_allowed.has(work_type):
+	if resident == null or work_type not in VaultResident.WORK_TYPES:
 		return
-	resident.work_allowed[work_type] = not bool(resident.work_allowed[work_type])
-	if resident.current_job_id >= 0 and not job_system._resident_allows(resident, resident.current_job_type):
-		job_system.release_resident(resident)
+	var priority := (
+		VaultResident.PRIORITY_DISABLED
+		if resident.get_work_priority(work_type) != VaultResident.PRIORITY_DISABLED
+		else VaultResident.DEFAULT_WORK_PRIORITY
+	)
+	set_work_priority(resident_id, work_type, priority)
 
 
 func get_alive_count() -> int:
@@ -419,6 +446,7 @@ func load_game(path := SaveLoad.DEFAULT_PATH) -> bool:
 	if not apply_snapshot(result.snapshot):
 		status_message = "The save did not contain a valid vault wing."
 		return false
+	player_orders.show_work_priorities(false)
 	tutorial_open = false
 	user_paused = true
 	player_orders.show_briefing(false)
@@ -543,6 +571,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	for entry: Variant in resident_data:
 		if not entry is Dictionary or not entry.get("position") is Array or not ResidentNeeds.is_serialized_data_valid(entry.get("needs")):
 			return false
+		if not VaultResident.is_serialized_work_data_valid(entry):
+			return false
 		if entry.position.size() < 2:
 			return false
 		if entry.has("recreating") and typeof(entry.recreating) != TYPE_BOOL:
@@ -649,7 +679,29 @@ func _select_at(cell: Vector2i) -> bool:
 	return false
 
 
+func _input(event: InputEvent) -> void:
+	# Space is both the global pause shortcut and Godot's default button accept
+	# key. Handle it before GUI focus while this modal is open so it cannot
+	# silently change the focused work-priority cell.
+	if (
+		player_orders != null
+		and player_orders.is_work_priorities_open()
+		and event.is_action_pressed("pause_game")
+	):
+		toggle_pause()
+		get_viewport().set_input_as_handled()
+
+
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("work_priorities"):
+		player_orders.toggle_work_priorities()
+		get_viewport().set_input_as_handled()
+		return
+	if player_orders.is_work_priorities_open():
+		if event.is_action_pressed("cancel_order"):
+			player_orders.show_work_priorities(false)
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("pause_game"):
 		toggle_pause()
 		get_viewport().set_input_as_handled()
@@ -726,6 +778,9 @@ func acknowledge_breach_warning(resume_response: bool) -> void:
 
 
 func _update_camera(delta: float) -> void:
+	if player_orders != null and player_orders.is_work_priorities_open():
+		_dragging_camera = false
+		return
 	var direction := Input.get_vector("camera_left", "camera_right", "camera_up", "camera_down")
 	world_camera.position += direction * 360.0 * delta / world_camera.zoom.x
 	world_camera.position.x = clampf(world_camera.position.x, 300.0, MapGrid.WIDTH * MapGrid.TILE_SIZE - 260.0)

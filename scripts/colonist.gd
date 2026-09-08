@@ -4,6 +4,16 @@ extends Node2D
 signal died(resident: VaultResident)
 
 const MOVE_SPEED := 3.4 * MapGrid.TILE_SIZE
+const WORK_TYPES: Array[String] = ["dig", "haul", "craft", "cook"]
+const PRIORITY_DISABLED := 0
+const PRIORITY_HIGHEST := 1
+const PRIORITY_LOWEST := 4
+const DEFAULT_WORK_PRIORITY := 3
+# Public aliases make the numeric contract unambiguous to UI, tests, and future systems.
+const PRIORITY_OFF := PRIORITY_DISABLED
+const WORK_PRIORITY_OFF := PRIORITY_DISABLED
+const MIN_WORK_PRIORITY := PRIORITY_HIGHEST
+const MAX_WORK_PRIORITY := PRIORITY_LOWEST
 
 var resident_id := 0
 var resident_name := "Resident"
@@ -12,6 +22,7 @@ var alive := true
 var selected := false
 var state := "Idle"
 var work_allowed := {"dig": true, "haul": true, "craft": true, "cook": true}
+var work_priorities := {"dig": 3, "haul": 3, "craft": 3, "cook": 3}
 
 var current_job_id := -1
 var current_job_type := -1
@@ -34,8 +45,75 @@ var _recreation_effect_was_running := false
 func configure(new_id: int, new_name: String, spawn_cell: Vector2i, map_grid: MapGrid) -> void:
 	resident_id = new_id
 	resident_name = new_name
+	_apply_starting_work_priorities()
 	position = map_grid.cell_to_world(spawn_cell)
 	queue_redraw()
+
+
+func get_work_priority(work_type: String) -> int:
+	if not work_allowed.has(work_type) or not bool(work_allowed[work_type]):
+		return PRIORITY_DISABLED
+	return _get_stored_work_priority(work_type)
+
+
+func _get_stored_work_priority(work_type: String) -> int:
+	var saved_priority: Variant = work_priorities.get(work_type, DEFAULT_WORK_PRIORITY)
+	if typeof(saved_priority) not in [TYPE_INT, TYPE_FLOAT]:
+		return DEFAULT_WORK_PRIORITY
+	var priority := int(saved_priority)
+	# A direct legacy `work_allowed = true` write must still re-enable work even
+	# when the canonical numeric value was previously OFF.
+	return priority if priority >= PRIORITY_HIGHEST and priority <= PRIORITY_LOWEST else DEFAULT_WORK_PRIORITY
+
+
+func set_work_priority(work_type: String, priority: int) -> bool:
+	if work_type not in WORK_TYPES or priority < PRIORITY_DISABLED or priority > PRIORITY_LOWEST:
+		return false
+	work_priorities[work_type] = priority
+	work_allowed[work_type] = priority != PRIORITY_DISABLED
+	return true
+
+
+func cycle_work_priority(work_type: String) -> int:
+	if work_type not in WORK_TYPES:
+		return -1
+	var current := get_work_priority(work_type)
+	var next := current + 1 if current >= PRIORITY_HIGHEST and current < PRIORITY_LOWEST else PRIORITY_DISABLED
+	if current == PRIORITY_DISABLED:
+		next = PRIORITY_HIGHEST
+	set_work_priority(work_type, next)
+	return next
+
+
+func get_work_priority_label(work_type: String) -> String:
+	var priority := get_work_priority(work_type)
+	return "OFF" if priority == PRIORITY_DISABLED else str(priority)
+
+
+static func is_serialized_work_data_valid(data: Variant) -> bool:
+	if not data is Dictionary:
+		return false
+	var saved: Dictionary = data
+	if saved.has("work_priorities"):
+		var priorities: Variant = saved.work_priorities
+		if not priorities is Dictionary or priorities.size() != WORK_TYPES.size():
+			return false
+		for work_type: String in WORK_TYPES:
+			if not priorities.has(work_type) or not _is_serialized_priority(priorities[work_type]):
+				return false
+	if saved.has("work_allowed"):
+		var permissions: Variant = saved.work_allowed
+		if not permissions is Dictionary:
+			return false
+		for work_type: Variant in permissions:
+			if work_type not in WORK_TYPES or typeof(permissions[work_type]) != TYPE_BOOL:
+				return false
+		if saved.has("work_priorities"):
+			var priorities: Dictionary = saved.work_priorities
+			for work_type: String in WORK_TYPES:
+				if permissions.has(work_type) and bool(permissions[work_type]) != (int(priorities[work_type]) != PRIORITY_DISABLED):
+					return false
+	return true
 
 
 func get_cell(map_grid: MapGrid) -> Vector2i:
@@ -147,13 +225,22 @@ func kill() -> void:
 
 
 func serialize() -> Dictionary:
+	var saved_priorities := {}
+	var saved_permissions := {}
+	for work_type: String in WORK_TYPES:
+		var priority := get_work_priority(work_type)
+		saved_priorities[work_type] = priority
+		saved_permissions[work_type] = priority != PRIORITY_DISABLED
 	return {
 		"id": resident_id,
 		"name": resident_name,
 		"position": [position.x, position.y],
 		"needs": needs.serialize(),
 		"alive": alive,
-		"work_allowed": work_allowed.duplicate(),
+		# Keep the boolean map for schema-one readers while the numeric map carries
+		# the Slice 6 ordering information.
+		"work_allowed": saved_permissions,
+		"work_priorities": saved_priorities,
 		"sleeping": sleeping,
 		"bed_id": bed_id,
 		"recreating": recreating,
@@ -166,13 +253,20 @@ func serialize() -> Dictionary:
 func deserialize(data: Dictionary) -> void:
 	resident_id = int(data.get("id", 0))
 	resident_name = str(data.get("name", "Resident"))
+	_apply_starting_work_priorities()
 	var saved_position: Array = data.get("position", [0.0, 0.0])
 	position = Vector2(float(saved_position[0]), float(saved_position[1]))
 	needs.deserialize(data.get("needs", {}))
 	alive = bool(data.get("alive", true))
-	var saved_work: Dictionary = data.get("work_allowed", {})
-	for key: String in work_allowed:
-		work_allowed[key] = bool(saved_work.get(key, true))
+	var saved_work: Variant = data.get("work_allowed", {})
+	if data.has("work_priorities") and data.work_priorities is Dictionary:
+		var saved_priorities: Dictionary = data.work_priorities
+		for work_type: String in WORK_TYPES:
+			set_work_priority(work_type, int(saved_priorities.get(work_type, DEFAULT_WORK_PRIORITY)))
+	else:
+		for work_type: String in WORK_TYPES:
+			var legacy_allowed := bool(saved_work.get(work_type, true)) if saved_work is Dictionary else true
+			set_work_priority(work_type, DEFAULT_WORK_PRIORITY if legacy_allowed else PRIORITY_DISABLED)
 	sleeping = bool(data.get("sleeping", false)) and alive
 	bed_id = int(data.get("bed_id", -1))
 	recreating = bool(data.get("recreating", false)) and alive and not sleeping
@@ -187,6 +281,23 @@ func deserialize(data: Dictionary) -> void:
 		modulate = Color(0.42, 0.42, 0.42, 0.8)
 	clear_job()
 	queue_redraw()
+
+
+func _apply_starting_work_priorities() -> void:
+	for work_type: String in WORK_TYPES:
+		set_work_priority(work_type, DEFAULT_WORK_PRIORITY)
+
+
+static func _is_serialized_priority(value: Variant) -> bool:
+	if typeof(value) not in [TYPE_INT, TYPE_FLOAT]:
+		return false
+	var number := float(value)
+	return (
+		is_finite(number)
+		and number == floorf(number)
+		and number >= PRIORITY_DISABLED
+		and number <= PRIORITY_LOWEST
+	)
 
 
 func _draw() -> void:

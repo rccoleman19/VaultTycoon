@@ -39,10 +39,18 @@ var breach_resume_button: Button
 var outcome_panel: PanelContainer
 var outcome_title: Label
 var outcome_text: Label
+var work_priorities_overlay: Control
+var work_priorities_panel: PanelContainer
+var work_priorities_button: Button
+var work_priorities_close_button: Button
+var work_priorities_grid: GridContainer
+var work_priorities_summary: Label
+var work_priority_buttons: Dictionary = {}
 
 var _last_roster_signature := ""
 var _last_inspected_resident_id := -1
 var _last_inspected_building_id := -1
+var _last_work_priority_roster_signature := ""
 
 
 func setup(game_node: VaultGame) -> void:
@@ -194,10 +202,22 @@ func _build_interface() -> void:
 	side.add_theme_constant_override("separation", 4)
 	side.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right_scroll.add_child(side)
+	var roster_header_row := HBoxContainer.new()
+	roster_header_row.add_theme_constant_override("separation", 6)
+	side.add_child(roster_header_row)
 	var roster_header := Label.new()
 	roster_header.text = "RESIDENT ROSTER"
 	roster_header.add_theme_color_override("font_color", Color("8faeb7"))
-	side.add_child(roster_header)
+	roster_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	roster_header.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	roster_header_row.add_child(roster_header)
+	work_priorities_button = Button.new()
+	work_priorities_button.name = "WorkPrioritiesButton"
+	work_priorities_button.text = "PRIORITIES [P]"
+	work_priorities_button.tooltip_text = "Edit priorities for the whole crew without changing the active map tool."
+	work_priorities_button.custom_minimum_size = Vector2(122, 28)
+	work_priorities_button.pressed.connect(toggle_work_priorities)
+	roster_header_row.add_child(work_priorities_button)
 	roster_box = VBoxContainer.new()
 	roster_box.add_theme_constant_override("separation", 2)
 	side.add_child(roster_box)
@@ -226,7 +246,7 @@ func _build_interface() -> void:
 		need_bars[need_name] = bar
 		side.add_child(need_row)
 	work_header = Label.new()
-	work_header.text = "WORK PERMISSIONS"
+	work_header.text = "WORK PRIORITIES · 1 HIGHEST"
 	work_header.add_theme_color_override("font_color", Color("8faeb7"))
 	side.add_child(work_header)
 	var work_row := GridContainer.new()
@@ -235,7 +255,6 @@ func _build_interface() -> void:
 	work_row.add_theme_constant_override("v_separation", 4)
 	for work_type in ["dig", "haul", "craft", "cook"]:
 		var work_button := Button.new()
-		work_button.toggle_mode = true
 		work_button.custom_minimum_size = Vector2(130, 28)
 		work_button.pressed.connect(_on_work_pressed.bind(work_type))
 		work_buttons[work_type] = work_button
@@ -319,9 +338,166 @@ func _build_interface() -> void:
 	load_button.pressed.connect(func() -> void: game.load_game())
 	command_grid.add_child(load_button)
 
+	_build_work_priorities_board()
 	_build_briefing()
 	_build_breach_warning()
 	_build_outcome()
+
+
+func _build_work_priorities_board() -> void:
+	work_priorities_overlay = Control.new()
+	work_priorities_overlay.name = "WorkPrioritiesOverlay"
+	work_priorities_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	work_priorities_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	root.add_child(work_priorities_overlay)
+
+	var scrim := ColorRect.new()
+	scrim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	scrim.color = Color(0.025, 0.045, 0.055, 0.72)
+	scrim.mouse_filter = Control.MOUSE_FILTER_STOP
+	work_priorities_overlay.add_child(scrim)
+
+	work_priorities_panel = PanelContainer.new()
+	work_priorities_panel.name = "WorkPriorities"
+	work_priorities_panel.set_anchors_preset(Control.PRESET_CENTER)
+	work_priorities_panel.position = Vector2(-340, -235)
+	work_priorities_panel.size = Vector2(680, 470)
+	work_priorities_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	work_priorities_panel.add_theme_stylebox_override("panel", _panel_style(Color("111b21"), Color("72cdb8"), 3))
+	work_priorities_overlay.add_child(work_priorities_panel)
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 22)
+	work_priorities_panel.add_child(margin)
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", 10)
+	margin.add_child(content)
+
+	var title_row := HBoxContainer.new()
+	content.add_child(title_row)
+	var title_stack := VBoxContainer.new()
+	title_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_row.add_child(title_stack)
+	var eyebrow := Label.new()
+	eyebrow.text = "CREW SCHEDULER // ORDINARY WORK"
+	eyebrow.add_theme_color_override("font_color", Color("8faeb7"))
+	title_stack.add_child(eyebrow)
+	var title := Label.new()
+	title.text = "WORK PRIORITIES"
+	title.add_theme_font_size_override("font_size", 24)
+	title.add_theme_color_override("font_color", Color("75d4b4"))
+	title_stack.add_child(title)
+	work_priorities_close_button = Button.new()
+	work_priorities_close_button.name = "CloseWorkPriorities"
+	work_priorities_close_button.text = "CLOSE [P / ESC]"
+	work_priorities_close_button.custom_minimum_size = Vector2(142, 38)
+	work_priorities_close_button.pressed.connect(show_work_priorities.bind(false))
+	title_row.add_child(work_priorities_close_button)
+
+	var explanation := Label.new()
+	explanation.text = "Click a cell to cycle.  1 = highest  ·  4 = lowest  ·  OFF = never claim.  Hatch work overrides numbered ranks, but OFF still blocks it. Recreation is autonomous."
+	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	explanation.custom_minimum_size.y = 42
+	content.add_child(explanation)
+
+	var matrix_panel := PanelContainer.new()
+	matrix_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	matrix_panel.add_theme_stylebox_override("panel", _panel_style(Color("152129"), Color("3d5962")))
+	content.add_child(matrix_panel)
+	var matrix_margin := MarginContainer.new()
+	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		matrix_margin.add_theme_constant_override(side, 10)
+	matrix_panel.add_child(matrix_margin)
+	work_priorities_grid = GridContainer.new()
+	work_priorities_grid.name = "PriorityMatrix"
+	work_priorities_grid.columns = 5
+	work_priorities_grid.add_theme_constant_override("h_separation", 7)
+	work_priorities_grid.add_theme_constant_override("v_separation", 6)
+	matrix_margin.add_child(work_priorities_grid)
+
+	work_priorities_summary = Label.new()
+	work_priorities_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	work_priorities_summary.custom_minimum_size.y = 40
+	content.add_child(work_priorities_summary)
+	work_priorities_overlay.visible = false
+
+
+func _rebuild_work_priority_rows() -> void:
+	for child: Node in work_priorities_grid.get_children():
+		child.free()
+	work_priority_buttons.clear()
+	var headers := ["RESIDENT", "DIG", "HAUL", "CRAFT", "COOK"]
+	var header_widths := [120.0, 110.0, 110.0, 110.0, 110.0]
+	for index in headers.size():
+		var header := Label.new()
+		header.text = headers[index]
+		header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		header.custom_minimum_size = Vector2(header_widths[index], 24)
+		header.add_theme_color_override("font_color", Color("8faeb7"))
+		work_priorities_grid.add_child(header)
+	for resident: VaultResident in game.residents:
+		var resident_label := Label.new()
+		resident_label.text = resident.resident_name.to_upper()
+		resident_label.tooltip_text = "Resident %d" % resident.resident_id
+		resident_label.custom_minimum_size = Vector2(120, 46)
+		resident_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		resident_label.add_theme_color_override("font_color", Color("6f7d80") if not resident.alive else Color("e8f0ef"))
+		work_priorities_grid.add_child(resident_label)
+		for work_type: String in VaultResident.WORK_TYPES:
+			var button := Button.new()
+			button.name = "Priority_%d_%s" % [resident.resident_id, work_type.capitalize()]
+			button.custom_minimum_size = Vector2(110, 46)
+			button.disabled = not resident.alive
+			button.pressed.connect(_on_work_priority_pressed.bind(resident.resident_id, work_type))
+			var key := _work_priority_key(resident.resident_id, work_type)
+			work_priority_buttons[key] = button
+			work_priorities_grid.add_child(button)
+	_configure_work_priority_focus()
+
+
+func _work_priority_focus_controls() -> Array[Control]:
+	var controls: Array[Control] = []
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			continue
+		for work_type: String in VaultResident.WORK_TYPES:
+			var button := get_work_priority_button(resident.resident_id, work_type)
+			if button != null and not button.disabled:
+				controls.append(button)
+	if work_priorities_close_button != null:
+		controls.append(work_priorities_close_button)
+	return controls
+
+
+func _configure_work_priority_focus() -> void:
+	var controls := _work_priority_focus_controls()
+	if controls.is_empty():
+		return
+	for index in controls.size():
+		var control := controls[index]
+		var previous := controls[(index - 1 + controls.size()) % controls.size()]
+		var next := controls[(index + 1) % controls.size()]
+		control.focus_previous = control.get_path_to(previous)
+		control.focus_next = control.get_path_to(next)
+		# Directional keyboard/gamepad navigation also stays inside the modal.
+		control.focus_neighbor_left = control.get_path_to(previous)
+		control.focus_neighbor_top = control.get_path_to(previous)
+		control.focus_neighbor_right = control.get_path_to(next)
+		control.focus_neighbor_bottom = control.get_path_to(next)
+
+
+func _focus_first_work_priority_control() -> void:
+	var controls := _work_priority_focus_controls()
+	if not controls.is_empty():
+		controls[0].grab_focus()
+
+
+func _work_priority_key(resident_id: int, work_type: String) -> String:
+	return "%d:%s" % [resident_id, work_type]
+
+
+func get_work_priority_button(resident_id: int, work_type: String) -> Button:
+	return work_priority_buttons.get(_work_priority_key(resident_id, work_type)) as Button
 
 
 func _build_briefing() -> void:
@@ -345,7 +521,7 @@ func _build_briefing() -> void:
 	title.add_theme_color_override("font_color", Color("75d4b4"))
 	content.add_child(title)
 	var intro := Label.new()
-	intro.text = "Four residents share one finite vault atmosphere and the strain of an underground shift. Build and power an Air Recycler, then provide food, bunks, light, and a powered Rec Console. Residents seek recreation automatically at 35 mood. Keep Haul and Craft enabled for the hatch warning: urgent response work preempts recreation."
+	intro.text = "Four residents share one finite vault atmosphere and the strain of an underground shift. Build and power an Air Recycler, then provide food, bunks, light, and a powered Rec Console. Press P to specialize work; keep at least one resident's Haul and Craft above OFF for the hatch warning. Urgent response work preempts ordinary priorities and recreation."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	intro.custom_minimum_size.y = 78
 	content.add_child(intro)
@@ -356,7 +532,7 @@ func _build_briefing() -> void:
 	checklist.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(checklist)
 	var controls := Label.new()
-	controls.text = "LMB order/select · RMB/Esc cancel tool · WASD pan · wheel zoom · Space pause · 1/2/3 speed · F recenter"
+	controls.text = "LMB order/select · RMB/Esc cancel tool · P priorities · WASD pan · wheel zoom · Space pause · 1/2/3 speed · F recenter"
 	controls.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	controls.add_theme_color_override("font_color", Color("a9bec3"))
 	content.add_child(controls)
@@ -437,7 +613,7 @@ func _build_breach_warning() -> void:
 	title.add_theme_color_override("font_color", Color("fff1ba"))
 	content.add_child(title)
 	var body := Label.new()
-	body.text = "The east maintenance hatch is beginning to fail. The shift is paused at 1× and the hatch is focused. Keep 4 salvage available and enable HAUL and CRAFT: residents will deliver an emergency patch, then reinforce it before the 20-second grace period expires and vault oxygen begins venting."
+	body.text = "The east maintenance hatch is beginning to fail. The shift is paused at 1× and the hatch is focused. Keep 4 salvage available and at least one HAUL and CRAFT priority above OFF: residents will deliver an emergency patch, then reinforce it before the 20-second grace period expires and vault oxygen begins venting."
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.custom_minimum_size.y = 100
 	content.add_child(body)
@@ -474,7 +650,14 @@ func refresh() -> void:
 		var button: Button = command_buttons[key]
 		button.disabled = game.tutorial_open or game.ended
 		button.modulate = Color("efc56b") if key == game.active_tool else Color.WHITE
+	if work_priorities_button != null:
+		work_priorities_button.disabled = (
+			game.tutorial_open
+			or game.ended
+			or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
+		)
 	_refresh_roster()
+	_refresh_work_priorities_board()
 	_refresh_crew_mood()
 	_refresh_oxygen()
 	_refresh_breach()
@@ -544,8 +727,10 @@ func _refresh_inspector() -> void:
 		for key: String in work_buttons:
 			var button: Button = work_buttons[key]
 			button.visible = true
-			button.button_pressed = bool(resident.work_allowed[key])
-			button.text = "%s: %s" % [key.to_upper(), "ON" if resident.work_allowed[key] else "OFF"]
+			button.disabled = not resident.alive
+			button.text = "%s: %s" % [key.to_upper(), resident.get_work_priority_label(key)]
+			button.tooltip_text = "Cycle %s priority: 1 highest, 4 lowest, or OFF." % key.capitalize()
+			_set_priority_button_color(button, resident.get_work_priority(key))
 		_hide_fixture_controls()
 		return
 	_last_inspected_resident_id = -1
@@ -620,7 +805,7 @@ func _refresh_inspector() -> void:
 		return
 	_last_inspected_building_id = -1
 	inspector_title.text = "INSPECTOR"
-	inspector_state.text = "Select a resident or fixture. Dig and build orders are completed through work permissions."
+	inspector_state.text = "Select a resident or fixture. Open PRIORITIES [P] to schedule ordinary work across the crew."
 	_hide_needs_and_work()
 	_hide_fixture_controls()
 
@@ -662,7 +847,7 @@ func _refresh_alerts() -> void:
 			alerts.append("MOOD STRESSED · %s" % lowest_mood_resident.resident_name)
 	var cook_enabled := false
 	for resident in game.residents:
-		if resident.alive and bool(resident.work_allowed.cook):
+		if resident.alive and resident.get_work_priority("cook") != VaultResident.PRIORITY_DISABLED:
 			cook_enabled = true
 	if not cook_enabled:
 		alerts.append("NO COOK ENABLED")
@@ -799,20 +984,111 @@ func _refresh_checklist() -> void:
 	checklist.text = "\n".join(lines)
 
 
+func _refresh_work_priorities_board() -> void:
+	if work_priorities_grid == null or game == null:
+		return
+	var roster_parts: Array[String] = []
+	for resident: VaultResident in game.residents:
+		roster_parts.append("%d:%s:%s" % [resident.resident_id, resident.resident_name, str(resident.alive)])
+	var roster_signature := "|".join(roster_parts)
+	var roster_rebuilt := false
+	if roster_signature != _last_work_priority_roster_signature:
+		_last_work_priority_roster_signature = roster_signature
+		_rebuild_work_priority_rows()
+		roster_rebuilt = true
+	var coverage := {"dig": 0, "haul": 0, "craft": 0, "cook": 0}
+	for resident: VaultResident in game.residents:
+		for work_type: String in VaultResident.WORK_TYPES:
+			var button := get_work_priority_button(resident.resident_id, work_type)
+			if button != null:
+				var priority := resident.get_work_priority(work_type)
+				button.text = resident.get_work_priority_label(work_type)
+				button.disabled = not resident.alive
+				button.tooltip_text = (
+					"%s · %s priority %s. Click: 1 → 2 → 3 → 4 → OFF → 1."
+					% [resident.resident_name, work_type.capitalize(), resident.get_work_priority_label(work_type)]
+				)
+				_set_priority_button_color(button, priority)
+				if resident.alive and priority != VaultResident.PRIORITY_DISABLED:
+					coverage[work_type] = int(coverage[work_type]) + 1
+	var coverage_parts: Array[String] = []
+	var missing: Array[String] = []
+	for work_type: String in VaultResident.WORK_TYPES:
+		var count := int(coverage[work_type])
+		coverage_parts.append("%s %d" % [work_type.to_upper(), count])
+		if count <= 0:
+			missing.append(work_type.to_upper())
+	work_priorities_summary.text = "COVERAGE // %s" % "  ·  ".join(coverage_parts)
+	if missing.is_empty():
+		work_priorities_summary.text += "\nAll ordinary work categories have at least one eligible resident."
+		work_priorities_summary.add_theme_color_override("font_color", Color("75d4b4"))
+	else:
+		work_priorities_summary.text += "\nNO ELIGIBLE CREW // %s" % ", ".join(missing)
+		work_priorities_summary.add_theme_color_override("font_color", Color("ef6860"))
+	if work_priorities_overlay.visible:
+		var focus_owner := get_viewport().gui_get_focus_owner()
+		if roster_rebuilt or focus_owner == null or not work_priorities_overlay.is_ancestor_of(focus_owner):
+			_focus_first_work_priority_control()
+
+
+func _set_priority_button_color(button: Button, priority: int) -> void:
+	match priority:
+		VaultResident.PRIORITY_HIGHEST:
+			button.modulate = Color("efc56b")
+		2:
+			button.modulate = Color("9ed8c7")
+		3:
+			button.modulate = Color("75b9c5")
+		VaultResident.PRIORITY_LOWEST:
+			button.modulate = Color("8faeb7")
+		_:
+			button.modulate = Color("d68b8b")
+
+
 func show_briefing(visible: bool) -> void:
 	if briefing_panel != null:
 		briefing_panel.visible = visible
+		if visible:
+			show_work_priorities(false)
 
 
 func show_breach_warning(visible: bool) -> void:
 	if breach_warning_panel != null:
 		breach_warning_panel.visible = visible
 		if visible and breach_resume_button != null:
+			show_work_priorities(false)
 			if right_scroll != null:
 				right_scroll.scroll_vertical = 0
 			breach_resume_button.grab_focus()
 		elif breach_resume_button != null and breach_resume_button.has_focus():
 			breach_resume_button.release_focus()
+
+
+func show_work_priorities(visible: bool) -> void:
+	if work_priorities_overlay == null:
+		return
+	if visible and (
+		game == null
+		or game.tutorial_open
+		or game.ended
+		or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
+	):
+		return
+	var was_visible := work_priorities_overlay.visible
+	work_priorities_overlay.visible = visible
+	if visible:
+		_refresh_work_priorities_board()
+		_focus_first_work_priority_control()
+	elif was_visible:
+		get_viewport().gui_release_focus()
+
+
+func toggle_work_priorities() -> void:
+	show_work_priorities(not is_work_priorities_open())
+
+
+func is_work_priorities_open() -> bool:
+	return work_priorities_overlay != null and work_priorities_overlay.visible
 
 
 func _reveal_work_permissions() -> void:
@@ -833,6 +1109,7 @@ func _reveal_fixture_controls() -> void:
 
 func show_outcome(won: bool, survivors: int) -> void:
 	briefing_panel.visible = false
+	show_work_priorities(false)
 	show_breach_warning(false)
 	outcome_panel.visible = true
 	if won:
@@ -916,7 +1193,11 @@ func _on_resident_pressed(resident_id: int) -> void:
 
 func _on_work_pressed(work_type: String) -> void:
 	if game.selected_resident_id >= 0:
-		game.toggle_work(game.selected_resident_id, work_type)
+		game.cycle_work_priority(game.selected_resident_id, work_type)
+
+
+func _on_work_priority_pressed(resident_id: int, work_type: String) -> void:
+	game.cycle_work_priority(resident_id, work_type)
 
 
 func _on_fixture_power_pressed() -> void:

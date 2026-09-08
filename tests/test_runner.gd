@@ -21,6 +21,9 @@ func _init() -> void:
 func _run() -> void:
 	_run_case("main scene boots with a sealed four-resident wing", _test_scene_boot_and_initial_state)
 	_run_case("tool hotkeys and help match the documented controls", _test_tool_hotkeys_and_help)
+	_run_case("manual work priorities arbitrate jobs across the crew", _test_work_priority_claiming)
+	_run_case("work priorities persist and legacy permissions migrate", _test_work_priority_save_compatibility)
+	_run_case("the work-priorities board edits crew without changing tools", _test_work_priorities_board)
 	_run_case("dig orders complete through the job system", _test_dig_completion)
 	_run_case("blueprints are supplied and constructed", _test_blueprint_build)
 	_run_case("cancel previews and powered checklist match their actions", _test_order_preview_and_checklist)
@@ -91,6 +94,9 @@ func _test_scene_boot_and_initial_state() -> void:
 	_assert_true(game.get_node_or_null("PlayerOrders/Interface") != null, "player-order UI was built")
 	_assert_equal(game.residents.size(), 4, "exactly four starting residents")
 	_assert_equal(game.get_alive_count(), 4, "all starting residents are alive")
+	for resident: VaultResident in game.residents:
+		for work_type: String in VaultResident.WORK_TYPES:
+			_assert_equal(resident.get_work_priority(work_type), VaultResident.DEFAULT_WORK_PRIORITY, "%s starts with %s at sensible normal priority" % [resident.resident_name, work_type])
 	_assert_equal(game.buildings.size(), 3, "three emergency fixtures are present")
 	_assert_approximately(game.oxygen_system.oxygen, OxygenSystem.STARTING_OXYGEN, 0.0001, "new wing starts with full oxygen")
 	_assert_true(game.tutorial_open, "opening briefing is visible")
@@ -118,6 +124,7 @@ func _test_scene_boot_and_initial_state() -> void:
 func _test_tool_hotkeys_and_help() -> void:
 	var game := _spawn_game()
 	_assert_true(_action_has_physical_key("tool_dig", KEY_E), "E is configured as the Dig hotkey")
+	_assert_true(_action_has_physical_key("work_priorities", KEY_P), "P is configured as the work-priorities hotkey")
 	for action in ["camera_left", "camera_right", "camera_up", "camera_down"]:
 		_assert_false(_action_has_physical_key(action, KEY_E), "Dig hotkey does not overlap %s" % action)
 
@@ -137,6 +144,182 @@ func _test_tool_hotkeys_and_help() -> void:
 		"NUTRIENT STATION: cooks %d raw food into %d meal (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT],
 		"nutrient help is derived from the simulated recipe",
 	)
+	_dispose(game)
+
+
+func _test_work_priority_claiming() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	var target := MapGrid.CHAMBER.position + Vector2i.LEFT
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.mood = 100.0
+		for work_type: String in VaultResident.WORK_TYPES:
+			resident.set_work_priority(work_type, VaultResident.PRIORITY_DISABLED)
+	var low_priority: VaultResident = game.residents[0]
+	var high_priority: VaultResident = game.residents[1]
+	low_priority.position = game.map_grid.cell_to_world(MapGrid.CHAMBER.position)
+	high_priority.position = game.map_grid.cell_to_world(MapGrid.CHAMBER.end - Vector2i.ONE)
+	low_priority.set_work_priority("dig", VaultResident.PRIORITY_LOWEST)
+	high_priority.set_work_priority("dig", VaultResident.PRIORITY_HIGHEST)
+	_assert_true(game.map_grid.queue_dig(target), "scarce reachable excavation is designated")
+	game.job_system.queue_dig(target)
+	game.job_system.advance(0.0)
+	_assert_equal(high_priority.current_job_type, JobSystem.JobType.DIG, "higher-priority digger claims before an earlier and closer low-priority digger")
+	_assert_equal(low_priority.current_job_id, -1, "low-priority digger does not take the scarce job")
+	var claimed_dig := game.job_system._find_job(high_priority.current_job_id)
+	_assert_equal(int(claimed_dig.get("reserved_by", -1)), high_priority.resident_id, "scarce dig reservation names the high-priority worker")
+	_dispose(game)
+
+	game = _spawn_game()
+	game.begin_shift()
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.mood = 100.0
+		resident.set_work_priority("dig", VaultResident.PRIORITY_DISABLED)
+	_assert_true(game.map_grid.queue_dig(target), "disabled-priority excavation is still a valid player order")
+	game.job_system.queue_dig(target)
+	game.job_system.advance(VaultGame.SIMULATION_TICK)
+	game.job_system.advance(VaultGame.SIMULATION_TICK)
+	for resident: VaultResident in game.residents:
+		_assert_true(resident.current_job_type != JobSystem.JobType.DIG, "%s never claims Disabled Dig work" % resident.resident_name)
+	_assert_equal(game.job_system.get_queued_count(), 1, "Disabled work remains queued for later reprioritization")
+	_assert_equal(int(game.job_system.jobs[0].reserved_by), -1, "Disabled work remains unreserved")
+	_dispose(game)
+
+	game = _spawn_game()
+	game.begin_shift()
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.mood = 100.0
+		for work_type: String in VaultResident.WORK_TYPES:
+			resident.set_work_priority(work_type, VaultResident.PRIORITY_DISABLED)
+	var worker: VaultResident = game.residents[0]
+	worker.set_work_priority("dig", VaultResident.PRIORITY_HIGHEST)
+	worker.set_work_priority("haul", VaultResident.PRIORITY_LOWEST)
+	_assert_true(game.map_grid.queue_dig(target), "preference fixture includes a reachable dig")
+	game.job_system.queue_dig(target)
+	game.job_system.queue_rubble(worker.get_cell(game.map_grid), 3)
+	game.job_system.advance(0.0)
+	_assert_equal(worker.current_job_type, JobSystem.JobType.DIG, "one colonist chooses priority-1 Dig over priority-4 Haul")
+	game.breach_system.advance(0.0, BreachSystem.WARNING_AT_SECONDS)
+	game.food_system.salvage = BreachSystem.PATCH_COST
+	game.job_system.advance(0.0)
+	_assert_equal(worker.current_job_type, JobSystem.JobType.SUPPLY_BREACH, "urgent hatch Haul overrides numbered ordinary-work priorities")
+	_dispose(game)
+
+
+func _test_work_priority_save_compatibility() -> void:
+	var original := _spawn_game()
+	var resident: VaultResident = original.residents[0]
+	_assert_true(original.set_work_priority(resident.resident_id, "dig", 1), "Dig accepts priority 1")
+	_assert_true(original.set_work_priority(resident.resident_id, "haul", 2), "Haul accepts priority 2")
+	_assert_true(original.set_work_priority(resident.resident_id, "craft", 4), "Craft accepts priority 4")
+	_assert_true(original.set_work_priority(resident.resident_id, "cook", VaultResident.PRIORITY_DISABLED), "Cook accepts Disabled")
+	var active_snapshot := original.create_snapshot()
+	_assert_variants_equal(
+		{"dig": 1, "haul": 2, "craft": 4, "cook": 0},
+		active_snapshot.residents[0].work_priorities,
+		"active resident snapshot stores every numeric work priority",
+	)
+	_assert_false(bool(active_snapshot.residents[0].work_allowed.cook), "schema-one permission mirror stores Disabled Cook")
+
+	var loaded := _spawn_game()
+	_assert_true(loaded.apply_snapshot(active_snapshot), "numeric work-priority snapshot loads")
+	var loaded_resident: VaultResident = loaded.get_resident_by_id(resident.resident_id)
+	_assert_equal(loaded_resident.get_work_priority("dig"), 1, "Dig priority survives load")
+	_assert_equal(loaded_resident.get_work_priority("haul"), 2, "Haul priority survives load")
+	_assert_equal(loaded_resident.get_work_priority("craft"), 4, "Craft priority survives load")
+	_assert_equal(loaded_resident.get_work_priority("cook"), 0, "Disabled Cook survives load")
+
+	var legacy_snapshot: Dictionary = active_snapshot.duplicate(true)
+	for entry: Dictionary in legacy_snapshot.residents:
+		entry.erase("work_priorities")
+	legacy_snapshot.residents[0].work_allowed = {"dig": true, "haul": false, "craft": true, "cook": false}
+	_assert_true(loaded.apply_snapshot(legacy_snapshot), "legacy boolean permissions load without a priority map")
+	loaded_resident = loaded.get_resident_by_id(resident.resident_id)
+	_assert_equal(loaded_resident.get_work_priority("dig"), VaultResident.DEFAULT_WORK_PRIORITY, "legacy enabled work migrates to normal priority")
+	_assert_equal(loaded_resident.get_work_priority("haul"), VaultResident.PRIORITY_DISABLED, "legacy disabled work migrates to Disabled")
+	_assert_equal(loaded_resident.get_work_priority("craft"), VaultResident.DEFAULT_WORK_PRIORITY, "each legacy enabled category receives the normal default")
+	_assert_equal(loaded_resident.get_work_priority("cook"), VaultResident.PRIORITY_DISABLED, "each legacy disabled category stays blocked")
+
+	var stable_snapshot := loaded.create_snapshot()
+	var out_of_range: Dictionary = active_snapshot.duplicate(true)
+	out_of_range.residents[0].work_priorities.dig = 5
+	_assert_false(loaded.apply_snapshot(out_of_range), "priority above 4 is rejected")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected priority range leaves the active wing unchanged")
+	var nonnumeric: Dictionary = active_snapshot.duplicate(true)
+	nonnumeric.residents[0].work_priorities.haul = "urgent"
+	_assert_false(loaded.apply_snapshot(nonnumeric), "nonnumeric priority is rejected")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected priority type is atomic")
+	var malformed_permission: Dictionary = active_snapshot.duplicate(true)
+	malformed_permission.residents[0].work_allowed.cook = 0
+	_assert_false(loaded.apply_snapshot(malformed_permission), "nonboolean legacy permission mirror is rejected")
+	_assert_variants_equal(stable_snapshot, loaded.create_snapshot(), "rejected permission type is atomic")
+	_dispose(loaded)
+	_dispose(original)
+
+
+func _test_work_priorities_board() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.set_speed(2)
+	game.set_tool("dig")
+	var orders := game.player_orders
+	orders.refresh()
+	_assert_equal(orders.command_grid.get_child_count(), 13, "priorities board does not displace or masquerade as a map tool")
+	_assert_false(orders.command_grid.is_ancestor_of(orders.work_priorities_button), "priorities opener lives with the roster rather than the map tools")
+	_assert_equal(orders.work_priority_buttons.size(), game.residents.size() * VaultResident.WORK_TYPES.size(), "board exposes one cell for every resident and work category")
+	_assert_equal(orders.work_priorities_grid.columns, 5, "board contains Resident plus the four in-game work kinds")
+	_assert_equal(orders.work_priorities_grid.get_child_count(), 25, "board has five headers and four complete resident rows")
+	_assert_equal(orders.get_work_priority_button(1, "dig").text, "3", "fresh priority cell shows the normal default")
+	_assert_equal(orders.work_priorities_overlay.mouse_filter, Control.MOUSE_FILTER_STOP, "full-screen priorities backdrop blocks map orders")
+
+	var paused_before := game.user_paused
+	var speed_before := game.simulation_speed
+	orders.work_priorities_button.pressed.emit()
+	_assert_true(orders.is_work_priorities_open(), "roster button opens the crew matrix")
+	_assert_equal(game.active_tool, "dig", "opening the board preserves the active Dig tool")
+	_assert_equal(game.user_paused, paused_before, "opening the board does not change pause state")
+	_assert_equal(game.simulation_speed, speed_before, "opening the board does not change speed")
+	var dig_priority_button := orders.get_work_priority_button(1, "dig")
+	dig_priority_button.pressed.emit()
+	orders.refresh()
+	_assert_equal(game.residents[0].get_work_priority("dig"), 4, "board click advances normal priority 3 to 4")
+	_assert_equal(dig_priority_button.text, "4", "matrix label stays synchronized with the model")
+	game.select_resident(1)
+	orders.refresh()
+	_assert_equal(orders.work_buttons.dig.text, "DIG: 4", "selected-resident shortcut mirrors the board")
+	dig_priority_button.pressed.emit()
+	orders.refresh()
+	_assert_equal(game.residents[0].get_work_priority("dig"), VaultResident.PRIORITY_DISABLED, "next board click advances priority 4 to Disabled")
+	_assert_equal(dig_priority_button.text, "OFF", "Disabled state is carried by text, not color alone")
+
+	var escape_event := InputEventKey.new()
+	escape_event.physical_keycode = KEY_ESCAPE
+	escape_event.pressed = true
+	game._unhandled_input(escape_event)
+	_assert_false(orders.is_work_priorities_open(), "Escape closes the priorities board")
+	_assert_equal(game.active_tool, "dig", "Escape closes only the board and preserves Dig")
+	var p_event := InputEventKey.new()
+	p_event.physical_keycode = KEY_P
+	p_event.pressed = true
+	game._unhandled_input(p_event)
+	_assert_true(orders.is_work_priorities_open(), "P opens the priorities board")
+	game._unhandled_input(p_event)
+	_assert_false(orders.is_work_priorities_open(), "P closes the priorities board")
+	_assert_equal(game.active_tool, "dig", "P toggle never changes the selected map tool")
+
+	orders.show_work_priorities(true)
+	orders.show_breach_warning(true)
+	_assert_false(orders.is_work_priorities_open(), "breach incident supersedes and closes the priorities board")
+	orders.show_breach_warning(false)
+	game.residents[3].kill()
+	orders.refresh()
+	_assert_true(orders.get_work_priority_button(4, "cook").disabled, "deceased resident priority cells are disabled")
 	_dispose(game)
 
 
