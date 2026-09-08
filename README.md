@@ -338,3 +338,64 @@ unmerged desktop gameplay slice: no merge or store shipping is authorized. It do
 not add conveyors, per-cell stacks, stockpile filters/capacity, heavy stack UI,
 raw-food pickup into kitchens, meal-fetch trips, surface play, caravans, factions,
 research, mods, multiplayer, IAP, ads, analytics, final art/audio, or mobile work.
+
+
+## Slice 11 — Lighting and darkness control
+
+Slice 11 makes the existing powered-Lumen mood rule visible and controllable
+without adding a room, line-of-sight, or atmosphere simulation. Each completed,
+enabled, currently powered **LUMEN $5** lights every carved floor cell whose
+horizontal and vertical offsets from the Lumen are each at most 5. This inclusive
+Chebyshev-radius-5 rule produces an 11x11 square centered on the fixture. Rock,
+walls, doors, future rooms, and hatch geometry do not block it, and overlapping
+Lumens only produce one lit state rather than intensity or stacked mood benefits.
+
+Unlit carved floor receives a persistent darkness layer. Coverage is derived from
+live fixture and power state, so it updates when a Lumen is built, enabled,
+disabled, shed by brownout, restored, removed, loaded from save, or reset by New
+Wing. Brownout priority still follows the fixed power ladder: Rec Consoles shed
+first, then Grow Trays, Nutrient Stations, Lumens, and finally Air Recyclers. When
+the allocator sheds a Lumen, that fixture immediately stops lighting its footprint,
+which can increase dark floor and expose awake residents to the documented
+additional 30 mood loss per 40-second day. Darkness does not otherwise change
+movement, pathing, work speed, health, power, oxygen, construction, cooking, or
+production.
+
+The right HUD reports lit floor, total carved floor, the coverage percentage,
+online/completed Lumens, and the number of living residents outside all powered
+coverage. Resident inspection names whether the selected resident is lit or dark
+and shows the resulting mood pressure. Lumen inspection reports active/offline
+state, the exact 5-tile radius, the fixture footprint in carved floor cells, and
+the darkness mood penalty outside coverage. The alert strip calls out dark
+residents so the player can add power, disable lower-value loads, build more
+Lumens, or move work closer to lit space.
+
+Press **L** or use right-HUD **LIGHT MAP [L]** to toggle a transient coverage view.
+The Light Map is informational only: it does not pause, resume, change speed,
+select tools, alter pathing, allocate power, affect mood, or write save data.
+Opening Help, the work-priority board, an unacknowledged hatch warning, or an
+outcome blocks the shortcut the same way other view controls are blocked; repeated
+key events do not flicker the overlay.
+
+Schema version 1 remains unchanged. Lighting saves no separate payload: floor
+darkness, lit-cell sets, online Lumen counts, dark-resident counts, and the visible
+overlay are reconstructed from saved map cells, fixture positions, completion and
+manual-disable state, and the recomputed power allocation. Legacy saves that lack
+manual-disable data load with Lumens enabled by default, and Light Map visibility
+always resets off after New Wing or load.
+
+`./scripts/check.sh` includes `tests/test_lighting_darkness.gd`. The focused suite
+covers exact center, axial, diagonal, and just-outside Chebyshev boundaries;
+overlap; unfinished, disabled, shed, recovered, and removed Lumens; paused
+enable/disable redraws; HUD, inspector, alert, and Light Map behavior; save/load
+derivation; legacy compatibility; and confirmation that transient Light Map state
+is never serialized. Existing core, mood/recreation, work-priority, breach,
+medical, stockpile-zone, food-hauling, editor import, and boot checks remain in
+the complete verification run.
+
+Slice 11 branches from Slice 10 at `6ea2a85` on `feat/lighting-darkness`. It is an
+unmerged desktop gameplay slice: no merge or store shipping is authorized. It does
+not add colored light, falloff, brightness stacking, fog of war, vision, ray
+casting, rock occlusion, room graphs, day/night lighting, batteries, wiring,
+circuits, spatial gas cells, doors, surface play, caravans, factions, research,
+mods, multiplayer, IAP, ads, analytics, final art/audio, or mobile work.

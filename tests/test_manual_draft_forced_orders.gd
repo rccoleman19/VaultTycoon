@@ -65,7 +65,37 @@ func _test_draft_release_and_toggle() -> void:
 	_assert_false(resident.sleeping, "drafting cancels sleep")
 	_assert_equal(resident.bed_id, -1, "drafting clears the assigned bunk")
 	_assert_false(game.toggle_resident_draft(999), "unknown resident cannot be drafted")
+	_assert_true(game.issue_context_order(Vector2i(25, 18)), "death fixture gives the drafted resident a pending move")
+	resident.kill()
+	_assert_false(resident.alive, "death fixture kills the drafted resident")
+	_assert_false(resident.drafted, "death clears persistent draft")
+	_assert_false(resident.has_manual_move_order(), "death clears pending manual movement")
+	_assert_false(resident.is_forced_job, "death clears any manual-job marker")
 	_dispose(game)
+
+	for cargo_type: int in [JobSystem.JobType.HAUL_RAW_FOOD, JobSystem.JobType.HAUL_MEAL]:
+		var cargo_game := _manual_game()
+		var carrier: VaultResident = cargo_game.residents[0]
+		cargo_game.select_resident(carrier.resident_id)
+		carrier.set_work_priority("haul", VaultResident.PRIORITY_HIGHEST)
+		var source := carrier.get_cell(cargo_game.map_grid)
+		var stored_before := cargo_game.food_system.raw_food if cargo_type == JobSystem.JobType.HAUL_RAW_FOOD else cargo_game.food_system.meals
+		if cargo_type == JobSystem.JobType.HAUL_RAW_FOOD:
+			cargo_game.job_system.queue_raw_food(source, 2)
+		else:
+			cargo_game.job_system.queue_meals(source, 2)
+		cargo_game.job_system.advance(VaultGame.SIMULATION_TICK)
+		var cargo_job := _find_job_of_type(cargo_game, cargo_type)
+		_assert_equal(carrier.carrying, 2, "food hauler picks up %s before draft" % JobSystem.JOB_NAMES[cargo_type])
+		_assert_equal(cargo_job.get("in_transit"), 2, "picked-up food is tracked in transit")
+		_assert_true(cargo_game.toggle_resident_draft(carrier.resident_id), "draft interrupts %s safely" % JobSystem.JOB_NAMES[cargo_type])
+		_assert_equal(carrier.carrying, 0, "draft empties the food carrier's hands")
+		_assert_equal(cargo_job.get("amount"), 2, "draft returns carried food to its source backlog")
+		_assert_equal(cargo_job.get("in_transit"), 0, "draft clears food in-transit state")
+		_assert_equal(cargo_job.get("reserved_by"), -1, "draft releases the food-haul reservation")
+		var stored_after := cargo_game.food_system.raw_food if cargo_type == JobSystem.JobType.HAUL_RAW_FOOD else cargo_game.food_system.meals
+		_assert_equal(stored_after, stored_before, "draft cannot silently credit carried food")
+		_dispose(cargo_game)
 
 
 func _test_manual_move_and_drafted_autonomy() -> void:
@@ -80,6 +110,7 @@ func _test_manual_move_and_drafted_autonomy() -> void:
 	var meals_before := game.food_system.meals
 	var food_before := resident.needs.food
 	var rest_before := resident.needs.rest
+	var mood_before := resident.needs.mood
 	var rubble_cell := resident.get_cell(game.map_grid)
 	game.job_system.queue_rubble(rubble_cell, 3)
 	var rubble_job := _find_job_of_type(game, JobSystem.JobType.HAUL_RUBBLE)
@@ -94,8 +125,23 @@ func _test_manual_move_and_drafted_autonomy() -> void:
 	_assert_equal(resident.manual_destination, final_destination, "replacement move keeps only the newest destination")
 	_assert_false(game.issue_context_order(Vector2i.ZERO), "rock cannot replace a valid manual move")
 	_assert_equal(resident.manual_destination, final_destination, "invalid replacement preserves the existing move")
+	_assert_false(game.issue_context_order(Vector2i(-1, 12)), "out-of-bounds floor commands are rejected")
+	_assert_equal(resident.manual_destination, final_destination, "out-of-bounds rejection preserves the existing move")
+	var isolated_floor := Vector2i(2, 2)
+	game.map_grid.cells[isolated_floor.y * MapGrid.WIDTH + isolated_floor.x] = MapGrid.Tile.FLOOR
+	_assert_true(game.map_grid.is_walkable(isolated_floor), "unreachable fixture is carved floor")
+	_assert_true(game.map_grid.find_path(resident.get_cell(game.map_grid), isolated_floor).is_empty(), "unreachable fixture is disconnected from the chamber")
+	_assert_false(game.issue_context_order(isolated_floor), "disconnected carved floor cannot replace a reachable move")
+	_assert_equal(resident.manual_destination, final_destination, "unreachable rejection preserves the existing move")
+	game.select_resident(game.residents[1].resident_id)
+	_assert_true(resident.drafted, "changing selection does not clear draft")
+	_assert_equal(resident.manual_destination, final_destination, "changing selection does not clear the pending move")
+	game.select_resident(resident.resident_id)
 
-	game.step_simulation(4.0)
+	for _tick in 120:
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		if not resident.has_manual_move_order():
+			break
 	_assert_equal(resident.get_cell(game.map_grid), final_destination, "manual movement ends on the exact ordered cell")
 	_assert_false(resident.has_manual_move_order(), "arrival consumes the one manual move")
 	_assert_true(resident.drafted, "arrival does not silently undraft the resident")
@@ -106,6 +152,15 @@ func _test_manual_move_and_drafted_autonomy() -> void:
 	_assert_equal(resident.stress_break_left, 0.0, "drafted low mood does not trigger an autonomous stress break")
 	_assert_true(resident.needs.food < food_before, "food need still advances while drafted")
 	_assert_true(resident.needs.rest < rest_before, "rest need still advances while drafted")
+	_assert_true(resident.needs.mood < mood_before, "mood still advances while drafted")
+
+	game.oxygen_system.oxygen = OxygenSystem.CRITICAL_OXYGEN_THRESHOLD
+	var oxygen_before := game.oxygen_system.oxygen
+	var health_before := resident.needs.health
+	game.step_simulation(0.5)
+	_assert_true(game.oxygen_system.oxygen < oxygen_before, "drafted resident still contributes to vault oxygen consumption")
+	_assert_true(resident.needs.health < health_before, "critical oxygen still damages a drafted resident")
+	_assert_true(resident.drafted, "environmental damage does not silently undraft its target")
 
 	game.breach_system.advance(0.0, BreachSystem.WARNING_AT_SECONDS)
 	game.job_system.advance(0.0)
@@ -152,6 +207,28 @@ func _test_forced_job_arbitration() -> void:
 	var replacement_job := game.job_system._find_job(resident.current_job_id)
 	_assert_equal(replacement_job.get("target"), replacement_target, "replacement binds the newly clicked job")
 	_assert_equal(first_job.get("reserved_by"), -1, "replacing forced work releases the old reservation")
+	var replacement_job_id := resident.current_job_id
+	var isolated_floor := Vector2i(2, 2)
+	game.map_grid.cells[isolated_floor.y * MapGrid.WIDTH + isolated_floor.x] = MapGrid.Tile.FLOOR
+	game.job_system.queue_rubble(isolated_floor, 3)
+	_assert_false(game.issue_context_order(isolated_floor), "unreachable queued work cannot be forced")
+	_assert_equal(resident.current_job_id, replacement_job_id, "unreachable force preserves the resident's current job")
+	_assert_equal(replacement_job.get("reserved_by"), resident.resident_id, "unreachable force preserves the current reservation")
+
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(23, 12))
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(25, 12))
+	game.power_grid.recalculate(game.buildings)
+	game.job_system.advance(0.0)
+	_assert_false(_find_job_of_type(game, JobSystem.JobType.COOK).is_empty(), "ready kitchen creates a forceable contextual job")
+	_assert_true(game.toggle_building_enabled(kitchen.building_id), "test disables the kitchen after its job is queued")
+	_assert_false(game.issue_context_order(kitchen.cell), "job whose live power prerequisite failed cannot be forced")
+	_assert_equal(resident.current_job_id, replacement_job_id, "failed live prerequisite leaves forced work intact")
+	_assert_equal(replacement_job.get("reserved_by"), resident.resident_id, "failed live prerequisite leaves its reservation intact")
+
+	resident.kill()
+	_assert_false(resident.is_forced_job, "death clears forced-job state")
+	_assert_true(resident.forced_order.is_empty(), "death clears the persisted forced descriptor")
+	_assert_equal(replacement_job.get("reserved_by"), -1, "death releases the forced reservation")
 	_dispose(game)
 
 
@@ -211,12 +288,17 @@ func _test_context_job_types() -> void:
 	hatch_game.acknowledge_breach_warning(false)
 	hatch_game.select_resident(resident.resident_id)
 	_assert_forced_job(hatch_game, resident, BreachSystem.HATCH_CELL, JobSystem.JobType.SUPPLY_BREACH, "warning hatch context forces emergency Haul through OFF")
-	_assert_equal(hatch_game.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "hatch context can be advanced to the patch phase")
-	hatch_game.job_system.advance(0.0)
-	hatch_game.job_system.advance(0.0)
-	hatch_game.select_resident(resident.resident_id)
-	_assert_forced_job(hatch_game, resident, BreachSystem.HATCH_CELL, JobSystem.JobType.PATCH_BREACH, "supplied hatch context forces emergency Craft through OFF")
 	_dispose(hatch_game)
+
+	var patch_game := _manual_game()
+	resident = patch_game.residents[0]
+	patch_game.breach_system.advance(0.0, BreachSystem.WARNING_AT_SECONDS)
+	patch_game.acknowledge_breach_warning(false)
+	_assert_equal(patch_game.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "patch fixture supplies the warned hatch directly")
+	patch_game.job_system.advance(0.0)
+	patch_game.select_resident(resident.resident_id)
+	_assert_forced_job(patch_game, resident, BreachSystem.HATCH_CELL, JobSystem.JobType.PATCH_BREACH, "supplied hatch context forces emergency Craft through OFF")
+	_dispose(patch_game)
 
 
 func _test_forced_job_interruptions() -> void:
@@ -269,6 +351,8 @@ func _test_command_state_and_hud() -> void:
 	game.set_tool("select")
 	var destination := Vector2i(25, 18)
 	_assert_true(game.issue_context_order(destination), "manual move is accepted while paused")
+	var move_feedback := game.status_message.to_lower()
+	_assert_true(resident.resident_name.to_lower() in move_feedback and "mov" in move_feedback, "accepted move provides contextual resident feedback")
 	_assert_true(game.user_paused, "manual move preserves pause state")
 	_assert_equal(game.simulation_speed, 3, "manual move preserves simulation speed")
 	_assert_equal(game.active_tool, "select", "manual move preserves the Select tool")
@@ -282,7 +366,14 @@ func _test_command_state_and_hud() -> void:
 	_assert_true("right-click" in tooltip and "move" in tooltip, "drafted control explains the direct-move gesture")
 	_assert_true("DRAFTED" in game.player_orders.inspector_state.text, "inspector identifies persistent drafted mode")
 	_assert_true("MANUAL MOVE" in game.player_orders.inspector_state.text, "inspector identifies a pending manual move")
+	_assert_true(_roster_contains(game, "DRAFTED"), "roster identifies drafted control")
+	_assert_true(_roster_contains(game, "MANUAL MOVE"), "roster identifies pending direct movement")
+	_assert_true("APPLY AFTER UNDRAFT" in game.player_orders.work_header.text, "drafted inspector explains when work priorities resume")
 	_assert_true(_action_has_physical_key("draft_selected", KEY_R), "R is configured as the draft-selected shortcut")
+	game.status_message_left = 0.0
+	game.player_orders.refresh()
+	var select_help := game.player_orders.tool_status.text.to_lower()
+	_assert_true("draft" in select_help and "right-click" in select_help and "force" in select_help, "Select help explains both contextual command modes")
 
 	game.player_orders.resident_draft_button.pressed.emit()
 	_assert_false(resident.drafted, "inspector action undrafts its selected resident")
@@ -293,12 +384,20 @@ func _test_command_state_and_hud() -> void:
 	var rubble_cell := resident.get_cell(game.map_grid)
 	game.job_system.queue_rubble(rubble_cell, 3)
 	_assert_true(game.issue_context_order(rubble_cell), "HUD fixture accepts an undrafted forced job")
+	_assert_true("forc" in game.status_message.to_lower(), "accepted forced job provides contextual feedback")
 	game.player_orders.refresh()
 	_assert_true("FORCED" in game.player_orders.inspector_state.text, "inspector distinguishes player-forced work")
+	_assert_true(_roster_contains(game, "FORCED"), "roster distinguishes player-forced work")
 	_assert_true(game.user_paused, "forced job preserves pause state")
 	_assert_equal(game.simulation_speed, 3, "forced job preserves simulation speed")
 	_assert_equal(game.active_tool, "select", "forced job preserves active tool")
 	_assert_equal(game.selected_resident_id, selected_before, "forced job preserves selection")
+	var checklist_guidance := game.player_orders.checklist.text.to_lower()
+	_assert_true("manual orders" in checklist_guidance and "draft" in checklist_guidance and "force" in checklist_guidance, "Help checklist covers manual control")
+	_assert_true(_node_text_contains(game.player_orders.root, "right-click"), "control reference exposes the contextual right-click gesture")
+	game.player_orders.help_button.pressed.emit()
+	_assert_true(game.player_orders.is_help_open(), "Help can display the manual-order guidance")
+	_assert_true("draft" in game.player_orders.checklist.text.to_lower(), "visible Help retains draft guidance")
 	_dispose(game)
 
 
@@ -358,8 +457,6 @@ func _test_manual_order_save_compatibility() -> void:
 		_assert_true(resident.forced_order.is_empty(), "%s defaults to an empty forced descriptor" % resident.resident_name)
 	_dispose(legacy_loaded)
 
-	var target := _spawn_game()
-	var stable_snapshot := target.create_snapshot()
 	var malformed_payloads := [
 		[0, "drafted", "true"],
 		[0, "manual_destination", null],
@@ -372,17 +469,55 @@ func _test_manual_order_save_compatibility() -> void:
 		[1, "forced_order", {"type": JobSystem.JobType.DIG, "target": [0, 0], "building_id": -1}],
 	]
 	for malformed: Array in malformed_payloads:
+		var target := _spawn_game()
+		var stable_snapshot := target.create_snapshot()
 		var invalid := snapshot.duplicate(true)
 		invalid.residents[int(malformed[0])][malformed[1]] = malformed[2]
 		_assert_false(target.apply_snapshot(invalid), "malformed manual payload is rejected: %s" % str(malformed))
 		_assert_variants_equal(stable_snapshot, target.create_snapshot(), "rejected manual payload leaves the active wing unchanged")
+		_dispose(target)
+
+	var supply_source := _manual_game()
+	var hatch_worker: VaultResident = supply_source.residents[0]
+	supply_source.breach_system.advance(0.0, BreachSystem.WARNING_AT_SECONDS)
+	supply_source.acknowledge_breach_warning(false)
+	supply_source.select_resident(hatch_worker.resident_id)
+	_assert_forced_job(supply_source, hatch_worker, BreachSystem.HATCH_CELL, JobSystem.JobType.SUPPLY_BREACH, "save fixture forces hatch supply")
+	var forced_supply_snapshot := supply_source.create_snapshot()
+	for invalid_supply: Variant in [null, {}, "invalid", 4]:
+		var supply_target := _spawn_game()
+		var supply_stable := supply_target.create_snapshot()
+		var invalid := forced_supply_snapshot.duplicate(true)
+		invalid.jobs.breach_supply = invalid_supply
+		_assert_false(supply_target.apply_snapshot(invalid), "non-array forced hatch-supply payload is rejected")
+		_assert_variants_equal(supply_stable, supply_target.create_snapshot(), "rejected hatch-supply payload is atomic")
+		_dispose(supply_target)
+	_dispose(supply_source)
+
+	var patch_source := _manual_game()
+	hatch_worker = patch_source.residents[0]
+	patch_source.breach_system.advance(0.0, BreachSystem.WARNING_AT_SECONDS)
+	patch_source.acknowledge_breach_warning(false)
+	_assert_equal(patch_source.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "save fixture supplies the hatch")
+	patch_source.job_system.advance(0.0)
+	patch_source.select_resident(hatch_worker.resident_id)
+	_assert_forced_job(patch_source, hatch_worker, BreachSystem.HATCH_CELL, JobSystem.JobType.PATCH_BREACH, "save fixture forces hatch patch work")
+	var forced_patch_snapshot := patch_source.create_snapshot()
+	for invalid_patch: Variant in [null, {}, "invalid", 1]:
+		var patch_target := _spawn_game()
+		var patch_stable := patch_target.create_snapshot()
+		var invalid := forced_patch_snapshot.duplicate(true)
+		invalid.jobs.breach_patch = invalid_patch
+		_assert_false(patch_target.apply_snapshot(invalid), "non-array forced hatch-patch payload is rejected")
+		_assert_variants_equal(patch_stable, patch_target.create_snapshot(), "rejected hatch-patch payload is atomic")
+		_dispose(patch_target)
+	_dispose(patch_source)
 
 	source.new_game(false)
 	for resident: VaultResident in source.residents:
 		_assert_false(resident.drafted, "New Wing resets %s to autonomous control" % resident.resident_name)
 		_assert_false(resident.has_manual_move_order(), "New Wing clears %s's move order" % resident.resident_name)
 		_assert_false(resident.is_forced_job, "New Wing clears %s's forced order" % resident.resident_name)
-	_dispose(target)
 	_dispose(source)
 
 
@@ -422,13 +557,40 @@ func _send_manual_key(game: VaultGame, keycode: Key) -> void:
 	game._unhandled_input(event)
 
 
-func _assert_forced_job(game: VaultGame, resident: VaultResident, cell: Vector2i, expected_type: int, message: String) -> void:
-	_assert_true(game.issue_context_order(cell), message)
+func _roster_contains(game: VaultGame, token: String) -> bool:
+	for child: Node in game.player_orders.roster_box.get_children():
+		if child is Button and token in (child as Button).text:
+			return true
+	return false
+
+
+func _node_text_contains(node: Node, token: String) -> bool:
+	var normalized_token := token.to_lower()
+	if node is Label and normalized_token in (node as Label).text.to_lower():
+		return true
+	if node is Button and normalized_token in (node as Button).text.to_lower():
+		return true
+	if node is RichTextLabel and normalized_token in (node as RichTextLabel).text.to_lower():
+		return true
+	for child: Node in node.get_children():
+		if _node_text_contains(child, normalized_token):
+			return true
+	return false
+
+
+func _assert_forced_job(game: VaultGame, resident: VaultResident, cell: Vector2i, expected_type: int, message: String) -> bool:
+	var accepted := game.issue_context_order(cell)
+	_assert_true(accepted, message)
+	if not accepted:
+		return false
 	_assert_true(resident.is_forced_job, "%s marks the assignment forced" % message)
 	_assert_equal(resident.current_job_type, expected_type, "%s chooses the contextual job type" % message)
 	var job := game.job_system._find_job(resident.current_job_id)
 	_assert_false(job.is_empty(), "%s creates or finds an active job" % message)
+	if job.is_empty():
+		return false
 	_assert_equal(job.get("target"), cell, "%s binds the exact clicked cell" % message)
 	_assert_equal(job.get("reserved_by"), resident.resident_id, "%s reserves only for the selected resident" % message)
 	var work_type := game.job_system.get_work_type_for_job(expected_type)
 	_assert_equal(resident.get_work_priority(work_type), VaultResident.PRIORITY_DISABLED, "%s bypasses OFF without mutating it" % message)
+	return true

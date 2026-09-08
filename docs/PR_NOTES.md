@@ -76,7 +76,7 @@ instead be assigned one contextual queued job directly.
 Validation completed with Godot 4.7.2 via `./scripts/check.sh`:
 
 - Manual draft/forced-orders focused suite
-  (`tests/test_manual_draft_forced_orders.gd`): **PASS**, 7 cases and 232
+  (`tests/test_manual_draft_forced_orders.gd`): **PASS**, 7 cases and 318
   assertions
 - Lighting/darkness focused suite (`tests/test_lighting_darkness.gd`): **PASS**,
   7 cases and 137 assertions
