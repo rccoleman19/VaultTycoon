@@ -574,9 +574,9 @@ func _build_briefing() -> void:
 	scrim.mouse_filter = Control.MOUSE_FILTER_STOP
 	briefing_overlay.add_child(scrim)
 	briefing_panel = PanelContainer.new()
-	briefing_panel.set_anchors_preset(Control.PRESET_CENTER)
-	briefing_panel.position = Vector2(-320, -300)
-	briefing_panel.size = Vector2(640, 600)
+	briefing_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	briefing_panel.custom_minimum_size = Vector2(640, 520)
+	briefing_panel.size = Vector2(640, 520)
 	briefing_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	briefing_panel.add_theme_stylebox_override("panel", _panel_style(Color("111b21"), Color("72cdb8"), 3))
 	briefing_overlay.add_child(briefing_panel)
@@ -586,6 +586,7 @@ func _build_briefing() -> void:
 	briefing_panel.add_child(margin)
 	var content := VBoxContainer.new()
 	content.add_theme_constant_override("separation", 12)
+	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	margin.add_child(content)
 	var title := Label.new()
 	title.text = "VAULT WING 07 // SEAL STABILIZATION"
@@ -595,14 +596,20 @@ func _build_briefing() -> void:
 	var intro := Label.new()
 	intro.text = "Dig and haul salvage, add bunks, then power food and an Air Recycler. Keep Haul enabled to store Grow Tray and Nutrient Station output. Reserve 4 salvage and keep Haul + Craft enabled for the hatch warning."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	intro.custom_minimum_size.y = 62
+	intro.custom_minimum_size.y = 54
 	content.add_child(intro)
+	var checklist_scroll := ScrollContainer.new()
+	checklist_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	checklist_scroll.custom_minimum_size.y = 180
+	checklist_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	content.add_child(checklist_scroll)
 	checklist = RichTextLabel.new()
 	checklist.bbcode_enabled = true
 	checklist.fit_content = true
-	checklist.custom_minimum_size.y = 238
+	checklist.scroll_active = false
+	checklist.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	checklist.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	content.add_child(checklist)
+	checklist_scroll.add_child(checklist)
 	var controls := Label.new()
 	controls.text = "LMB order/select · Select resident then R draft/undraft · RMB: drafted = move, undrafted = force context job · Esc return to Select · X cancel · P priorities · L light map · WASD pan · wheel zoom · Space pause · 1/2/3 speed · F recenter"
 	controls.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -610,6 +617,7 @@ func _build_briefing() -> void:
 	content.add_child(controls)
 	var buttons := HBoxContainer.new()
 	buttons.alignment = BoxContainer.ALIGNMENT_END
+	buttons.size_flags_vertical = Control.SIZE_SHRINK_END
 	content.add_child(buttons)
 	briefing_load_button = Button.new()
 	briefing_load_button.text = "LOAD LOCAL SAVE"
