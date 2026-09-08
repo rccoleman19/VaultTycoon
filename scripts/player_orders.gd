@@ -574,9 +574,12 @@ func _build_briefing() -> void:
 	scrim.mouse_filter = Control.MOUSE_FILTER_STOP
 	briefing_overlay.add_child(scrim)
 	briefing_panel = PanelContainer.new()
-	briefing_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	briefing_panel.set_anchors_preset(Control.PRESET_CENTER)
+	briefing_panel.offset_left = -320.0
+	briefing_panel.offset_right = 320.0
+	briefing_panel.offset_top = -300.0
+	briefing_panel.offset_bottom = 300.0
 	briefing_panel.custom_minimum_size = Vector2(640, 600)
-	briefing_panel.size = Vector2(640, 600)
 	briefing_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	briefing_panel.add_theme_stylebox_override("panel", _panel_style(Color("111b21"), Color("72cdb8"), 3))
 	briefing_overlay.add_child(briefing_panel)

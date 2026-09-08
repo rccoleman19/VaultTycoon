@@ -53,6 +53,9 @@ var _dragging_camera := false
 
 
 func _ready() -> void:
+	var designed := Vector2i(1280, 720)
+	if DisplayServer.window_get_size() != designed:
+		DisplayServer.window_set_size(designed)
 	map_grid.setup(
 		Callable(self, "_has_cancelable_blueprint_at"),
 		Callable(self, "_is_reserved_cell"),
