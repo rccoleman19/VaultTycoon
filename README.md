@@ -197,3 +197,29 @@ Cross-exporting creates the target files when the matching templates are install
 ## Scope boundary
 
 Slice 7 intentionally polishes the existing sealed-wing day-seven survival objective rather than adding another major system. The boundary remains one deterministic maintenance-hatch pressure event, one aggregate oxygen percentage, one deterministic vault-wide power allocator with brownout shedding, one-seat basic recreation, and one numeric priority for each resident/work-category pair. It does not add resident skills, aptitudes, or passions, work speed traits, schedules or shifts, direct-move commands, player-authored job queues, priorities for individual blueprints or recipes, work zones, relationships, social recreation, memories, room beauty, comfort, recreation variety, a medical system, wiring, circuits, batteries, fuel, spatial gas cells, multiple gases, diffusion, pressure zones, oxygen pipe networks, multiple independently sealed rooms, a sealed-door/room graph, or any other full atmosphere model. It also does not add surface expeditions, caravans, factions, research, mods, multiplayer, IAP, ads, analytics, final art or audio, mobile export, store packaging, raiders, enemies, weapons, combat, or repeated/procedural incidents.
+
+
+## Slice 8 — Medical beds
+
+Build **MED $8** for 8 salvage and 8 seconds of assembly. No power is required.
+Injured residents at 95 HP or below automatically claim one reachable, completed Medical Bed and
+perform **Rest-Medical**, recovering 2 HP per simulation second at the bed, capped
+at 100 HP. A bed serves one patient; travel provides no healing. Rations interrupt
+care; hungry residents seek food before starting care. Low meal stocks prioritize available cooking jobs, and the active hatch response takes precedence. Existing hunger, O2, breach,
+and mood damage remain in effect. Medical rest restores rest while treatment runs.
+
+Select a Medical Bed and **DISABLE** to deny care, or **ENABLE** to restore it.
+The HUD shows injured crew and free medical beds; resident rows retain individual
+HP and activity, and the fixture inspector shows availability and its patient.
+Free beds may still be unreachable from a particular resident. Deconstruction and
+death release reservations. Health, fixtures, and disabled care survive save/load;
+transient medical reservations are reclaimed on the next simulation tick.
+
+Medical care is optional for victory. The managed medical regression starts with
+an established food, mood, and oxygen loop, constructs a medical bed with normal
+salvage delivery and build jobs, and recovers a 35 HP injury after the hatch event.
+The original first-session construction routes and unmanaged failure tests remain.
+`./scripts/check.sh` includes medical recovery, missing/unfinished/disabled beds,
+capacity, travel, save/load, removal, death, HUD, and a managed day-seven medical
+route, along with all prior suites. Godot remains 4.7.2. This slice is stacked on
+PR #7 (`b6d95a5`) and targets main; merge the earlier slices first.

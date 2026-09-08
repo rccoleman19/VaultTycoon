@@ -29,6 +29,7 @@ var current_job_type := -1
 var job_phase := ""
 var carrying := 0
 var work_accumulator := 0.0
+var medical_bed_id := -1
 var sleeping := false
 var bed_id := -1
 var recreating := false
@@ -129,7 +130,8 @@ func advance_needs(
 ) -> void:
 	if not alive:
 		return
-	needs.advance(day_fraction, lit, sleeping, in_bed, recreation_active, low_oxygen)
+	var medical_rest := medical_bed_id >= 0 and state == "Rest-Medical"
+	needs.advance(day_fraction, lit, sleeping or medical_rest, in_bed or medical_rest, recreation_active, low_oxygen)
 	if needs.health <= 0.0:
 		kill()
 	queue_redraw()

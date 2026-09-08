@@ -16,6 +16,7 @@ const BUILD_KIND_BY_TOOL := {
 	"stockpile": VaultBuilding.Kind.STOCKPILE,
 	"air": VaultBuilding.Kind.AIR_RECYCLER,
 	"rec": VaultBuilding.Kind.RECREATION_CONSOLE,
+	"medical": VaultBuilding.Kind.MEDICAL_BED,
 }
 
 @onready var map_grid: MapGrid = $MapGrid
@@ -248,7 +249,7 @@ func set_speed(speed: int) -> void:
 
 
 func set_tool(tool: String) -> void:
-	active_tool = tool if tool in ["select", "dig", "cancel", "bed", "lamp", "generator", "grow", "kitchen", "stockpile", "air", "rec"] else "select"
+	active_tool = tool if tool in ["select", "dig", "cancel", "bed", "lamp", "generator", "grow", "kitchen", "stockpile", "air", "rec", "medical"] else "select"
 	status_message = _tool_help(active_tool)
 	status_message_left = 4.0
 	map_grid.preview_tool = active_tool
@@ -327,9 +328,13 @@ func get_powered_building_count(kind: int) -> int:
 
 func toggle_building_enabled(building_id: int) -> bool:
 	var building := get_building_by_id(building_id)
-	if building == null or not building.complete or not building.is_power_consumer():
+	if building == null or not building.complete or (not building.is_power_consumer() and building.kind != VaultBuilding.Kind.MEDICAL_BED):
 		return false
 	building.manually_disabled = not building.manually_disabled
+	if building.kind == VaultBuilding.Kind.MEDICAL_BED and building.manually_disabled:
+		for resident: VaultResident in residents:
+			if resident.medical_bed_id == building_id:
+				job_system.release_resident(resident)
 	power_grid.recalculate(buildings)
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
@@ -596,7 +601,7 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	for entry: Variant in building_data:
 		if not entry is Dictionary or not entry.get("cell") is Array or entry.cell.size() < 2:
 			return false
-		if not _is_integer_in_range(entry.get("kind"), VaultBuilding.Kind.BED, VaultBuilding.Kind.RECREATION_CONSOLE):
+		if not _is_integer_in_range(entry.get("kind"), VaultBuilding.Kind.BED, VaultBuilding.Kind.MEDICAL_BED):
 			return false
 		if entry.has("manually_disabled") and typeof(entry.manually_disabled) != TYPE_BOOL:
 			return false
@@ -827,6 +832,8 @@ func _remove_building(building: VaultBuilding, salvage_refund: int, message: Str
 	food_system.add_salvage(maxi(0, salvage_refund))
 	job_system.cancel_building(building.building_id)
 	for resident: VaultResident in residents:
+		if resident.medical_bed_id == building.building_id:
+			job_system.release_resident(resident)
 		if resident.bed_id == building.building_id:
 			resident.bed_id = -1
 			resident.sleeping = false
@@ -935,6 +942,7 @@ func _tool_help(tool: String) -> String:
 		"select": return "SELECT: inspect a resident or fixture; use HELP to reopen the checklist."
 		"dig": return "DIG: click or drag connected rock; hauled rubble yields 3 salvage per tile."
 		"cancel": return "CANCEL: remove dig orders or unfinished blueprints."
+		"medical": return "MEDICAL BED: 8 salvage, 8s assembly, no power. Residents at 95 HP or below claim care automatically (+2 HP/s); hatch repair first. Disable to deny care."
 		"bed": return "BUNK: residents sleep here automatically (8 salvage)."
 		"lamp": return "LUMEN: powered light improves mood (5 salvage, 1 power)."
 		"generator": return "CHARGE NODE: adds 7 power for food and life support (18 salvage)."

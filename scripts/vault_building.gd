@@ -1,7 +1,7 @@
 class_name VaultBuilding
 extends Node2D
 
-enum Kind { BED, LAMP, GENERATOR, GROW_TRAY, KITCHEN, STOCKPILE, AIR_RECYCLER, RECREATION_CONSOLE }
+enum Kind { BED, LAMP, GENERATOR, GROW_TRAY, KITCHEN, STOCKPILE, AIR_RECYCLER, RECREATION_CONSOLE, MEDICAL_BED }
 enum PowerPriority { CRITICAL, HIGH, NORMAL, LOW, OPTIONAL }
 
 const KIND_NAMES := {
@@ -13,6 +13,7 @@ const KIND_NAMES := {
 	Kind.STOCKPILE: "Salvage Bay",
 	Kind.AIR_RECYCLER: "Air Recycler",
 	Kind.RECREATION_CONSOLE: "Rec Console",
+	Kind.MEDICAL_BED: "Medical Bed",
 }
 const COSTS := {
 	Kind.BED: 8,
@@ -23,6 +24,7 @@ const COSTS := {
 	Kind.STOCKPILE: 4,
 	Kind.AIR_RECYCLER: 14,
 	Kind.RECREATION_CONSOLE: 8,
+	Kind.MEDICAL_BED: 8,
 }
 const POWER_DEMAND := {
 	Kind.BED: 0,
@@ -33,6 +35,7 @@ const POWER_DEMAND := {
 	Kind.STOCKPILE: 0,
 	Kind.AIR_RECYCLER: 3,
 	Kind.RECREATION_CONSOLE: 1,
+	Kind.MEDICAL_BED: 0,
 }
 const POWER_PRIORITY_NAMES := {
 	PowerPriority.CRITICAL: "CRITICAL",
@@ -190,6 +193,10 @@ func _draw() -> void:
 	draw_rect(rect, Color("17242b"))
 	draw_rect(rect, base_color, false, 2.0)
 	match kind:
+		Kind.MEDICAL_BED:
+			draw_rect(Rect2(-8, -7, 16, 14), Color("d8dde0"))
+			draw_line(Vector2(-5, 0), Vector2(5, 0), Color("71c7b5"), 3.0)
+			draw_line(Vector2(0, -5), Vector2(0, 5), Color("71c7b5"), 3.0)
 		Kind.BED:
 			draw_rect(Rect2(-8, -7, 16, 14), Color("6f91a3"))
 			draw_rect(Rect2(-7, -6, 5, 12), Color("d8dde0"))

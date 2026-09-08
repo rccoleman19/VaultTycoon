@@ -235,3 +235,29 @@ The core acceptance coverage includes both sides of the balance target: a staged
 - Combat, enemies, raiders, weapons, repeated incidents, and procedural events remain outside the first-playable boundary.
 
 Slice 7 ends at a clearer, more forgiving version of the same sealed-wing day-seven objective. It does not merge or ship the game and does not introduce another major system.
+
+
+## Slice 8 — Medical beds
+
+Build **MED $8** for 8 salvage and 8 seconds of assembly. No power is required.
+Injured residents at 95 HP or below automatically claim one reachable, completed Medical Bed and
+perform **Rest-Medical**, recovering 2 HP per simulation second at the bed, capped
+at 100 HP. A bed serves one patient; travel provides no healing. Rations interrupt
+care; hungry residents seek food before starting care. Low meal stocks prioritize available cooking jobs, and the active hatch response takes precedence. Existing hunger, O2, breach,
+and mood damage remain in effect. Medical rest restores rest while treatment runs.
+
+Select a Medical Bed and **DISABLE** to deny care, or **ENABLE** to restore it.
+The HUD shows injured crew and free medical beds; resident rows retain individual
+HP and activity, and the fixture inspector shows availability and its patient.
+Free beds may still be unreachable from a particular resident. Deconstruction and
+death release reservations. Health, fixtures, and disabled care survive save/load;
+transient medical reservations are reclaimed on the next simulation tick.
+
+Medical care is optional for victory. The managed medical regression starts with
+an established food, mood, and oxygen loop, constructs a medical bed with normal
+salvage delivery and build jobs, and recovers a 35 HP injury after the hatch event.
+The original first-session construction routes and unmanaged failure tests remain.
+`./scripts/check.sh` includes medical recovery, missing/unfinished/disabled beds,
+capacity, travel, save/load, removal, death, HUD, and a managed day-seven medical
+route, along with all prior suites. Godot remains 4.7.2. This slice is stacked on
+PR #7 (`b6d95a5`) and targets main; merge the earlier slices first.

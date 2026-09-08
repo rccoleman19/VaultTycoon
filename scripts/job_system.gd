@@ -13,6 +13,8 @@ const JOB_NAMES := {
 	JobType.PATCH_BREACH: "Patching pressure breach",
 }
 
+const MEDICAL_HP_PER_SECOND := 2.0
+
 var jobs: Array[Dictionary] = []
 var next_job_id := 1
 var game: Node
@@ -59,6 +61,7 @@ func cancel_building(building_id: int) -> void:
 
 
 func release_resident(resident: VaultResident) -> void:
+	_release_medical(resident)
 	_release_recreation(resident)
 	if resident.current_job_id >= 0:
 		var job := _find_job(resident.current_job_id)
@@ -321,6 +324,10 @@ func _handle_survival(resident: VaultResident, delta_seconds: float) -> bool:
 		resident.needs.eat()
 		resident.state = "Eating ration"
 		return true
+	if breach.is_response_active():
+		_release_medical(resident)
+	elif _handle_medical(resident, delta_seconds):
+		return true
 	if resident.sleeping:
 		var sleep_cell := resident.get_cell(map_grid)
 		var bed: VaultBuilding = game.get_building_by_id(resident.bed_id)
@@ -397,6 +404,65 @@ func _handle_survival(resident: VaultResident, delta_seconds: float) -> bool:
 		resident.state = "Stress break"
 		return true
 	return false
+
+
+# Medical care is a survival activity, like sleep; work permissions do not deny it.
+# Reservations are transient and reclaimed after loading a snapshot.
+func _handle_medical(resident: VaultResident, delta_seconds: float) -> bool:
+	# Keep the ration pipeline staffed before optional recovery.
+	if food.meals < game.get_alive_count():
+		for job: Dictionary in jobs:
+			if int(job.type) == JobType.COOK and int(job.reserved_by) in [-1, resident.resident_id] and _resident_allows(resident, JobType.COOK) and _job_available(resident, job):
+				_release_medical(resident)
+				return false
+	var bed := game.get_building_by_id(resident.medical_bed_id) as VaultBuilding
+	if resident.medical_bed_id >= 0 and (not _can_use_medical(resident, bed) or resident.needs.health >= 100.0):
+		_release_medical(resident)
+		bed = null
+	if resident.needs.health >= 100.0:
+		return false
+	if bed == null:
+		if resident.needs.health > 95.0 or resident.needs.food <= 35.0:
+			return false
+		for candidate: VaultBuilding in game.buildings:
+			if _can_use_medical(resident, candidate):
+				bed = candidate
+				break
+		if bed == null:
+			return false
+		release_resident(resident)
+		resident.sleeping = false
+		resident.bed_id = -1
+		resident.stress_break_left = 0.0
+		resident.medical_bed_id = bed.building_id
+		bed.reserved_by = resident.resident_id
+	if not resident.move_to(bed.cell, map_grid, delta_seconds):
+		resident.state = "Seeking Medical Bed"
+		return true
+	resident.state = "Rest-Medical"
+	resident.needs.health = minf(100.0, resident.needs.health + MEDICAL_HP_PER_SECOND * delta_seconds)
+	resident.queue_redraw()
+	if resident.needs.health >= 100.0:
+		_release_medical(resident)
+	return true
+
+
+func _can_use_medical(resident: VaultResident, bed: VaultBuilding) -> bool:
+	return (bed != null and bed.complete and bed.kind == VaultBuilding.Kind.MEDICAL_BED
+		and not bed.manually_disabled and bed.reserved_by in [-1, resident.resident_id]
+		and not map_grid.find_path(resident.get_cell(map_grid), bed.cell).is_empty())
+
+
+func _release_medical(resident: VaultResident) -> void:
+	if resident.medical_bed_id < 0:
+		return
+	var bed := game.get_building_by_id(resident.medical_bed_id) as VaultBuilding
+	if bed != null and bed.reserved_by == resident.resident_id:
+		bed.reserved_by = -1
+	resident.medical_bed_id = -1
+	resident.clear_path()
+	if resident.alive:
+		resident.state = "Idle"
 
 
 func _find_free_bed(resident: VaultResident) -> int:

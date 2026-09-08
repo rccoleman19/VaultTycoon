@@ -316,7 +316,7 @@ func _test_work_priorities_board() -> void:
 	game.set_tool("dig")
 	var orders := game.player_orders
 	orders.refresh()
-	_assert_equal(orders.command_grid.get_child_count(), 14, "Help does not displace or masquerade as a map tool")
+	_assert_equal(orders.command_grid.get_child_count(), 15, "Help does not displace or masquerade as a map tool")
 	_assert_false(orders.command_grid.is_ancestor_of(orders.work_priorities_button), "priorities opener lives with the roster rather than the map tools")
 	_assert_equal(orders.work_priority_buttons.size(), game.residents.size() * VaultResident.WORK_TYPES.size(), "board exposes one cell for every resident and work category")
 	_assert_equal(orders.work_priorities_grid.columns, 5, "board contains Resident plus the four in-game work kinds")
@@ -1679,7 +1679,7 @@ func _test_player_order_survival_plan() -> void:
 	_dispose(game)
 
 
-func _test_managed_day_seven_win() -> void:
+func _test_managed_day_seven_win(with_medical := false) -> void:
 	var game := _spawn_game()
 	var bed_cells: Array[Vector2i] = [
 		Vector2i(18, 12),
@@ -1702,6 +1702,13 @@ func _test_managed_day_seven_win() -> void:
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 4, "managed wing has one bunk per resident")
 	_assert_true(console.powered and grow_tray.powered and kitchen.powered and recycler.powered, "mood, food, and oxygen fixtures start powered")
 	_assert_true(game.oxygen_system.net_rate > 0.0, "managed recycler exceeds resident oxygen demand")
+	if with_medical:
+		game.step_simulation(90.0)
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, Vector2i(18, 13)), "medical blueprint uses the normal construction pipeline")
+		game.residents[0].apply_damage(35.0)
+		game.step_simulation(55.0)
+		_assert_true(game.get_building_at(Vector2i(18, 13)).complete, "medical bed is supplied and built")
+		_assert_true(game.residents[0].needs.health > 65.0, "medical care restores injury after the hatch event")
 	game.step_simulation(DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE + VaultGame.SIMULATION_TICK)
 
 	_assert_true(game.ended, "managed simulation reaches an outcome")

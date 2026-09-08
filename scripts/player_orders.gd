@@ -304,7 +304,7 @@ func _build_interface() -> void:
 	bottom_content.add_child(tool_status)
 	command_grid = GridContainer.new()
 	command_grid.name = "CommandGrid"
-	command_grid.columns = 7
+	command_grid.columns = 8
 	command_grid.add_theme_constant_override("h_separation", 5)
 	command_grid.add_theme_constant_override("v_separation", 4)
 	bottom_content.add_child(command_grid)
@@ -319,6 +319,7 @@ func _build_interface() -> void:
 		["kitchen", "NUTRI $10", "Nutrient Station: 2 power; cooks meals", 96],
 		["stockpile", "BAY $4", "Salvage Bay: hauling destination", 64],
 		["air", "AIR $14", "Air Recycler: 3 power; restores vault oxygen", 86],
+		["medical", "MED $8", "Medical Bed: automatic injury recovery, +2 HP/s; no power", 82],
 		["rec", "REC $8", "Rec Console: 1 power; restores one resident's mood", 82],
 	]
 	for definition in tools:
@@ -733,7 +734,7 @@ func _refresh_roster() -> void:
 	for resident in game.residents:
 		var button := Button.new()
 		var urgent := minf(resident.needs.food, minf(resident.needs.rest, minf(resident.needs.mood, resident.needs.health)))
-		button.text = "%s · MOOD %d · %s · LOW %d" % [resident.resident_name, floori(resident.needs.mood), resident.state, floori(urgent)] if resident.alive else "%s · DECEASED" % resident.resident_name
+		button.text = "%s · HP %d · MOOD %d · %s · LOW %d" % [resident.resident_name, floori(resident.needs.health), floori(resident.needs.mood), resident.state, floori(urgent)] if resident.alive else "%s · DECEASED" % resident.resident_name
 		button.tooltip_text = button.text
 		button.clip_text = true
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -830,6 +831,9 @@ func _refresh_inspector() -> void:
 				inspector_state.text += "\nRecipe: %d raw -> %d meal" % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]
 			elif building.kind == VaultBuilding.Kind.AIR_RECYCLER:
 				inspector_state.text += "\nO2 recovery: +%.1f%%/s" % OxygenSystem.RECYCLER_OUTPUT_PER_SECOND
+			elif building.kind == VaultBuilding.Kind.MEDICAL_BED:
+				var patient := game.get_resident_by_id(building.reserved_by)
+				inspector_state.text += "\nCare: %s\nRecovery: +2 HP/s · seek at HP <= 95" % ("DISABLED" if building.manually_disabled else ("AVAILABLE" if patient == null else patient.resident_name + " · " + patient.state))
 			elif building.kind == VaultBuilding.Kind.RECREATION_CONSOLE:
 				inspector_state.text += "\nMood recovery: +%.0f/s · one resident" % ResidentNeeds.RECREATION_RECOVERY_PER_SECOND
 				var console_user := _get_recreation_user(building.building_id)
@@ -880,6 +884,16 @@ func _refresh_alerts() -> void:
 		alerts.append("POWER BROWNOUT · SHED %s" % game.power_grid.get_shed_summary())
 	if game.get_completed_building_count(VaultBuilding.Kind.BED) < game.get_alive_count():
 		alerts.append("BED SHORTAGE")
+	var injured := 0
+	var free_medical := 0
+	for resident: VaultResident in game.residents:
+		if resident.alive and resident.needs.health < 100.0:
+			injured += 1
+	for bed: VaultBuilding in game.buildings:
+		if bed.kind == VaultBuilding.Kind.MEDICAL_BED and bed.complete and not bed.manually_disabled and bed.reserved_by < 0:
+			free_medical += 1
+	if injured > 0 or game.get_completed_building_count(VaultBuilding.Kind.MEDICAL_BED) > 0:
+		alerts.append("INJURED %d · MED BEDS FREE %d" % [injured, free_medical])
 	var lowest_mood_resident: VaultResident = null
 	var recreation_needed := false
 	for resident: VaultResident in game.residents:
@@ -1056,6 +1070,7 @@ func _refresh_checklist() -> void:
 	var rec_done := game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) >= 1
 	var rec_marker := "[color=#75d4b4][DONE][/color]" if rec_done else "[color=#8faeb7][OPTIONAL][/color]"
 	lines.append("%s  Power a Rec Console; free 1 power if shed" % rec_marker)
+	lines.append("Optional: Medical Bed ($8) heals injuries; disable to deny care")
 	lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled")
 	checklist.text = "\n".join(lines)
 
@@ -1314,11 +1329,12 @@ func _show_fixture_controls(building: VaultBuilding) -> void:
 	fixture_controls.visible = visible
 	if not visible:
 		return
-	var is_consumer := building.is_power_consumer()
+	var is_consumer := building.is_power_consumer() or building.kind == VaultBuilding.Kind.MEDICAL_BED
 	fixture_header.text = "FIXTURE CONTROLS"
 	fixture_power_button.visible = is_consumer
 	fixture_power_button.text = "ENABLE" if building.manually_disabled else "DISABLE"
 	fixture_power_button.disabled = not is_consumer
+	fixture_power_button.tooltip_text = "Allow or deny medical care." if building.kind == VaultBuilding.Kind.MEDICAL_BED else "Remove or restore this fixture's power demand."
 	fixture_deconstruct_button.disabled = building.is_emergency_core
 	fixture_deconstruct_button.tooltip_text = "Emergency core cannot be deconstructed." if building.is_emergency_core else "Recover %d salvage and remove this fixture." % building.get_deconstruct_refund()
 

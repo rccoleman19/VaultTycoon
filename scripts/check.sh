@@ -34,6 +34,7 @@ run_godot_check tests --script res://tests/test_runner.gd
 run_godot_check mood-recreation --script res://tests/test_mood_recreation.gd
 run_godot_check work-priorities --script res://tests/test_work_priorities.gd
 run_godot_check breach-modal-speed-keys --script res://tests/test_breach_modal_speed_keys.gd
+run_godot_check medical --script res://tests/test_medical.gd
 run_godot_check boot --quit-after 5
 
 echo "All Vault Tycoon headless checks passed."
