@@ -1,12 +1,105 @@
-# PR notes — desktop stack through Slice 11
+# PR notes — desktop stack through Slice 12
 
 ## Current stack
 
-Slice 11 builds directly from Slice 10 at `6ea2a85` (`feat/food-stockpile-haul`),
-which is stacked on the earlier desktop gameplay slices. Slices 1–10, including
-Medical Beds, stockpile-zone painting, and physical food-output hauling, remain in
-place.
+Slice 12 builds directly from Slice 11 at `05fec77`, which is stacked on the
+earlier desktop gameplay slices. Slices 1–11, including Medical Beds,
+stockpile-zone painting, physical food-output hauling, and visible powered-Lumen
+coverage, remain in place.
 This work targets `main`; no merge or store shipping is authorized.
+
+## Slice 12 — Manual draft and forced orders
+
+Slice 12 adds narrow, selected-resident control without turning the colony sim into
+a combat or squad-command game. Drafting persistently suspends one resident's
+autonomy and permits one replaceable move. An undrafted selected resident can
+instead be assigned one contextual queued job directly.
+
+### Focused scope
+
+- Add a persistent draft flag per resident. Select a living resident and press `R`
+  or use the inspector's **DRAFT**/**UNDRAFT** action; changing selection, arriving
+  at a destination, pausing, changing speed, or changing the active map tool does
+  not implicitly clear draft.
+- While drafted, suspend all autonomous work, eating, sleep, medical care,
+  recreation, stress-break behavior, and automatic breach response. Needs, mood,
+  oxygen consumption, low-oxygen damage, and other environmental effects continue
+  to advance, so leaving a resident drafted carries real survival risk.
+- Right-clicking for a selected drafted resident accepts one reachable carved-floor
+  move. A later accepted move replaces it, and arrival leaves the resident drafted
+  and idle. Rock, out-of-bounds, and unreachable destinations reject without
+  disturbing the current move or other state.
+- Right-clicking a contextual queued job for a selected undrafted resident forces
+  that exact job once. A valid force bypasses numeric work rank and OFF for that
+  assignment, but retains every live job prerequisite and path check and never
+  steals a reservation held by another resident.
+- Support direct forced maintenance-hatch supply and patch work when the current
+  breach phase, material, and reachability prerequisites permit it. Automatic
+  hatch response retains its existing rank override and OFF boundary.
+- Let critical self-care and urgent hatch response interrupt ordinary forced work.
+  Use the existing safe release path so carried salvage or food, job ownership, and
+  fixture reservations are never duplicated or lost.
+- Accept manual commands while paused. Issuing or rejecting one does not resume or
+  pause the simulation and does not change speed, selection, or the active map tool.
+  A resident owns at most one current manual command; there is no multi-command
+  queue.
+- Keep save schema version 1. Store draft and manual-command state as optional
+  per-resident compatible fields, default legacy omissions to undrafted with no
+  command, reject malformed state atomically, and clear all manual state on New
+  Wing.
+- Expose draft, manual movement, and forced-work state in the roster, inspector,
+  resident marker, contextual feedback, control reference, and Help guidance.
+
+### Manual-control contract
+
+| Rule | Slice 12 behavior |
+| --- | --- |
+| Selection | One living resident; no multi-select |
+| Draft toggle | `R` or resident inspector **DRAFT**/**UNDRAFT** |
+| Draft lifetime | Persists across selection changes, arrival, pause/speed/tool changes, and save/load |
+| Drafted autonomy | All automatic work, self-care, stress breaks, and breach response suspended |
+| Drafted hazards | Needs, mood, oxygen use, and environmental damage continue |
+| Drafted right-click | One replaceable move to reachable carved floor |
+| Move completion | Resident stays drafted and becomes idle at the destination |
+| Undrafted right-click | One contextual queued job is forced once |
+| Work settings | Force bypasses numeric rank and OFF for that assignment only |
+| Job validity | Normal prerequisites and reachability still apply |
+| Reservations | An already reserved job cannot be stolen |
+| Ordinary forced interruption | Critical self-care and urgent hatch response take precedence |
+| Hatch target | Supply and patch jobs may be forced directly when currently valid |
+| Invalid command | Preserve current work, movement, cargo, and reservations unchanged |
+| Paused command | Queue for later execution without changing pause, speed, tool, or selection |
+| Persistence | Optional schema-1 state; legacy omission defaults safely; New Wing clears it |
+
+### Validation and limits
+
+Validation completed with Godot 4.7.2 via `./scripts/check.sh`:
+
+- Manual draft/forced-orders focused suite
+  (`tests/test_manual_draft_forced_orders.gd`): **PASS**, 7 cases and 232
+  assertions
+- Lighting/darkness focused suite (`tests/test_lighting_darkness.gd`): **PASS**,
+  7 cases and 137 assertions
+- Existing core and focused regressions: **PASS**
+- Headless editor import and five-frame main-scene boot: **PASS**
+
+Focused coverage should exercise both `R` and the inspector toggle; persistence
+across selection, arrival, pause, speed, tools, save/load, and New Wing; one-command
+replacement; exact carved-floor and reachability validation; drafted suppression of
+every autonomous activity while needs and hazards continue; contextual force across
+the existing job families; rank and OFF bypass; live prerequisites; reservation
+non-stealing; safe cargo release; critical-self-care and emergency preemption;
+direct hatch supply and patch work; invalid-command non-interference; death cleanup;
+HUD/marker/help feedback; legacy defaults; malformed-load atomicity; and commands
+issued while paused. The complete check must retain every core, mood/recreation,
+work-priority, breach-modal, medical, stockpile-zone, food-hauling, and
+lighting/darkness regression alongside editor import and main-scene boot.
+
+This slice adds no multi-resident selection, shift-queued or multi-step commands,
+patrols, player-authored job queues, persistent per-task priorities, combat stances,
+enemies, weapons, or combat. It adds no new economy, atmosphere, lighting, or
+survival system, does not merge or ship the game, and retains the existing surface,
+multiplayer, monetization, final-art/audio, and mobile exclusions.
 
 ## Slice 11 — Lighting and darkness control
 

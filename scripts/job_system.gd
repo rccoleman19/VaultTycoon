@@ -92,12 +92,100 @@ func release_resident(resident: VaultResident) -> void:
 	resident.clear_job()
 
 
+func force_job_at(resident: VaultResident, cell: Vector2i) -> Dictionary:
+	if resident == null or not resident.alive:
+		return {"ok": false, "message": "Select a living resident before forcing work."}
+	if resident.drafted:
+		return {"ok": false, "message": "Undraft %s before forcing work." % resident.resident_name}
+	_ensure_state_jobs()
+	var job := _find_forceable_job_at(resident, cell)
+	if job.is_empty():
+		if _has_job_reserved_by_other_at(resident, cell):
+			return {"ok": false, "message": "That task is already reserved by another resident."}
+		return {"ok": false, "message": "No reachable, ready job is available at that location."}
+
+	var job_id := int(job.id)
+	if resident.current_job_id != job_id:
+		# Resolve the exact target before interrupting anything. A rejected force
+		# must leave the resident's current work and cargo untouched.
+		release_resident(resident)
+		job = _find_job(job_id)
+		if (
+			job.is_empty()
+			or bool(job.get("done", false))
+			or int(job.get("reserved_by", -1)) not in [-1, resident.resident_id]
+			or not _job_available(resident, job)
+		):
+			return {"ok": false, "message": "The requested task is no longer available."}
+	_assign_job(resident, job, true)
+	return {
+		"ok": true,
+		"message": "%s forced: %s." % [resident.resident_name, get_job_name(int(job.type)).to_lower()],
+		"job_id": int(job.id),
+		"job_type": int(job.type),
+	}
+
+
+func cancel_manual_command(resident: VaultResident) -> bool:
+	if resident == null or not resident.alive or not resident.is_forced_job:
+		return false
+	release_resident(resident)
+	return true
+
+
+func restore_manual_orders() -> void:
+	_ensure_state_jobs()
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			resident.drafted = false
+			resident.manual_destination = VaultResident.NO_MANUAL_DESTINATION
+			resident.clear_forced_order()
+			continue
+		if resident.drafted:
+			resident.clear_forced_order()
+			if resident.has_manual_move_order():
+				var destination := resident.manual_destination
+				if (
+					not map_grid.is_walkable(destination)
+					or map_grid.find_path(resident.get_cell(map_grid), destination).is_empty()
+				):
+					resident.clear_manual_move_order()
+			continue
+		if not resident.is_forced_job or resident.forced_order.is_empty():
+			continue
+		var descriptor := resident.forced_order.duplicate(true)
+		var target_data: Array = descriptor.get("target", [])
+		var target := Vector2i(int(target_data[0]), int(target_data[1]))
+		var job := _find_matching_job(
+			int(descriptor.get("type", -1)),
+			target,
+			int(descriptor.get("building_id", -1)),
+		)
+		if (
+			job.is_empty()
+			or int(job.get("reserved_by", -1)) not in [-1, resident.resident_id]
+			or not _job_available(resident, job)
+		):
+			resident.clear_job()
+			continue
+		if resident.current_job_id >= 0 and resident.current_job_id != int(job.id):
+			release_resident(resident)
+		_assign_job(resident, job, true)
+
+
+func get_job_name(type: int) -> String:
+	return str(JOB_NAMES.get(type, "Working"))
+
+
 func advance(delta_seconds: float) -> void:
 	_ensure_state_jobs()
 	var ordered_residents: Array[VaultResident] = game.residents.duplicate()
 	ordered_residents.sort_custom(_resident_claims_before)
 	for resident: VaultResident in ordered_residents:
 		if not resident.alive:
+			continue
+		if resident.drafted:
+			_process_manual_move(resident, delta_seconds)
 			continue
 		if _handle_survival(resident, delta_seconds):
 			continue
@@ -112,6 +200,8 @@ func advance(delta_seconds: float) -> void:
 
 func start_breach_response() -> void:
 	for resident: VaultResident in game.residents:
+		if resident.drafted:
+			continue
 		if resident.alive and (resident.current_job_id >= 0 or resident.recreating or resident.stress_break_left > 0.0):
 			resident.stress_break_left = 0.0
 			release_resident(resident)
@@ -128,6 +218,10 @@ func reconcile_recreation_state() -> void:
 		return a.resident_id < b.resident_id
 	)
 	for resident: VaultResident in ordered_residents:
+		if resident.drafted:
+			if resident.recreating:
+				resident.stop_recreation()
+			continue
 		if not resident.recreating:
 			continue
 		if resident.needs.is_recreation_satisfied():
@@ -600,6 +694,78 @@ func _release_recreation(resident: VaultResident) -> void:
 	resident.stop_recreation()
 
 
+func _process_manual_move(resident: VaultResident, delta_seconds: float) -> void:
+	if resident.current_job_id >= 0 or resident.recreating or resident.medical_bed_id >= 0:
+		release_resident(resident)
+	if not resident.has_manual_move_order():
+		resident.state = "Drafted"
+		return
+	var destination := resident.manual_destination
+	if (
+		not map_grid.is_walkable(destination)
+		or map_grid.find_path(resident.get_cell(map_grid), destination).is_empty()
+	):
+		resident.clear_manual_move_order()
+		resident.state = "Drafted · Move blocked"
+		return
+	if resident.move_to(destination, map_grid, delta_seconds):
+		resident.clear_manual_move_order()
+	else:
+		resident.state = "Drafted · Moving"
+
+
+func _find_forceable_job_at(resident: VaultResident, cell: Vector2i) -> Dictionary:
+	var candidates: Array[Dictionary] = []
+	for job: Dictionary in jobs:
+		if bool(job.get("done", false)) or job.target != cell:
+			continue
+		if int(job.get("reserved_by", -1)) not in [-1, resident.resident_id]:
+			continue
+		if resident.current_job_id == int(job.id) or _job_available(resident, job):
+			candidates.append(job)
+	if candidates.is_empty():
+		return {}
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var priority_a := _job_priority(int(a.type))
+		var priority_b := _job_priority(int(b.type))
+		return priority_a < priority_b if priority_a != priority_b else int(a.id) < int(b.id)
+	)
+	return candidates[0]
+
+
+func _has_job_reserved_by_other_at(resident: VaultResident, cell: Vector2i) -> bool:
+	for job: Dictionary in jobs:
+		if (
+			not bool(job.get("done", false))
+			and job.target == cell
+			and int(job.get("reserved_by", -1)) not in [-1, resident.resident_id]
+		):
+			return true
+	return false
+
+
+func _assign_job(resident: VaultResident, job: Dictionary, forced := false) -> void:
+	job.reserved_by = resident.resident_id
+	resident.current_job_id = int(job.id)
+	resident.current_job_type = int(job.type)
+	resident.job_phase = "pickup" if int(job.type) in [JobType.SUPPLY_BUILD, JobType.SUPPLY_BREACH] else "target"
+	var in_transit := int(job.get("in_transit", 0))
+	if int(job.type) in [JobType.SUPPLY_BUILD, JobType.SUPPLY_BREACH] and in_transit > 0:
+		resident.job_phase = "target"
+		resident.carrying = in_transit
+		resident.carrying_kind = "salvage"
+	elif int(job.type) in [JobType.HAUL_RAW_FOOD, JobType.HAUL_MEAL] and in_transit > 0:
+		resident.job_phase = "deposit"
+		resident.carrying = in_transit
+		resident.carrying_kind = "raw_food" if int(job.type) == JobType.HAUL_RAW_FOOD else "meal"
+	resident.work_accumulator = 0.0
+	resident.state = str(JOB_NAMES.get(int(job.type), "Working"))
+	if forced:
+		resident.set_forced_order(int(job.type), job.target, int(job.get("building_id", -1)))
+	else:
+		resident.clear_forced_order()
+
+
 func _claim_best_job(resident: VaultResident) -> void:
 	var candidates: Array[Dictionary] = []
 	for job: Dictionary in jobs:
@@ -615,16 +781,7 @@ func _claim_best_job(resident: VaultResident) -> void:
 		return _job_claims_before(resident, a, b)
 	)
 	var job := candidates[0]
-	job.reserved_by = resident.resident_id
-	resident.current_job_id = int(job.id)
-	resident.current_job_type = int(job.type)
-	resident.job_phase = "pickup" if int(job.type) in [JobType.SUPPLY_BUILD, JobType.SUPPLY_BREACH] else "target"
-	if int(job.type) in [JobType.SUPPLY_BUILD, JobType.SUPPLY_BREACH] and int(job.get("in_transit", 0)) > 0:
-		resident.job_phase = "target"
-		resident.carrying = int(job.in_transit)
-		resident.carrying_kind = "salvage"
-	resident.work_accumulator = 0.0
-	resident.state = str(JOB_NAMES.get(int(job.type), "Working"))
+	_assign_job(resident, job)
 
 
 func _resident_claims_before(a: VaultResident, b: VaultResident) -> bool:
@@ -638,7 +795,7 @@ func _resident_claims_before(a: VaultResident, b: VaultResident) -> bool:
 
 func _best_claim_key(resident: VaultResident) -> Array[int]:
 	var best: Array[int] = [9, 99]
-	if not resident.alive:
+	if not resident.alive or resident.drafted:
 		return best
 	if resident.current_job_id >= 0 and resident.current_job_type not in [JobType.SUPPLY_BREACH, JobType.PATCH_BREACH]:
 		best = [1, resident.get_work_priority(_work_type_for_job(resident.current_job_type))]
@@ -711,7 +868,13 @@ func _job_available(resident: VaultResident, job: Dictionary) -> bool:
 	if map_grid.find_path(resident.get_cell(map_grid), building.cell).is_empty():
 		return false
 	if type == JobType.SUPPLY_BUILD:
-		return building.needs_supply() and food.salvage > _breach_salvage_reserve()
+		return (
+			building.needs_supply()
+			and (
+				int(job.get("in_transit", 0)) > 0
+				or food.salvage > _breach_salvage_reserve()
+			)
+		)
 	if type == JobType.BUILD:
 		return not building.complete and building.is_supplied()
 	if type == JobType.COOK:
@@ -915,7 +1078,7 @@ func _preferred_stockpile_cell(from_cell: Vector2i) -> Vector2i:
 
 func _resident_allows(resident: VaultResident, type: int) -> bool:
 	var work_type := _work_type_for_job(type)
-	return not work_type.is_empty() and resident.get_work_priority(work_type) != VaultResident.PRIORITY_DISABLED
+	return not resident.drafted and not work_type.is_empty() and resident.get_work_priority(work_type) != VaultResident.PRIORITY_DISABLED
 
 
 func _work_type_for_job(type: int) -> String:
@@ -998,7 +1161,7 @@ func _has_claimable_breach_job(resident: VaultResident) -> bool:
 func _first_allowed_resident(type: int) -> VaultResident:
 	var candidates: Array[VaultResident] = []
 	for resident: VaultResident in game.residents:
-		if resident.alive and _resident_allows(resident, type):
+		if resident.alive and not resident.drafted and _resident_allows(resident, type):
 			candidates.append(resident)
 	if candidates.is_empty():
 		return null
@@ -1030,14 +1193,14 @@ func _restore_breach_assignment(
 
 func _has_allowed_worker(type: int) -> bool:
 	for resident: VaultResident in game.residents:
-		if resident.alive and _resident_allows(resident, type):
+		if resident.alive and not resident.drafted and _resident_allows(resident, type):
 			return true
 	return false
 
 
 func _has_worker_path(type: int) -> bool:
 	for resident: VaultResident in game.residents:
-		if resident.alive and _resident_allows(resident, type):
+		if resident.alive and not resident.drafted and _resident_allows(resident, type):
 			if not map_grid.find_path(resident.get_cell(map_grid), BreachSystem.HATCH_CELL).is_empty():
 				return true
 	return false
@@ -1063,8 +1226,19 @@ func _saved_resident_can_work(saved_residents: Array, resident_id: int, permissi
 			continue
 		if int(entry.id) != resident_id:
 			continue
-		if not bool(entry.get("alive", true)):
+		if not bool(entry.get("alive", true)) or bool(entry.get("drafted", false)):
 			return false
+		# A manual hatch order deliberately bypasses the automatic work board,
+		# including OFF. Recognize that narrow exception when validating a saved
+		# in-flight breach carrier.
+		var forced: Variant = entry.get("forced_order", {})
+		if forced is Dictionary and not forced.is_empty():
+			var forced_type := int(forced.get("type", -1))
+			if (
+				(permission == "haul" and forced_type == JobType.SUPPLY_BREACH)
+				or (permission == "craft" and forced_type == JobType.PATCH_BREACH)
+			):
+				return true
 		var priorities: Variant = entry.get("work_priorities", {})
 		if priorities is Dictionary and priorities.has(permission):
 			var saved_priority: Variant = priorities[permission]
@@ -1122,6 +1296,18 @@ func _serialized_cargo_before(a: Array, b: Array) -> bool:
 func _find_job(job_id: int) -> Dictionary:
 	for job: Dictionary in jobs:
 		if int(job.id) == job_id:
+			return job
+	return {}
+
+
+func _find_matching_job(type: int, target: Vector2i, building_id: int) -> Dictionary:
+	for job: Dictionary in jobs:
+		if (
+			not bool(job.get("done", false))
+			and int(job.type) == type
+			and job.target == target
+			and int(job.get("building_id", -1)) == building_id
+		):
 			return job
 	return {}
 

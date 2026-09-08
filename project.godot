@@ -54,6 +54,10 @@ work_priorities={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"physical_keycode":80)]
 }
+draft_selected={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":82)]
+}
 pause_game={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"physical_keycode":32)]

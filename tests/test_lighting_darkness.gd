@@ -54,9 +54,9 @@ func _test_coverage_geometry_and_starting_counts() -> void:
 		_assert_true(lighting.is_cell_lit(resident.get_cell(game.map_grid)), "%s starts in powered light" % resident.resident_name)
 
 	game.player_orders.refresh()
-	_assert_true("FLOOR 99/120 LIT" in game.player_orders.lighting_label.text, "right HUD reports exact starting floor coverage")
-	_assert_true("LUMENS 1/1 ONLINE" in game.player_orders.lighting_label.text, "right HUD reports powered and completed Lumens")
-	_assert_true("CREW UNLIT 0" in game.player_orders.lighting_label.text, "right HUD reports that every starting resident is lit")
+	_assert_true("LIT 99/120" in game.player_orders.lighting_label.text, "right HUD reports exact starting floor coverage")
+	_assert_true("L1/1" in game.player_orders.lighting_label.text, "right HUD reports powered and completed Lumens")
+	_assert_true("D0" in game.player_orders.lighting_label.text, "right HUD reports that every starting resident is lit")
 	_assert_true(game.player_orders.lighting_overlay_button.text.ends_with("OFF"), "right HUD reports the default Light Map state")
 	var starting_lumen: VaultBuilding = game.get_building_at(Vector2i(22, 14))
 	game.select_building(starting_lumen.building_id)
@@ -68,7 +68,7 @@ func _test_coverage_geometry_and_starting_counts() -> void:
 	var dark_resident: VaultResident = game.residents[0]
 	dark_resident.position = game.map_grid.cell_to_world(Vector2i(28, 20))
 	game.player_orders.refresh()
-	_assert_true("CREW UNLIT 1" in game.player_orders.lighting_label.text, "right HUD updates when one resident enters darkness")
+	_assert_true("D1" in game.player_orders.lighting_label.text, "right HUD updates when one resident enters darkness")
 	_assert_true("DARKNESS · 1 CREW UNLIT" in game.player_orders.alert_label.text, "darkness alert reports the affected crew count")
 	_dispose(game)
 
@@ -266,6 +266,27 @@ func _test_display_only_control() -> void:
 	var lighting_event := InputEventKey.new()
 	lighting_event.physical_keycode = KEY_L
 	lighting_event.pressed = true
+	lighting_event.echo = true
+	game._unhandled_input(lighting_event)
+	_assert_false(game.lighting_system.is_coverage_overlay_visible(), "repeated L key events do not flicker the coverage view")
+	lighting_event.echo = false
+	game.player_orders.show_work_priorities(true)
+	game._unhandled_input(lighting_event)
+	_assert_false(game.lighting_system.is_coverage_overlay_visible(), "work-priority modal blocks the Light Map shortcut")
+	game.player_orders.show_work_priorities(false)
+	game.player_orders.show_briefing(true, false)
+	game._unhandled_input(lighting_event)
+	_assert_false(game.lighting_system.is_coverage_overlay_visible(), "Help blocks the Light Map shortcut")
+	game.player_orders.show_briefing(false)
+	game.breach_system.phase = BreachSystem.Phase.WARNING
+	game.breach_system.warning_acknowledged = false
+	game._unhandled_input(lighting_event)
+	_assert_false(game.lighting_system.is_coverage_overlay_visible(), "unacknowledged breach warning blocks the Light Map shortcut")
+	game.breach_system.phase = BreachSystem.Phase.DORMANT
+	game.ended = true
+	game._unhandled_input(lighting_event)
+	_assert_false(game.lighting_system.is_coverage_overlay_visible(), "outcome state blocks the Light Map shortcut")
+	game.ended = false
 	game._unhandled_input(lighting_event)
 	_assert_true(game.lighting_system.is_coverage_overlay_visible(), "dispatching L shows powered-Lumen coverage")
 	_assert_false(game.is_simulation_paused(), "showing coverage does not pause a running shift")

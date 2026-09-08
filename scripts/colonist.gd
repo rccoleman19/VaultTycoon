@@ -9,6 +9,7 @@ const PRIORITY_DISABLED := 0
 const PRIORITY_HIGHEST := 1
 const PRIORITY_LOWEST := 4
 const DEFAULT_WORK_PRIORITY := 3
+const NO_MANUAL_DESTINATION := Vector2i(-1, -1)
 # Public aliases make the numeric contract unambiguous to UI, tests, and future systems.
 const PRIORITY_OFF := PRIORITY_DISABLED
 const WORK_PRIORITY_OFF := PRIORITY_DISABLED
@@ -37,6 +38,10 @@ var recreating := false
 var recreation_id := -1
 var recreation_sessions := 0
 var stress_break_left := 0.0
+var drafted := false
+var manual_destination := NO_MANUAL_DESTINATION
+var is_forced_job := false
+var forced_order: Dictionary = {}
 
 var _path: Array[Vector2i] = []
 var _path_index := 0
@@ -48,6 +53,9 @@ func configure(new_id: int, new_name: String, spawn_cell: Vector2i, map_grid: Ma
 	resident_id = new_id
 	resident_name = new_name
 	_apply_starting_work_priorities()
+	drafted = false
+	manual_destination = NO_MANUAL_DESTINATION
+	clear_forced_order()
 	position = map_grid.cell_to_world(spawn_cell)
 	queue_redraw()
 
@@ -115,6 +123,50 @@ static func is_serialized_work_data_valid(data: Variant) -> bool:
 			for work_type: String in WORK_TYPES:
 				if permissions.has(work_type) and bool(permissions[work_type]) != (int(priorities[work_type]) != PRIORITY_DISABLED):
 					return false
+	return is_serialized_manual_order_data_valid(saved)
+
+
+static func is_serialized_manual_order_data_valid(data: Variant) -> bool:
+	if not data is Dictionary:
+		return false
+	var saved: Dictionary = data
+	if saved.has("drafted") and typeof(saved.drafted) != TYPE_BOOL:
+		return false
+	var drafted_value := bool(saved.get("drafted", false))
+	var alive_value := bool(saved.get("alive", true))
+	var destination: Variant = saved.get("manual_destination", [])
+	if not destination is Array or destination.size() not in [0, 2]:
+		return false
+	if destination.size() == 2:
+		if (
+			not drafted_value
+			or not alive_value
+			or not _is_integer_in_range(destination[0], 0, MapGrid.WIDTH - 1)
+			or not _is_integer_in_range(destination[1], 0, MapGrid.HEIGHT - 1)
+		):
+			return false
+	var order: Variant = saved.get("forced_order", {})
+	if not order is Dictionary:
+		return false
+	if not order.is_empty():
+		if drafted_value or not alive_value or order.size() != 3:
+			return false
+		# JobSystem currently has nine stable serialized kinds (0 through 8).
+		# Keep validation local to avoid a circular class dependency while loading.
+		if not order.has("type") or not _is_integer_in_range(order.type, 0, 8):
+			return false
+		if not order.has("building_id") or not _is_integer_in_range(order.building_id, -1, 2_147_483_647):
+			return false
+		var target: Variant = order.get("target", [])
+		if (
+			not target is Array
+			or target.size() != 2
+			or not _is_integer_in_range(target[0], 0, MapGrid.WIDTH - 1)
+			or not _is_integer_in_range(target[1], 0, MapGrid.HEIGHT - 1)
+		):
+			return false
+	if drafted_value and (bool(saved.get("sleeping", false)) or bool(saved.get("recreating", false))):
+		return false
 	return true
 
 
@@ -184,17 +236,57 @@ func clear_path() -> void:
 	_path_destination = Vector2i(-999, -999)
 
 
+func has_manual_move_order() -> bool:
+	return drafted and manual_destination != NO_MANUAL_DESTINATION
+
+
+func set_manual_move_order(target_cell: Vector2i) -> void:
+	manual_destination = target_cell
+	clear_path()
+	if alive and drafted:
+		state = "Drafted · Moving"
+	queue_redraw()
+
+
+func clear_manual_move_order() -> void:
+	manual_destination = NO_MANUAL_DESTINATION
+	clear_path()
+	if alive and drafted:
+		state = "Drafted"
+	queue_redraw()
+
+
+func set_forced_order(job_type: int, target_cell: Vector2i, building_id := -1) -> void:
+	is_forced_job = true
+	forced_order = {
+		"type": job_type,
+		"target": [target_cell.x, target_cell.y],
+		"building_id": building_id,
+	}
+	queue_redraw()
+
+
+func clear_forced_order() -> void:
+	is_forced_job = false
+	forced_order = {}
+	queue_redraw()
+
+
 func clear_job() -> void:
 	current_job_id = -1
 	current_job_type = -1
 	job_phase = ""
 	work_accumulator = 0.0
+	clear_forced_order()
 	clear_path()
 	if alive and not sleeping and not recreating and stress_break_left <= 0.0:
-		state = "Idle"
+		state = "Drafted" if drafted else "Idle"
 
 
 func begin_recreation(building_id: int) -> void:
+	drafted = false
+	manual_destination = NO_MANUAL_DESTINATION
+	clear_forced_order()
 	recreating = true
 	recreation_id = building_id
 	sleeping = false
@@ -219,6 +311,10 @@ func kill() -> void:
 		return
 	alive = false
 	sleeping = false
+	drafted = false
+	manual_destination = NO_MANUAL_DESTINATION
+	clear_forced_order()
+	clear_path()
 	died.emit(self)
 	recreating = false
 	recreation_id = -1
@@ -234,6 +330,10 @@ func serialize() -> Dictionary:
 		var priority := get_work_priority(work_type)
 		saved_priorities[work_type] = priority
 		saved_permissions[work_type] = priority != PRIORITY_DISABLED
+	var saved_manual_destination: Array = []
+	if has_manual_move_order():
+		saved_manual_destination = [manual_destination.x, manual_destination.y]
+	var saved_forced_order: Dictionary = forced_order.duplicate(true) if is_forced_job else {}
 	return {
 		"id": resident_id,
 		"name": resident_name,
@@ -250,6 +350,9 @@ func serialize() -> Dictionary:
 		"recreation_id": recreation_id,
 		"recreation_sessions": recreation_sessions,
 		"stress_break_left": stress_break_left,
+		"drafted": drafted,
+		"manual_destination": saved_manual_destination,
+		"forced_order": saved_forced_order,
 	}
 
 
@@ -276,13 +379,29 @@ func deserialize(data: Dictionary) -> void:
 	recreation_id = int(data.get("recreation_id", -1)) if recreating else -1
 	recreation_sessions = maxi(0, int(data.get("recreation_sessions", 0)))
 	stress_break_left = maxf(0.0, float(data.get("stress_break_left", 0.0))) if alive and not recreating else 0.0
+	drafted = bool(data.get("drafted", false)) and alive
+	if drafted:
+		sleeping = false
+		bed_id = -1
+		recreating = false
+		recreation_id = -1
+		stress_break_left = 0.0
+	manual_destination = NO_MANUAL_DESTINATION
+	var saved_manual_destination: Variant = data.get("manual_destination", [])
+	if drafted and saved_manual_destination is Array and saved_manual_destination.size() == 2:
+		manual_destination = Vector2i(int(saved_manual_destination[0]), int(saved_manual_destination[1]))
 	state = (
-		"Sleeping" if sleeping
-		else ("Seeking recreation" if recreating else ("Idle" if alive else "Deceased"))
+		("Drafted · Moving" if has_manual_move_order() else "Drafted") if drafted
+		else ("Sleeping" if sleeping
+		else ("Seeking recreation" if recreating else ("Idle" if alive else "Deceased")))
 	)
 	if not alive:
 		modulate = Color(0.42, 0.42, 0.42, 0.8)
 	clear_job()
+	var saved_forced_order: Variant = data.get("forced_order", {})
+	if alive and not drafted and saved_forced_order is Dictionary and not saved_forced_order.is_empty():
+		is_forced_job = true
+		forced_order = saved_forced_order.duplicate(true)
 	queue_redraw()
 
 
@@ -303,11 +422,21 @@ static func _is_serialized_priority(value: Variant) -> bool:
 	)
 
 
+static func _is_integer_in_range(value: Variant, minimum: int, maximum: int) -> bool:
+	if typeof(value) not in [TYPE_INT, TYPE_FLOAT]:
+		return false
+	var number := float(value)
+	return is_finite(number) and number == floorf(number) and number >= minimum and number <= maximum
+
+
 func _draw() -> void:
 	var body_color := Color("71c7b5") if alive else Color("62696a")
 	if selected:
 		draw_circle(Vector2.ZERO, 11.0, Color(0.96, 0.77, 0.25, 0.28))
 		draw_arc(Vector2.ZERO, 10.0, 0.0, TAU, 24, Color("f6c64e"), 2.0)
+	if alive and drafted:
+		draw_arc(Vector2.ZERO, 13.0, 0.0, TAU, 32, Color("efc56b"), 2.0)
+		draw_line(Vector2(-8, -9), Vector2(8, -9), Color("efc56b"), 2.0)
 	draw_circle(Vector2(0, -3), 5.5, body_color)
 	draw_rect(Rect2(-6, 2, 12, 7), body_color)
 	if carrying > 0:

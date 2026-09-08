@@ -23,6 +23,11 @@ var right_scroll: ScrollContainer
 var roster_box: VBoxContainer
 var inspector_title: Label
 var inspector_state: Label
+var resident_command_header: Label
+var resident_command_row: HBoxContainer
+var resident_draft_button: Button
+var resident_cancel_button: Button
+var draft_button: Button
 var work_header: Label
 var fixture_header: Label
 var fixture_controls: HBoxContainer
@@ -158,20 +163,20 @@ func _build_interface() -> void:
 	crew_mood_bar.show_percentage = false
 	crew_mood_bar.custom_minimum_size.y = 10
 	summary.add_child(crew_mood_bar)
-	var lighting_header := Label.new()
-	lighting_header.text = "LIGHTING"
-	lighting_header.add_theme_color_override("font_color", Color("8faeb7"))
-	summary.add_child(lighting_header)
+	var lighting_row := HBoxContainer.new()
+	lighting_row.add_theme_constant_override("separation", 6)
+	summary.add_child(lighting_row)
 	lighting_label = Label.new()
-	lighting_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	lighting_label.custom_minimum_size.y = 38
-	summary.add_child(lighting_label)
+	lighting_label.custom_minimum_size = Vector2(188, 26)
+	lighting_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lighting_label.add_theme_font_size_override("font_size", 14)
+	lighting_row.add_child(lighting_label)
 	lighting_overlay_button = Button.new()
-	lighting_overlay_button.text = "LIGHT MAP [L]"
+	lighting_overlay_button.text = "[L] MAP OFF"
 	lighting_overlay_button.tooltip_text = "Show exact powered-Lumen floor coverage without changing simulation lighting."
-	lighting_overlay_button.custom_minimum_size.y = 26
+	lighting_overlay_button.custom_minimum_size = Vector2(82, 26)
 	lighting_overlay_button.pressed.connect(func() -> void: game.toggle_lighting_overlay())
-	summary.add_child(lighting_overlay_button)
+	lighting_row.add_child(lighting_overlay_button)
 	var power_header := Label.new()
 	power_header.text = "POWER GRID"
 	power_header.add_theme_color_override("font_color", Color("8faeb7"))
@@ -266,6 +271,29 @@ func _build_interface() -> void:
 		need_labels[need_name] = need_label
 		need_bars[need_name] = bar
 		side.add_child(need_row)
+	resident_command_header = Label.new()
+	resident_command_header.text = "RESIDENT COMMAND"
+	resident_command_header.add_theme_color_override("font_color", Color("8faeb7"))
+	side.add_child(resident_command_header)
+	resident_command_row = HBoxContainer.new()
+	resident_command_row.name = "ResidentCommandRow"
+	resident_command_row.add_theme_constant_override("separation", 5)
+	resident_draft_button = Button.new()
+	resident_draft_button.name = "ResidentDraftButton"
+	resident_draft_button.custom_minimum_size = Vector2(130, 28)
+	resident_draft_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	resident_draft_button.pressed.connect(_on_resident_draft_pressed)
+	resident_command_row.add_child(resident_draft_button)
+	draft_button = resident_draft_button
+	resident_cancel_button = Button.new()
+	resident_cancel_button.name = "ResidentCancelCommandButton"
+	resident_cancel_button.text = "CANCEL"
+	resident_cancel_button.tooltip_text = "Cancel this resident's current manual move or forced job."
+	resident_cancel_button.custom_minimum_size = Vector2(86, 28)
+	resident_cancel_button.pressed.connect(_on_resident_cancel_command_pressed)
+	resident_command_row.add_child(resident_cancel_button)
+	side.add_child(resident_command_row)
+	_hide_resident_commands()
 	work_header = Label.new()
 	work_header.text = "WORK PRIORITIES · 1 HIGHEST"
 	work_header.add_theme_color_override("font_color", Color("8faeb7"))
@@ -424,7 +452,7 @@ func _build_work_priorities_board() -> void:
 	title_row.add_child(work_priorities_close_button)
 
 	var explanation := Label.new()
-	explanation.text = "Click a cell to cycle.  1 = highest  ·  4 = lowest  ·  OFF = never claim. HAUL covers salvage, raw food, and meals. Hatch work overrides numbered ranks, but OFF still blocks it. Recreation is autonomous."
+	explanation.text = "Click a cell to cycle.  1 = highest  ·  4 = lowest  ·  OFF = never claim. HAUL covers salvage, raw food, and meals. Drafted residents keep editable schedules that resume after undraft. Hatch work overrides numbered ranks, but OFF still blocks it. Recreation is autonomous."
 	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	explanation.custom_minimum_size.y = 42
 	content.add_child(explanation)
@@ -466,8 +494,12 @@ func _rebuild_work_priority_rows() -> void:
 		work_priorities_grid.add_child(header)
 	for resident: VaultResident in game.residents:
 		var resident_label := Label.new()
-		resident_label.text = resident.resident_name.to_upper()
-		resident_label.tooltip_text = "Resident %d" % resident.resident_id
+		resident_label.text = "%s%s" % [resident.resident_name.to_upper(), "\nDRAFTED" if resident.drafted and resident.alive else ""]
+		resident_label.tooltip_text = (
+			"Resident %d · DRAFTED; priorities remain editable and apply after undraft." % resident.resident_id
+			if resident.drafted and resident.alive
+			else "Resident %d" % resident.resident_id
+		)
 		resident_label.custom_minimum_size = Vector2(120, 46)
 		resident_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		resident_label.add_theme_color_override("font_color", Color("6f7d80") if not resident.alive else Color("e8f0ef"))
@@ -571,7 +603,7 @@ func _build_briefing() -> void:
 	checklist.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(checklist)
 	var controls := Label.new()
-	controls.text = "LMB order/select · RMB/Esc return to Select · X cancel · P priorities · L light map · WASD pan · wheel zoom · Space pause · 1/2/3 speed · F recenter"
+	controls.text = "LMB order/select · Select resident then R draft/undraft · RMB: drafted = move, undrafted = force context job · Esc return to Select · X cancel · P priorities · L light map · WASD pan · wheel zoom · Space pause · 1/2/3 speed · F recenter"
 	controls.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	controls.add_theme_color_override("font_color", Color("a9bec3"))
 	content.add_child(controls)
@@ -699,6 +731,8 @@ func refresh() -> void:
 	_refresh_power_detail()
 	pause_button.text = "RESUME" if game.user_paused else "PAUSE"
 	var active_help := game.status_message if game.status_message_left > 0.0 else game._tool_help(game.active_tool)
+	if game.status_message_left <= 0.0 and game.active_tool == "select":
+		active_help = "Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job."
 	tool_status.text = "%s // %s" % [game.active_tool.to_upper(), active_help]
 	for key: String in command_buttons:
 		var button: Button = command_buttons[key]
@@ -751,13 +785,16 @@ func _refresh_objective() -> void:
 func _refresh_roster() -> void:
 	var parts: Array[String] = []
 	for resident in game.residents:
-		parts.append("%d:%d:%d:%d:%d:%s" % [
+		parts.append("%d:%d:%d:%d:%d:%s:%s:%s:%s" % [
 			resident.resident_id,
 			floori(resident.needs.food),
 			floori(resident.needs.rest),
 			floori(resident.needs.mood),
 			floori(resident.needs.health),
 			resident.state,
+			str(resident.drafted),
+			str(resident.has_manual_move_order()),
+			str(resident.is_forced_job),
 		])
 	var signature := "|".join(parts)
 	if signature == _last_roster_signature:
@@ -768,7 +805,8 @@ func _refresh_roster() -> void:
 	for resident in game.residents:
 		var button := Button.new()
 		var urgent := minf(resident.needs.food, minf(resident.needs.rest, minf(resident.needs.mood, resident.needs.health)))
-		button.text = "%s · HP %d · MOOD %d · %s · LOW %d" % [resident.resident_name, floori(resident.needs.health), floori(resident.needs.mood), resident.state, floori(urgent)] if resident.alive else "%s · DECEASED" % resident.resident_name
+		var resident_status := _get_resident_order_status(resident)
+		button.text = "%s · %s · HP %d · MOOD %d · LOW %d" % [resident.resident_name, resident_status, floori(resident.needs.health), floori(resident.needs.mood), floori(urgent)] if resident.alive else "%s · DECEASED" % resident.resident_name
 		button.tooltip_text = button.text
 		button.clip_text = true
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -796,7 +834,7 @@ func _refresh_inspector() -> void:
 			else:
 				mood_factors = "Seeking Rec Console · %s" % resident.needs.get_mood_factors(is_lit, false, game.oxygen_system.is_low())
 		inspector_state.text = "Current task: %s\nWork speed: %d%%\nMood: %s\n%s" % [
-			resident.state,
+			_get_resident_order_status(resident),
 			roundi(resident.get_work_multiplier() * 100.0),
 			resident.needs.get_mood_state(),
 			mood_factors,
@@ -805,12 +843,19 @@ func _refresh_inspector() -> void:
 		_set_need("rest", "REST", resident.needs.rest)
 		_set_need("mood", "MOOD", resident.needs.mood)
 		_set_need("health", "HEALTH", resident.needs.health)
+		_show_resident_commands(resident)
+		work_header.text = "WORK PRIORITIES · APPLY AFTER UNDRAFT" if resident.drafted else "WORK PRIORITIES · 1 HIGHEST"
 		for key: String in work_buttons:
 			var button: Button = work_buttons[key]
 			button.visible = true
 			button.disabled = not resident.alive
 			button.text = "%s: %s" % [key.to_upper(), resident.get_work_priority_label(key)]
-			button.tooltip_text = "Cycle %s priority: 1 highest, 4 lowest, or OFF." % key.capitalize()
+			button.tooltip_text = (
+				"Cycle %s priority: 1 highest, 4 lowest, or OFF. This schedule applies after undraft."
+				% key.capitalize()
+				if resident.drafted
+				else "Cycle %s priority: 1 highest, 4 lowest, or OFF." % key.capitalize()
+			)
 			_set_priority_button_color(button, resident.get_work_priority(key))
 		_hide_fixture_controls()
 		return
@@ -903,13 +948,21 @@ func _refresh_inspector() -> void:
 		return
 	_last_inspected_building_id = -1
 	inspector_title.text = "INSPECTOR"
-	inspector_state.text = "Select a resident or fixture. Open PRIORITIES [P] to schedule ordinary work across the crew."
+	inspector_state.text = "Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job. Select a fixture to inspect it; PRIORITIES [P] schedules ordinary work."
 	_hide_needs_and_work()
 	_hide_fixture_controls()
 
 
 func _refresh_alerts() -> void:
 	var alerts: Array[String] = []
+	var drafted_count := 0
+	for resident: VaultResident in game.residents:
+		if resident.alive and resident.drafted:
+			drafted_count += 1
+	if drafted_count > 0:
+		alerts.append("DRAFTED CREW %d · AUTO WORK PAUSED" % drafted_count)
+		if game.breach_system.phase == BreachSystem.Phase.WARNING or game.breach_system.phase == BreachSystem.Phase.OPEN:
+			alerts.append("HATCH RESPONSE EXCLUDES DRAFTED CREW")
 	if game.day_cycle.completed and not game.ended:
 		var victory_blockers: Array[String] = []
 		if not game.breach_system.is_sealed():
@@ -966,10 +1019,7 @@ func _refresh_alerts() -> void:
 			alerts.append("MOOD BREAK RISK · %s" % lowest_mood_resident.resident_name)
 		elif lowest_mood_resident.needs.mood < 40.0:
 			alerts.append("MOOD STRESSED · %s" % lowest_mood_resident.resident_name)
-	var cook_enabled := false
-	for resident in game.residents:
-		if resident.alive and resident.get_work_priority("cook") != VaultResident.PRIORITY_DISABLED:
-			cook_enabled = true
+	var cook_enabled := _has_eligible_worker("cook")
 	if not cook_enabled:
 		alerts.append("NO COOK ENABLED")
 	for resident in game.residents:
@@ -1033,16 +1083,21 @@ func _refresh_lighting() -> void:
 	var dark_floor := lighting.get_dark_floor_count()
 	var total_floor := lit_floor + dark_floor
 	var dark_residents := game.get_dark_resident_count()
-	lighting_label.text = "FLOOR %d/%d LIT · %d%%\nLUMENS %d/%d ONLINE · CREW UNLIT %d" % [
+	lighting_label.text = "LIT %d/%d · L%d/%d · D%d" % [
 		lit_floor,
 		total_floor,
+		lighting.get_powered_lumen_count(),
+		lighting.get_completed_lumen_count(),
+		dark_residents,
+	]
+	lighting_label.tooltip_text = "%d%% of carved floor lit · %d/%d Lumens online · %d living residents dark" % [
 		roundi(lighting.get_floor_coverage_percent()),
 		lighting.get_powered_lumen_count(),
 		lighting.get_completed_lumen_count(),
 		dark_residents,
 	]
 	lighting_label.add_theme_color_override("font_color", Color("efc56b") if dark_residents > 0 else Color("75d4b4"))
-	lighting_overlay_button.text = "LIGHT MAP [L] · %s" % ("ON" if lighting.is_coverage_overlay_visible() else "OFF")
+	lighting_overlay_button.text = "[L] MAP %s" % ("ON" if lighting.is_coverage_overlay_visible() else "OFF")
 	lighting_overlay_button.modulate = Color("efc56b") if lighting.is_coverage_overlay_visible() else Color.WHITE
 
 
@@ -1147,12 +1202,13 @@ func _refresh_checklist() -> void:
 	lines.append("Optional: ZONE paints salvage + food drop-offs; CANCEL clears cells")
 	lines.append("Optional: Medical Bed ($8) heals injuries; disable to deny care")
 	lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled")
+	lines.append("[color=#8faeb7][OPTIONAL][/color]  MANUAL ORDERS: select resident → [R] draft/undraft; right-click drafted = move, undrafted = force context job")
 	checklist.text = "\n".join(lines)
 
 
 func _has_eligible_worker(work_type: String) -> bool:
 	for resident: VaultResident in game.residents:
-		if resident.alive and resident.get_work_priority(work_type) != VaultResident.PRIORITY_DISABLED:
+		if resident.alive and not resident.drafted and resident.get_work_priority(work_type) != VaultResident.PRIORITY_DISABLED:
 			return true
 	return false
 
@@ -1162,7 +1218,7 @@ func _refresh_work_priorities_board() -> void:
 		return
 	var roster_parts: Array[String] = []
 	for resident: VaultResident in game.residents:
-		roster_parts.append("%d:%s:%s" % [resident.resident_id, resident.resident_name, str(resident.alive)])
+		roster_parts.append("%d:%s:%s:%s" % [resident.resident_id, resident.resident_name, str(resident.alive), str(resident.drafted)])
 	var roster_signature := "|".join(roster_parts)
 	var roster_rebuilt := false
 	if roster_signature != _last_work_priority_roster_signature:
@@ -1181,8 +1237,10 @@ func _refresh_work_priorities_board() -> void:
 					"%s · %s priority %s. Click: 1 → 2 → 3 → 4 → OFF → 1."
 					% [resident.resident_name, work_type.capitalize(), resident.get_work_priority_label(work_type)]
 				)
+				if resident.drafted:
+					button.tooltip_text += " DRAFTED: this schedule remains editable and applies after undraft."
 				_set_priority_button_color(button, priority)
-				if resident.alive and priority != VaultResident.PRIORITY_DISABLED:
+				if resident.alive and not resident.drafted and priority != VaultResident.PRIORITY_DISABLED:
 					coverage[work_type] = int(coverage[work_type]) + 1
 	var coverage_parts: Array[String] = []
 	var missing: Array[String] = []
@@ -1192,6 +1250,12 @@ func _refresh_work_priorities_board() -> void:
 		if count <= 0:
 			missing.append(work_type.to_upper())
 	work_priorities_summary.text = "COVERAGE // %s" % "  ·  ".join(coverage_parts)
+	var drafted_count := 0
+	for resident: VaultResident in game.residents:
+		if resident.alive and resident.drafted:
+			drafted_count += 1
+	if drafted_count > 0:
+		work_priorities_summary.text += "\nDRAFTED %d · excluded from automatic work until undrafted; schedules remain editable." % drafted_count
 	if missing.is_empty():
 		work_priorities_summary.text += "\nAll ordinary work categories have at least one eligible resident."
 		work_priorities_summary.add_theme_color_override("font_color", Color("75d4b4"))
@@ -1388,7 +1452,63 @@ func _get_recreation_user(building_id: int) -> VaultResident:
 	return null
 
 
+func _get_resident_order_status(resident: VaultResident) -> String:
+	var status_parts: Array[String] = []
+	if resident.drafted:
+		status_parts.append("DRAFTED")
+	if resident.has_manual_move_order():
+		status_parts.append("MANUAL MOVE")
+	if resident.is_forced_job:
+		status_parts.append("FORCED")
+	status_parts.append(resident.state)
+	return " · ".join(status_parts)
+
+
+func _show_resident_commands(resident: VaultResident) -> void:
+	var should_show := resident.alive
+	resident_command_header.visible = should_show
+	resident_command_row.visible = should_show
+	if not should_show:
+		return
+	resident_draft_button.text = "UNDRAFT [R]" if resident.drafted else "DRAFT [R]"
+	resident_draft_button.tooltip_text = (
+		"Right-click reachable carved floor to move this drafted resident; undraft to return them to automatic work."
+		if resident.drafted
+		else "Draft this resident for manual movement. Right-click moves drafted residents; while undrafted, right-click forces a context job."
+	)
+	resident_draft_button.disabled = _resident_commands_blocked()
+	resident_draft_button.modulate = Color("efc56b") if resident.drafted else Color.WHITE
+	if resident_cancel_button != null:
+		var has_manual_command := resident.has_manual_move_order() or resident.is_forced_job
+		resident_cancel_button.disabled = _resident_commands_blocked() or not has_manual_command
+		resident_cancel_button.tooltip_text = (
+			"Cancel this resident's current manual command."
+			if has_manual_command
+			else "This resident has no manual command to cancel."
+		)
+
+
+func _hide_resident_commands() -> void:
+	if resident_command_header != null:
+		resident_command_header.visible = false
+	if resident_command_row != null:
+		resident_command_row.visible = false
+
+
+func _resident_commands_blocked() -> bool:
+	return (
+		game == null
+		or game.tutorial_open
+		or is_help_open()
+		or is_work_priorities_open()
+		or game.ended
+		or (outcome_panel != null and outcome_panel.visible)
+		or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
+	)
+
+
 func _hide_needs_and_work() -> void:
+	_hide_resident_commands()
 	work_header.visible = false
 	for label: Label in need_labels.values():
 		label.visible = false
@@ -1431,6 +1551,17 @@ func _on_speed_pressed(speed: int) -> void:
 
 func _on_resident_pressed(resident_id: int) -> void:
 	game.select_resident(resident_id)
+
+
+func _on_resident_draft_pressed() -> void:
+	var resident := game.get_resident_by_id(game.selected_resident_id)
+	if resident != null and resident.alive and not _resident_commands_blocked():
+		game.toggle_resident_draft(resident.resident_id)
+
+
+func _on_resident_cancel_command_pressed() -> void:
+	if not _resident_commands_blocked():
+		game.cancel_selected_resident_command()
 
 
 func _on_work_pressed(work_type: String) -> void:

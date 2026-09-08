@@ -422,6 +422,73 @@ func get_resident_by_id(resident_id: int) -> VaultResident:
 	return null
 
 
+func toggle_resident_draft(resident_id: int) -> bool:
+	if tutorial_open or ended or player_orders.is_help_open() or player_orders.is_work_priorities_open():
+		return false
+	if breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged:
+		return false
+	var resident := get_resident_by_id(resident_id)
+	if resident == null or not resident.alive:
+		return false
+	if resident.drafted:
+		resident.drafted = false
+		resident.clear_manual_move_order()
+		resident.clear_forced_order()
+		resident.state = "Idle"
+		status_message = "%s undrafted; automatic work and self-care resumed." % resident.resident_name
+	else:
+		job_system.release_resident(resident)
+		resident.drafted = true
+		resident.sleeping = false
+		resident.bed_id = -1
+		resident.recreating = false
+		resident.recreation_id = -1
+		resident.stress_break_left = 0.0
+		resident.state = "Drafted"
+		status_message = "%s drafted. Right-click reachable carved floor to move; undraft to resume autonomy." % resident.resident_name
+	status_message_left = 4.0
+	resident.queue_redraw()
+	return resident.drafted
+
+
+func issue_selected_resident_context_order(cell: Vector2i) -> bool:
+	if ended or tutorial_open or player_orders.is_help_open() or player_orders.is_work_priorities_open() or not map_grid.is_inside(cell):
+		return false
+	var resident := get_resident_by_id(selected_resident_id)
+	if resident == null or not resident.alive:
+		return false
+	if resident.drafted:
+		return _issue_drafted_move(resident, cell)
+	var result := job_system.force_job_at(resident, cell)
+	status_message = str(result.message)
+	status_message_left = 4.0
+	return bool(result.ok)
+
+
+func issue_context_order(cell: Vector2i) -> bool:
+	return issue_selected_resident_context_order(cell)
+
+
+func cancel_selected_resident_command() -> bool:
+	var resident := get_resident_by_id(selected_resident_id)
+	if resident == null or not resident.alive:
+		return false
+	if not resident.drafted and not resident.is_forced_job and resident.current_job_id < 0:
+		status_message = "%s has no manual command to cancel." % resident.resident_name
+		status_message_left = 3.0
+		return false
+	var canceled := false
+	if resident.drafted:
+		if resident.has_manual_move_order():
+			resident.clear_manual_move_order()
+			canceled = true
+	else:
+		canceled = job_system.cancel_manual_command(resident)
+	status_message = "%s manual command canceled." % resident.resident_name if canceled else "%s has no manual command to cancel." % resident.resident_name
+	status_message_left = 3.0
+	return canceled
+
+
 func select_resident(resident_id: int) -> void:
 	selected_resident_id = resident_id
 	selected_building_id = -1
@@ -446,7 +513,7 @@ func set_work_priority(resident_id: int, work_type: String, priority: int) -> bo
 	var resident := get_resident_by_id(resident_id)
 	if resident == null or not resident.set_work_priority(work_type, priority):
 		return false
-	if priority == VaultResident.PRIORITY_DISABLED and resident.current_job_id >= 0 and not job_system._resident_allows(resident, resident.current_job_type):
+	if priority == VaultResident.PRIORITY_DISABLED and resident.current_job_id >= 0 and not resident.is_forced_job and not job_system._resident_allows(resident, resident.current_job_type):
 		job_system.release_resident(resident)
 	status_message = "%s %s priority: %s." % [resident.resident_name, work_type.capitalize(), resident.get_work_priority_label(work_type)]
 	status_message_left = 3.0
@@ -458,7 +525,7 @@ func cycle_work_priority(resident_id: int, work_type: String) -> int:
 	if resident == null or work_type not in VaultResident.WORK_TYPES:
 		return -1
 	var priority := resident.cycle_work_priority(work_type)
-	if priority == VaultResident.PRIORITY_DISABLED and resident.current_job_id >= 0 and not job_system._resident_allows(resident, resident.current_job_type):
+	if priority == VaultResident.PRIORITY_DISABLED and resident.current_job_id >= 0 and not resident.is_forced_job and not job_system._resident_allows(resident, resident.current_job_type):
 		job_system.release_resident(resident)
 	status_message = "%s %s priority: %s." % [resident.resident_name, work_type.capitalize(), resident.get_work_priority_label(work_type)]
 	status_message_left = 3.0
@@ -588,6 +655,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	power_grid.recalculate(buildings)
 	refresh_lighting(true)
 	job_system.rebuild_from_state(snapshot.get("jobs", {}))
+	job_system.restore_manual_orders()
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	selected_resident_id = -1
@@ -650,6 +718,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 			return false
 		if not VaultResident.is_serialized_work_data_valid(entry):
 			return false
+		if not _is_serialized_manual_control_semantically_valid(entry, map_data, building_data, jobs_data, breach_data):
+			return false
 		if entry.position.size() < 2:
 			return false
 		if entry.has("recreating") and typeof(entry.recreating) != TYPE_BOOL:
@@ -695,6 +765,96 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 		if saved_oxygen < OxygenSystem.CRITICAL_OXYGEN_THRESHOLD:
 			return false
 	return true
+
+
+func _is_serialized_manual_control_semantically_valid(
+	resident_data: Dictionary,
+	map_data: Dictionary,
+	building_data: Array,
+	jobs_data: Dictionary,
+	breach_data: Variant,
+) -> bool:
+	var saved_cells: Array = map_data.get("cells", [])
+	var destination: Array = resident_data.get("manual_destination", [])
+	if destination.size() == 2:
+		var destination_cell := Vector2i(int(destination[0]), int(destination[1]))
+		if int(saved_cells[destination_cell.y * MapGrid.WIDTH + destination_cell.x]) != MapGrid.Tile.FLOOR:
+			return false
+	var order: Dictionary = resident_data.get("forced_order", {})
+	if order.is_empty():
+		return true
+	var type := int(order.type)
+	var target_data: Array = order.target
+	var target := Vector2i(int(target_data[0]), int(target_data[1]))
+	var building_id := int(order.building_id)
+	match type:
+		JobSystem.JobType.DIG:
+			return building_id == -1 and _serialized_cell_entry_exists(map_data.get("dig_marks", []), target, 0, 1)
+		JobSystem.JobType.HAUL_RUBBLE:
+			return building_id == -1 and _serialized_cell_entry_exists(jobs_data.get("rubble", []), target, 0, 1)
+		JobSystem.JobType.HAUL_RAW_FOOD:
+			return building_id == -1 and _serialized_cell_entry_exists(jobs_data.get("raw_food", []), target, 0, 1)
+		JobSystem.JobType.HAUL_MEAL:
+			return building_id == -1 and _serialized_cell_entry_exists(jobs_data.get("meals", []), target, 0, 1)
+		JobSystem.JobType.SUPPLY_BUILD:
+			return building_id > 0 and _serialized_supply_entry_exists(jobs_data.get("supplies", []), building_id, target)
+		JobSystem.JobType.BUILD:
+			var blueprint := _serialized_building_by_id(building_data, building_id)
+			if blueprint.is_empty() or bool(blueprint.get("complete", false)) or blueprint.get("cell", []) != target_data:
+				return false
+			var kind := int(blueprint.get("kind", -1))
+			return int(blueprint.get("delivered", 0)) >= int(VaultBuilding.COSTS.get(kind, 2_147_483_647))
+		JobSystem.JobType.COOK:
+			var kitchen := _serialized_building_by_id(building_data, building_id)
+			return (
+				not kitchen.is_empty()
+				and bool(kitchen.get("complete", false))
+				and int(kitchen.get("kind", -1)) == VaultBuilding.Kind.KITCHEN
+				and kitchen.get("cell", []) == target_data
+			)
+		JobSystem.JobType.SUPPLY_BREACH, JobSystem.JobType.PATCH_BREACH:
+			if building_id != -1 or target != BreachSystem.HATCH_CELL or not breach_data is Dictionary:
+				return false
+			var phase := int(breach_data.get("phase", BreachSystem.Phase.DORMANT))
+			var delivered := int(breach_data.get("patch_delivered", 0))
+			if phase not in [BreachSystem.Phase.WARNING, BreachSystem.Phase.OPEN]:
+				return false
+			if type == JobSystem.JobType.SUPPLY_BREACH:
+				return delivered < BreachSystem.PATCH_COST and not (jobs_data.get("breach_supply", []) as Array).is_empty()
+			return delivered >= BreachSystem.PATCH_COST and not (jobs_data.get("breach_patch", []) as Array).is_empty()
+	return false
+
+
+func _serialized_cell_entry_exists(entries: Variant, target: Vector2i, x_index: int, y_index: int) -> bool:
+	if not entries is Array:
+		return false
+	for entry: Variant in entries:
+		if entry is Array and entry.size() > maxi(x_index, y_index):
+			if int(entry[x_index]) == target.x and int(entry[y_index]) == target.y:
+				return true
+	return false
+
+
+func _serialized_supply_entry_exists(entries: Variant, building_id: int, target: Vector2i) -> bool:
+	if not entries is Array:
+		return false
+	for entry: Variant in entries:
+		if (
+			entry is Array
+			and entry.size() >= 3
+			and int(entry[0]) == building_id
+			and int(entry[1]) == target.x
+			and int(entry[2]) == target.y
+		):
+			return true
+	return false
+
+
+func _serialized_building_by_id(building_data: Array, building_id: int) -> Dictionary:
+	for entry: Variant in building_data:
+		if entry is Dictionary and int(entry.get("id", -1)) == building_id:
+			return entry
+	return {}
 
 
 func _spawn_starting_fixture(kind: int, cell: Vector2i, core: bool) -> void:
@@ -756,6 +916,23 @@ func _select_at(cell: Vector2i) -> bool:
 	return false
 
 
+func _issue_drafted_move(resident: VaultResident, cell: Vector2i) -> bool:
+	if not map_grid.is_walkable(cell):
+		status_message = "%s cannot move there; choose carved floor." % resident.resident_name
+		status_message_left = 3.0
+		return false
+	if map_grid.find_path(resident.get_cell(map_grid), cell).is_empty():
+		status_message = "%s cannot reach that floor cell." % resident.resident_name
+		status_message_left = 3.0
+		return false
+	job_system.release_resident(resident)
+	resident.drafted = true
+	resident.set_manual_move_order(cell)
+	status_message = "%s manual move set to %d,%d." % [resident.resident_name, cell.x, cell.y]
+	status_message_left = 4.0
+	return true
+
+
 func _input(event: InputEvent) -> void:
 	if player_orders != null and player_orders.is_briefing_open():
 		if player_orders.is_help_open() and event.is_action_pressed("cancel_order"):
@@ -791,7 +968,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("lighting_overlay"):
-		toggle_lighting_overlay()
+		var repeated_key: bool = event is InputEventKey and (event as InputEventKey).echo
+		var warning_blocked: bool = (
+			breach_system.phase == BreachSystem.Phase.WARNING
+			and not breach_system.warning_acknowledged
+		)
+		if not repeated_key and not tutorial_open and not ended and not warning_blocked:
+			toggle_lighting_overlay()
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("pause_game"):
@@ -803,6 +986,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed("tool_dig"):
 		set_tool("dig")
+		return
+	if event.is_action_pressed("draft_selected"):
+		var repeated_draft_key: bool = event is InputEventKey and (event as InputEventKey).echo
+		if not repeated_draft_key:
+			toggle_resident_draft(selected_resident_id)
+		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.physical_keycode:
@@ -825,6 +1014,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			world_camera.zoom = Vector2.ONE * maxf(0.75, world_camera.zoom.x - 0.12)
 			return
 		if mouse_event.button_index == MOUSE_BUTTON_RIGHT and mouse_event.pressed:
+			var selected_resident := get_resident_by_id(selected_resident_id)
+			if selected_resident != null and selected_resident.alive:
+				issue_selected_resident_context_order(map_grid.world_to_cell(get_global_mouse_position()))
+				return
 			set_tool("select")
 			return
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT and mouse_event.pressed:
