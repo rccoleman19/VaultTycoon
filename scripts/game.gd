@@ -24,6 +24,7 @@ const BUILD_KIND_BY_TOOL := {
 @onready var resident_root: Node2D = $Colonists
 @onready var job_system: JobSystem = $JobSystem
 @onready var power_grid: PowerGrid = $PowerGrid
+@onready var lighting_system: LightingSystem = $LightingSystem
 @onready var food_system: FoodSystem = $FoodSystem
 @onready var oxygen_system: OxygenSystem = $OxygenSystem
 @onready var day_cycle: DayCycle = $DayCycle
@@ -57,14 +58,17 @@ func _ready() -> void:
 		Callable(self, "_is_reserved_cell"),
 		Callable(self, "_is_stockpile_floor"),
 	)
+	lighting_system.setup(map_grid)
 	breach_system.setup(self)
 	job_system.setup(self)
+	map_grid.tile_changed.connect(_on_map_topology_changed)
 	map_grid.rubble_created.connect(_on_rubble_created)
 	map_grid.dig_orders_removed.connect(_on_dig_orders_removed)
 	food_system.raw_food_produced.connect(_on_raw_food_produced)
 	day_cycle.day_started.connect(_on_day_started)
 	power_grid.brownout_started.connect(_on_power_brownout_started)
 	power_grid.brownout_cleared.connect(_on_power_brownout_cleared)
+	power_grid.allocation_changed.connect(_on_power_allocation_changed)
 	breach_system.warning_started.connect(_on_breach_warning_started)
 	breach_system.breach_opened.connect(_on_breach_opened)
 	breach_system.breach_sealed.connect(_on_breach_sealed)
@@ -100,6 +104,7 @@ func new_game(show_tutorial := false) -> void:
 	map_grid.new_wing()
 	job_system.reset()
 	power_grid.reset()
+	lighting_system.reset()
 	food_system.reset()
 	oxygen_system.reset()
 	day_cycle.reset()
@@ -127,6 +132,7 @@ func new_game(show_tutorial := false) -> void:
 		resident.died.connect(_on_resident_died)
 		residents.append(resident)
 	power_grid.recalculate(buildings)
+	refresh_lighting(true)
 	oxygen_system.refresh_rates(residents, buildings, false)
 	world_camera.position = map_grid.cell_to_world(map_grid.get_chamber_center())
 	world_camera.zoom = Vector2.ONE
@@ -154,12 +160,13 @@ func _simulation_step(delta_seconds: float) -> void:
 	if ended:
 		return
 	power_grid.recalculate(buildings)
+	refresh_lighting()
 	job_system.reconcile_recreation_state()
 	for resident in residents:
 		if not resident.alive:
 			continue
 		var resident_cell := resident.get_cell(map_grid)
-		var lit := power_grid.is_cell_lit(resident_cell, buildings)
+		var lit := lighting_system.is_cell_lit(resident_cell)
 		var assigned_bed := get_building_by_id(resident.bed_id)
 		var in_bed := assigned_bed != null and assigned_bed.complete and resident_cell == assigned_bed.cell
 		resident.advance_needs(
@@ -208,6 +215,7 @@ func _simulation_step(delta_seconds: float) -> void:
 		breach_system.advance(0.0, next_elapsed)
 	food_system.advance(delta_seconds, buildings)
 	power_grid.recalculate(buildings)
+	refresh_lighting()
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	day_cycle.advance(delta_seconds)
@@ -338,6 +346,37 @@ func get_powered_building_count(kind: int) -> int:
 	return count
 
 
+func refresh_lighting(force := false) -> bool:
+	return lighting_system.refresh(buildings, force)
+
+
+func is_resident_lit(resident: VaultResident) -> bool:
+	return (
+		resident != null
+		and resident.alive
+		and lighting_system.is_cell_lit(resident.get_cell(map_grid))
+	)
+
+
+func get_dark_resident_count() -> int:
+	var count := 0
+	for resident: VaultResident in residents:
+		if resident.alive and not is_resident_lit(resident):
+			count += 1
+	return count
+
+
+func toggle_lighting_overlay() -> bool:
+	var visible := lighting_system.toggle_coverage_overlay()
+	status_message = (
+		"LIGHT MAP ON: amber cells are lit; shaded floor is dark."
+		if visible
+		else "LIGHT MAP OFF: darkness remains visible; coverage guides hidden."
+	)
+	status_message_left = 4.0
+	return visible
+
+
 func toggle_building_enabled(building_id: int) -> bool:
 	var building := get_building_by_id(building_id)
 	if building == null or not building.complete or (not building.is_power_consumer() and building.kind != VaultBuilding.Kind.MEDICAL_BED):
@@ -348,6 +387,7 @@ func toggle_building_enabled(building_id: int) -> bool:
 			if resident.medical_bed_id == building_id:
 				job_system.release_resident(resident)
 	power_grid.recalculate(buildings)
+	refresh_lighting()
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	var state := "disabled" if building.manually_disabled else "enabled"
@@ -509,6 +549,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 		return false
 	if not map_grid.deserialize(snapshot.map):
 		return false
+	lighting_system.reset()
 	for building in buildings:
 		building.free()
 	for resident in residents:
@@ -545,6 +586,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 		world_camera.zoom = Vector2.ONE * clampf(float(camera_data[2]), 0.75, 1.8)
 	power_grid.reset()
 	power_grid.recalculate(buildings)
+	refresh_lighting(true)
 	job_system.rebuild_from_state(snapshot.get("jobs", {}))
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
@@ -748,6 +790,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			player_orders.show_work_priorities(false)
 		get_viewport().set_input_as_handled()
 		return
+	if event.is_action_pressed("lighting_overlay"):
+		toggle_lighting_overlay()
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("pause_game"):
 		toggle_pause()
 		get_viewport().set_input_as_handled()
@@ -839,6 +885,10 @@ func _on_rubble_created(cell: Vector2i, amount: int) -> void:
 	job_system.queue_rubble(cell, amount)
 
 
+func _on_map_topology_changed(_cell: Vector2i) -> void:
+	refresh_lighting()
+
+
 func _on_raw_food_produced(cell: Vector2i, amount: int) -> void:
 	job_system.queue_raw_food(cell, amount)
 
@@ -875,6 +925,7 @@ func _remove_building(building: VaultBuilding, salvage_refund: int, message: Str
 	buildings.erase(building)
 	building.free()
 	power_grid.recalculate(buildings)
+	refresh_lighting()
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	status_message = message
@@ -921,6 +972,10 @@ func _on_power_brownout_started(new_shed_count: int, new_shed_demand: int) -> vo
 func _on_power_brownout_cleared() -> void:
 	status_message = "POWER STABLE: all completed fixtures are served."
 	status_message_left = 5.0
+
+
+func _on_power_allocation_changed() -> void:
+	refresh_lighting()
 
 
 func _on_breach_warning_started() -> void:
@@ -976,7 +1031,7 @@ func _tool_help(tool: String) -> String:
 		"cancel": return "CANCEL: clear stockpile cells, dig orders, or unfinished blueprints."
 		"medical": return "MEDICAL BED: 8 salvage, 8s assembly, no power. Residents at 95 HP or below claim care automatically (+2 HP/s); hatch repair first. Disable to deny care."
 		"bed": return "BUNK: residents sleep here automatically (8 salvage)."
-		"lamp": return "LUMEN: powered light improves mood (5 salvage, 1 power)."
+		"lamp": return "LUMEN: lights floor within %d tiles while powered; prevents the 30 mood/day darkness penalty (5 salvage, 1 power)." % LightingSystem.LUMEN_RADIUS
 		"generator": return "CHARGE NODE: adds 7 power for food and life support (18 salvage)."
 		"grow": return "GROW TRAY: produces raw food for Haul delivery when powered (12 salvage, 3 power)."
 		"kitchen": return "NUTRIENT STATION: Cook turns %d stored raw into %d meal for Haul delivery (10 salvage, 2 power)." % [FoodSystem.COOK_INPUT, FoodSystem.COOK_OUTPUT]

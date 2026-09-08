@@ -11,6 +11,8 @@ var objective_label: Label
 var alert_label: Label
 var crew_mood_label: Label
 var crew_mood_bar: ProgressBar
+var lighting_label: Label
+var lighting_overlay_button: Button
 var power_detail_label: Label
 var oxygen_label: Label
 var oxygen_bar: ProgressBar
@@ -156,6 +158,20 @@ func _build_interface() -> void:
 	crew_mood_bar.show_percentage = false
 	crew_mood_bar.custom_minimum_size.y = 10
 	summary.add_child(crew_mood_bar)
+	var lighting_header := Label.new()
+	lighting_header.text = "LIGHTING"
+	lighting_header.add_theme_color_override("font_color", Color("8faeb7"))
+	summary.add_child(lighting_header)
+	lighting_label = Label.new()
+	lighting_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lighting_label.custom_minimum_size.y = 38
+	summary.add_child(lighting_label)
+	lighting_overlay_button = Button.new()
+	lighting_overlay_button.text = "LIGHT MAP [L]"
+	lighting_overlay_button.tooltip_text = "Show exact powered-Lumen floor coverage without changing simulation lighting."
+	lighting_overlay_button.custom_minimum_size.y = 26
+	lighting_overlay_button.pressed.connect(func() -> void: game.toggle_lighting_overlay())
+	summary.add_child(lighting_overlay_button)
 	var power_header := Label.new()
 	power_header.text = "POWER GRID"
 	power_header.add_theme_color_override("font_color", Color("8faeb7"))
@@ -313,7 +329,7 @@ func _build_interface() -> void:
 		["dig", "DIG [E]", "Mark rock for excavation", 68],
 		["cancel", "CANCEL [X]", "Clear zone cells, orders, and blueprints", 96],
 		["bed", "BUNK $8", "Rest fixture", 80],
-		["lamp", "LUMEN $5", "1 power; lights nearby tiles", 90],
+		["lamp", "LUMEN $5", "1 power; lights floor within %d tiles" % LightingSystem.LUMEN_RADIUS, 90],
 		["generator", "CHARGE $18", "+7 power", 104],
 		["grow", "GROW $12", "3 power; yields raw food for hauling", 90],
 		["kitchen", "NUTRI $10", "2 power; cooks meals for hauling", 96],
@@ -555,7 +571,7 @@ func _build_briefing() -> void:
 	checklist.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(checklist)
 	var controls := Label.new()
-	controls.text = "LMB order/select · RMB/Esc return to Select · X cancel orders/blueprints · P priorities · WASD pan · wheel zoom · Space pause · 1/2/3 speed · F recenter"
+	controls.text = "LMB order/select · RMB/Esc return to Select · X cancel · P priorities · L light map · WASD pan · wheel zoom · Space pause · 1/2/3 speed · F recenter"
 	controls.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	controls.add_theme_color_override("font_color", Color("a9bec3"))
 	content.add_child(controls)
@@ -700,9 +716,17 @@ func refresh() -> void:
 			or game.ended
 			or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
 		)
+	if lighting_overlay_button != null:
+		lighting_overlay_button.disabled = (
+			game.tutorial_open
+			or is_help_open()
+			or game.ended
+			or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
+		)
 	_refresh_roster()
 	_refresh_work_priorities_board()
 	_refresh_crew_mood()
+	_refresh_lighting()
 	_refresh_oxygen()
 	_refresh_breach()
 	_refresh_inspector()
@@ -762,8 +786,7 @@ func _refresh_inspector() -> void:
 			call_deferred("_reveal_work_permissions")
 		work_header.visible = true
 		inspector_title.text = "%s // RESIDENT" % resident.resident_name.to_upper()
-		var resident_cell := resident.get_cell(game.map_grid)
-		var is_lit := game.power_grid.is_cell_lit(resident_cell, game.buildings)
+		var is_lit := game.is_resident_lit(resident)
 		var mood_factors := resident.needs.get_mood_factors(is_lit, resident.sleeping, game.oxygen_system.is_low())
 		if resident.recreating:
 			if game.job_system.is_recreation_running(resident):
@@ -835,7 +858,14 @@ func _refresh_inspector() -> void:
 			inspector_state.text = "Online · %s\nPower: %d demand / %d output" % [power_text, building.get_base_power_demand(), building.get_power_output()]
 			if building.is_power_consumer():
 				inspector_state.text += "\nPriority: %s (fixed)" % building.get_power_priority_name()
-			if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			if building.kind == VaultBuilding.Kind.LAMP:
+				inspector_state.text += "\nLight: %s · %d-tile radius\nFootprint: %d carved floor cells\nDarkness outside coverage: -%d mood/day" % [
+					"ACTIVE" if building.powered else "OFFLINE",
+					LightingSystem.LUMEN_RADIUS,
+					game.lighting_system.get_lumen_lit_floor_count(building),
+					roundi(ResidentNeeds.DARKNESS_MOOD_LOSS_PER_DAY),
+				]
+			elif building.kind == VaultBuilding.Kind.GROW_TRAY:
 				inspector_state.text += "\nGrowth: %d%% · yields 1 raw\nAwaiting Haul: %d raw" % [
 					floori(building.production_progress / FoodSystem.GROW_SECONDS * 100.0),
 					game.job_system.get_pending_raw_food_at(building.cell),
@@ -902,6 +932,9 @@ func _refresh_alerts() -> void:
 		alerts.append("FOOD WAITING · ENABLE HAUL")
 	if game.power_grid.brownout_active:
 		alerts.append("POWER BROWNOUT · SHED %s" % game.power_grid.get_shed_summary())
+	var dark_residents := game.get_dark_resident_count()
+	if dark_residents > 0:
+		alerts.append("DARKNESS · %d CREW UNLIT" % dark_residents)
 	if game.get_completed_building_count(VaultBuilding.Kind.BED) < game.get_alive_count():
 		alerts.append("BED SHORTAGE")
 	var injured := 0
@@ -992,6 +1025,25 @@ func _refresh_crew_mood() -> void:
 	]
 	crew_mood_bar.value = lowest.needs.mood
 	crew_mood_bar.modulate = Color("ef5a54") if lowest.needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD else (Color("efc56b") if lowest.needs.mood < 70.0 else Color("75d4b4"))
+
+
+func _refresh_lighting() -> void:
+	var lighting := game.lighting_system
+	var lit_floor := lighting.get_lit_floor_count()
+	var dark_floor := lighting.get_dark_floor_count()
+	var total_floor := lit_floor + dark_floor
+	var dark_residents := game.get_dark_resident_count()
+	lighting_label.text = "FLOOR %d/%d LIT · %d%%\nLUMENS %d/%d ONLINE · CREW UNLIT %d" % [
+		lit_floor,
+		total_floor,
+		roundi(lighting.get_floor_coverage_percent()),
+		lighting.get_powered_lumen_count(),
+		lighting.get_completed_lumen_count(),
+		dark_residents,
+	]
+	lighting_label.add_theme_color_override("font_color", Color("efc56b") if dark_residents > 0 else Color("75d4b4"))
+	lighting_overlay_button.text = "LIGHT MAP [L] · %s" % ("ON" if lighting.is_coverage_overlay_visible() else "OFF")
+	lighting_overlay_button.modulate = Color("efc56b") if lighting.is_coverage_overlay_visible() else Color.WHITE
 
 
 func _refresh_oxygen() -> void:
@@ -1091,7 +1143,7 @@ func _refresh_checklist() -> void:
 	var rec_done := game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) >= 1
 	var rec_marker := "[color=#75d4b4][DONE][/color]" if rec_done else "[color=#8faeb7][OPTIONAL][/color]"
 	lines.append("%s  Power a Rec Console; free 1 power if shed" % rec_marker)
-	lines.append("[color=#efc56b]BROWNOUT[/color]  Shed Lumens stop lighting cells; darkness costs awake residents 30 extra mood/day")
+	lines.append("[color=#efc56b]LIGHTING[/color]  Powered Lumens cover %d tiles. Shed Lumens stop lighting cells; darkness costs awake residents 30 extra mood/day. [L] maps coverage" % LightingSystem.LUMEN_RADIUS)
 	lines.append("Optional: ZONE paints salvage + food drop-offs; CANCEL clears cells")
 	lines.append("Optional: Medical Bed ($8) heals injuries; disable to deny care")
 	lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled")

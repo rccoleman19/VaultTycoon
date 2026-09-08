@@ -13,6 +13,7 @@ const TILE_SIZE := 24
 const CHAMBER := Rect2i(17, 11, 12, 10)
 
 var cells: Array[int] = []
+var topology_revision := 0
 var stockpile_cells: Dictionary = {}
 var stockpile_cell_check := Callable()
 var dig_marks: Dictionary = {}
@@ -35,6 +36,7 @@ func setup(cancel_check: Callable, reserved_check := Callable(), zone_check := C
 
 
 func new_wing() -> void:
+	topology_revision += 1
 	cells.clear()
 	cells.resize(WIDTH * HEIGHT)
 	cells.fill(Tile.ROCK)
@@ -104,6 +106,7 @@ func apply_dig_work(cell: Vector2i, amount: float) -> bool:
 		queue_redraw()
 		return false
 	cells[_index(cell)] = Tile.FLOOR
+	topology_revision += 1
 	dig_marks.erase(cell)
 	dig_progress.erase(cell)
 	tile_changed.emit(cell)
@@ -291,6 +294,7 @@ func deserialize(data: Dictionary) -> bool:
 	for entry: Array in data.get("stockpile_cells", []):
 		stockpile_cells[Vector2i(int(entry[0]), int(entry[1]))] = true
 	_remove_stranded_dig_marks()
+	topology_revision += 1
 	queue_redraw()
 	return true
 

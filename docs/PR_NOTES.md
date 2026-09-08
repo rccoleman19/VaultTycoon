@@ -1,11 +1,88 @@
-# PR notes — desktop stack through Slice 10
+# PR notes — desktop stack through Slice 11
 
 ## Current stack
 
-Slice 10 (`feat/food-stockpile-haul`) starts directly from Slice 9 at `cc56863`
-(`feat/stockpile-zones`), which is stacked on the earlier desktop gameplay slices.
-Slices 1–9, including Medical Beds and stockpile-zone painting, remain in place.
+Slice 11 builds directly from Slice 10 at `6ea2a85` (`feat/food-stockpile-haul`),
+which is stacked on the earlier desktop gameplay slices. Slices 1–10, including
+Medical Beds, stockpile-zone painting, and physical food-output hauling, remain in
+place.
 This work targets `main`; no merge or store shipping is authorized.
+
+## Slice 11 — Lighting and darkness control
+
+Slice 11 makes the existing powered-Lumen mood rule visible and actionable without
+turning lighting into a new room, visibility, or atmosphere simulation. Carved floor
+now shows whether it is lit, the right HUD summarizes current coverage and exposed
+crew, and a transient Light Map lets the player inspect the same derived cells used
+by resident mood.
+
+### Focused scope
+
+- Preserve the existing Lumen economy and power contract: **LUMEN $5**, 5 seconds
+  of assembly, 1 power demand, and fixed **HIGH** brownout priority.
+- Define one canonical coverage rule: every completed, powered Lumen lights the
+  exact inclusive Chebyshev radius of 5 cells around it. Equivalently, both the
+  horizontal and vertical offset must be at most 5, producing an 11×11 square.
+  Overlap remains simply lit; there is no extra benefit for multiple sources.
+- Render a visible darkness layer over unlit carved floor. It follows construction,
+  power allocation, manual enable/disable, brownout shedding, deconstruction, New
+  Wing, and load state, including changes made while the simulation is paused.
+- Add right-HUD **LIGHT MAP [L]** and the `L` key for a transient coverage overlay.
+  The view is informational only: it does not change pause, speed, selection, the
+  active map tool, pathing, power allocation, lighting, or resident needs.
+- Report lit-floor coverage, completed powered/online Lumens, and living crew
+  outside all coverage in the right HUD. Resident inspection identifies whether the
+  resident's current cell is lit; Lumen inspection reports its online state, exact
+  radius, and coverage. An actionable alert reports dark residents.
+- Retain the generic fixture **ENABLE**/**DISABLE** control for completed Lumens. It
+  recalculates coverage immediately and remains usable while paused; no separate
+  lighting-specific simulation control is introduced.
+- Keep darkness at the existing additional 30 mood loss per 40-second day for an
+  awake resident outside every powered Lumen. Lighting has no new direct movement,
+  pathing, work-speed, health, power, oxygen, construction, or production effect.
+- Keep save schema version 1. Lighting coverage and telemetry remain derived from
+  saved fixture positions, completion/manual-disable state, and the recomputed power
+  allocation. The Light Map view is transient UI state and is neither serialized nor
+  restored; legacy schema-1 snapshots need no lighting migration.
+
+### Lighting contract
+
+| Rule | Slice 11 behavior |
+| --- | --- |
+| Lumen fixture | 5 salvage, 5-second assembly, 1 power, fixed HIGH priority |
+| Online source | Completed, not manually disabled, and currently powered |
+| Coverage | Inclusive Chebyshev radius 5; an 11×11 square |
+| Multiple Lumens | Union of coverage; overlap adds no intensity or mood benefit |
+| Darkness presentation | Persistent dim layer on unlit carved floor |
+| Light Map | Transient `L`/right-HUD coverage view with no simulation effect |
+| Resident effect | Existing additional -30 mood/day while awake and dark |
+| Geometry excluded | No line of sight, ray casting, rock occlusion, doors, or room graph |
+| Persistence | Derived from schema-1 fixture/power state; Light Map view not saved |
+
+### Validation and limits
+
+Validation completed with Godot 4.7.2 via `./scripts/check.sh`:
+
+- Lighting/darkness focused suite (`tests/test_lighting_darkness.gd`): **PASS**,
+  7 cases and 132 assertions
+- Existing core and focused regressions: **PASS**
+- Headless editor import and five-frame main-scene boot: **PASS**
+
+The focused coverage should exercise the exact center, axial, diagonal, and
+just-outside radius boundaries; overlapping sources; incomplete, disabled, shed,
+and removed Lumens; immediate paused-state redraws; visible floor darkness; the
+button and `L` key without state leakage; right-HUD telemetry, both inspectors, and
+dark-resident alerts; New Wing and load reconstruction; schema-1 compatibility; and
+confirmation that transient Light Map state never enters the snapshot. The complete
+check must continue to run core gameplay, mood/recreation, work priorities,
+breach-modal speed keys, medical care, stockpile zones, food hauling, editor import,
+and main-scene boot alongside the new lighting coverage.
+
+This slice adds no light intensity, color, falloff, line-of-sight or fog-of-war
+simulation, rock/wall occlusion, doors, room graph, day/night cycle, new fixture
+economy, or new survival requirement. It does not merge or ship the game, and the
+existing surface, multiplayer, monetization, final-art/audio, and mobile exclusions
+remain.
 
 ## Slice 10 — Food and meal hauling
 

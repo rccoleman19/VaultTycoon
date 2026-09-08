@@ -3,6 +3,9 @@ extends Node
 
 signal brownout_started(shed_count: int, shed_demand: int)
 signal brownout_cleared
+signal allocation_changed
+
+const LUMEN_RADIUS := LightingSystem.LUMEN_RADIUS
 
 var supply := 0
 var demand := 0
@@ -81,12 +84,13 @@ func recalculate(buildings: Array[VaultBuilding]) -> void:
 		brownout_started.emit(shed_count, shed_demand)
 	elif was_brownout and not brownout_active:
 		brownout_cleared.emit()
+	allocation_changed.emit()
 
 
 func is_cell_lit(cell: Vector2i, buildings: Array[VaultBuilding]) -> bool:
 	for building in buildings:
 		if building.complete and building.kind == VaultBuilding.Kind.LAMP and building.powered:
-			if maxi(absi(cell.x - building.cell.x), absi(cell.y - building.cell.y)) <= 5:
+			if LightingSystem.is_cell_in_lumen_range(cell, building.cell):
 				return true
 	return false
 

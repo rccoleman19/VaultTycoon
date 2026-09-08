@@ -46,6 +46,10 @@ tool_dig={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"physical_keycode":69)]
 }
+lighting_overlay={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":76)]
+}
 work_priorities={
 "deadzone": 0.5,
 "events": [Object(InputEventKey,"physical_keycode":80)]
