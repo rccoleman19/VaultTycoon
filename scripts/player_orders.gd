@@ -45,6 +45,8 @@ var briefing_panel: PanelContainer
 var briefing_load_button: Button
 var briefing_begin_button: Button
 var briefing_close_button: Button
+var briefing_tips_label: Label
+var _briefing_is_opening := false
 var help_button: Button
 var breach_warning_panel: PanelContainer
 var breach_resume_button: Button
@@ -575,37 +577,37 @@ func _build_briefing() -> void:
 	briefing_overlay.add_child(scrim)
 	briefing_panel = PanelContainer.new()
 	briefing_panel.set_anchors_preset(Control.PRESET_CENTER)
-	briefing_panel.offset_left = -320.0
-	briefing_panel.offset_right = 320.0
-	briefing_panel.offset_top = -300.0
-	briefing_panel.offset_bottom = 300.0
-	briefing_panel.custom_minimum_size = Vector2(640, 600)
+	briefing_panel.offset_left = -280.0
+	briefing_panel.offset_right = 280.0
+	briefing_panel.offset_top = -220.0
+	briefing_panel.offset_bottom = 220.0
+	briefing_panel.custom_minimum_size = Vector2(560, 440)
 	briefing_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	briefing_panel.add_theme_stylebox_override("panel", _panel_style(Color("111b21"), Color("72cdb8"), 3))
 	briefing_overlay.add_child(briefing_panel)
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
-		margin.add_theme_constant_override(side, 22)
+		margin.add_theme_constant_override(side, 18)
 	briefing_panel.add_child(margin)
-	var content := VBoxContainer.new()
-	content.add_theme_constant_override("separation", 12)
-	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	margin.add_child(content)
+	var shell := VBoxContainer.new()
+	shell.add_theme_constant_override("separation", 10)
+	shell.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_child(shell)
 	var title := Label.new()
 	title.text = "VAULT WING 07 // SEAL STABILIZATION"
-	title.add_theme_font_size_override("font_size", 22)
+	title.add_theme_font_size_override("font_size", 20)
 	title.add_theme_color_override("font_color", Color("75d4b4"))
-	content.add_child(title)
+	shell.add_child(title)
 	var intro := Label.new()
-	intro.text = "Dig and haul salvage, add bunks, then power food and an Air Recycler. Keep Haul enabled to store Grow Tray and Nutrient Station output. Reserve 4 salvage and keep Haul + Craft enabled for the hatch warning."
+	intro.text = "Dig salvage, bunk the crew, power food + air, then seal the hatch. Survive seven days."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	intro.custom_minimum_size.y = 54
-	content.add_child(intro)
+	intro.custom_minimum_size.y = 36
+	shell.add_child(intro)
 	var checklist_scroll := ScrollContainer.new()
 	checklist_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	checklist_scroll.custom_minimum_size.y = 238
+	checklist_scroll.custom_minimum_size.y = 180
 	checklist_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	content.add_child(checklist_scroll)
+	shell.add_child(checklist_scroll)
 	checklist = RichTextLabel.new()
 	checklist.bbcode_enabled = true
 	checklist.fit_content = true
@@ -613,25 +615,27 @@ func _build_briefing() -> void:
 	checklist.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	checklist.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	checklist_scroll.add_child(checklist)
-	var controls := Label.new()
-	controls.text = "LMB order/select · Select resident then R draft/undraft · RMB: drafted = move, undrafted = force context job · Esc return to Select · X cancel · P priorities · L light map · WASD pan · wheel zoom · Space pause · 1/2/3 speed · F recenter"
-	controls.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	controls.add_theme_color_override("font_color", Color("a9bec3"))
-	content.add_child(controls)
+	briefing_tips_label = Label.new()
+	briefing_tips_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	briefing_tips_label.add_theme_color_override("font_color", Color("8faeb7"))
+	briefing_tips_label.add_theme_font_size_override("font_size", 13)
+	shell.add_child(briefing_tips_label)
 	var buttons := HBoxContainer.new()
 	buttons.alignment = BoxContainer.ALIGNMENT_END
+	buttons.add_theme_constant_override("separation", 8)
 	buttons.size_flags_vertical = Control.SIZE_SHRINK_END
-	content.add_child(buttons)
+	shell.add_child(buttons)
 	briefing_load_button = Button.new()
-	briefing_load_button.text = "LOAD LOCAL SAVE"
+	briefing_load_button.text = "LOAD"
 	briefing_load_button.pressed.connect(func() -> void: game.load_game())
 	buttons.add_child(briefing_load_button)
 	briefing_close_button = Button.new()
-	briefing_close_button.text = "CLOSE HELP [ESC]"
+	briefing_close_button.text = "CLOSE [ESC]"
 	briefing_close_button.pressed.connect(show_briefing.bind(false))
 	buttons.add_child(briefing_close_button)
 	briefing_begin_button = Button.new()
 	briefing_begin_button.text = "BEGIN SHIFT"
+	briefing_begin_button.custom_minimum_size.x = 140
 	briefing_begin_button.pressed.connect(func() -> void: game.begin_shift())
 	buttons.add_child(briefing_begin_button)
 
@@ -1203,19 +1207,25 @@ func _refresh_checklist() -> void:
 			"Finish Day 7 with a sealed hatch and O2 >= 15%",
 		],
 	]
-	var lines: Array[String] = ["[color=#8faeb7]STABILIZATION CHECKLIST // REQUIRED[/color]"]
+	var lines: Array[String] = ["[color=#8faeb7]REQUIRED[/color]"]
 	for check in checks:
 		var marker := "[color=#75d4b4][DONE][/color]" if check[0] else "[color=#efc56b][    ][/color]"
 		lines.append("%s  %s" % [marker, check[1]])
-	var rec_done := game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) >= 1
-	var rec_marker := "[color=#75d4b4][DONE][/color]" if rec_done else "[color=#8faeb7][OPTIONAL][/color]"
-	lines.append("%s  Power a Rec Console; free 1 power if shed" % rec_marker)
-	lines.append("[color=#efc56b]LIGHTING[/color]  Powered Lumens cover %d tiles. Shed Lumens stop lighting cells; darkness costs awake residents 30 extra mood/day. [L] maps coverage" % LightingSystem.LUMEN_RADIUS)
-	lines.append("Optional: ZONE paints salvage + food drop-offs; CANCEL clears cells")
-	lines.append("Optional: Medical Bed ($8) heals injuries; disable to deny care")
-	lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled")
-	lines.append("[color=#8faeb7][OPTIONAL][/color]  MANUAL ORDERS: select resident → [R] draft/undraft; right-click drafted = move, undrafted = force context job")
+	if not _briefing_is_opening:
+		var rec_done := game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) >= 1
+		var rec_marker := "[color=#75d4b4][DONE][/color]" if rec_done else "[color=#8faeb7][OPTIONAL][/color]"
+		lines.append("%s  Power a Rec Console; free 1 power if shed" % rec_marker)
+		lines.append("[color=#efc56b]LIGHTING[/color]  Powered Lumens cover %d tiles. Shed Lumens stop lighting cells; darkness costs awake residents 30 extra mood/day. [L] maps coverage" % LightingSystem.LUMEN_RADIUS)
+		lines.append("Optional: ZONE paints salvage + food drop-offs; CANCEL clears cells")
+		lines.append("Optional: Medical Bed ($8) heals injuries; disable to deny care")
+		lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled")
+		lines.append("[color=#8faeb7][OPTIONAL][/color]  MANUAL ORDERS: select resident → [R] draft/undraft; right-click drafted = move, undrafted = force context job")
 	checklist.text = "\n".join(lines)
+	if briefing_tips_label != null:
+		if _briefing_is_opening:
+			briefing_tips_label.text = "Tips: HELP after begin · P priorities · L light map · R draft"
+		else:
+			briefing_tips_label.text = "Tips: Esc closes Help · P priorities · L light map · R draft / force orders"
 
 
 func _has_eligible_worker(work_type: String) -> bool:
@@ -1298,6 +1308,7 @@ func show_briefing(visible: bool, opening := false) -> void:
 	if briefing_overlay == null or briefing_panel == null:
 		return
 	var was_visible := briefing_overlay.visible
+	_briefing_is_opening = opening and visible
 	briefing_overlay.visible = visible
 	briefing_panel.visible = visible
 	if briefing_begin_button != null:
@@ -1306,6 +1317,7 @@ func show_briefing(visible: bool, opening := false) -> void:
 		briefing_close_button.visible = not opening
 	if visible:
 		show_work_priorities(false)
+		_refresh_checklist()
 		_configure_briefing_focus(opening)
 		_focus_first_briefing_control(opening)
 	elif was_visible:
