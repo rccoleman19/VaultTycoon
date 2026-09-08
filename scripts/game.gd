@@ -160,7 +160,6 @@ func _simulation_step(delta_seconds: float) -> void:
 	if ended:
 		return
 	power_grid.recalculate(buildings)
-	refresh_lighting()
 	job_system.reconcile_recreation_state()
 	for resident in residents:
 		if not resident.alive:
@@ -215,7 +214,6 @@ func _simulation_step(delta_seconds: float) -> void:
 		breach_system.advance(0.0, next_elapsed)
 	food_system.advance(delta_seconds, buildings)
 	power_grid.recalculate(buildings)
-	refresh_lighting()
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	day_cycle.advance(delta_seconds)
@@ -387,7 +385,6 @@ func toggle_building_enabled(building_id: int) -> bool:
 			if resident.medical_bed_id == building_id:
 				job_system.release_resident(resident)
 	power_grid.recalculate(buildings)
-	refresh_lighting()
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	var state := "disabled" if building.manually_disabled else "enabled"
@@ -1118,7 +1115,6 @@ func _remove_building(building: VaultBuilding, salvage_refund: int, message: Str
 	buildings.erase(building)
 	building.free()
 	power_grid.recalculate(buildings)
-	refresh_lighting()
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	status_message = message

@@ -34,7 +34,7 @@ func reset() -> void:
 
 
 func refresh(buildings: Array[VaultBuilding], force := false) -> bool:
-	if map_grid == null:
+	if map_grid == null or not is_instance_valid(map_grid):
 		return false
 	var next_signature := _build_coverage_signature(buildings)
 	if not force and next_signature == _coverage_signature:
@@ -68,7 +68,7 @@ func is_cell_lit(cell: Vector2i) -> bool:
 
 
 func is_floor_dark(cell: Vector2i) -> bool:
-	return map_grid != null and map_grid.is_walkable(cell) and not is_cell_lit(cell)
+	return map_grid != null and is_instance_valid(map_grid) and map_grid.is_walkable(cell) and not is_cell_lit(cell)
 
 
 func get_lit_floor_count() -> int:
@@ -138,7 +138,7 @@ func _build_coverage_signature(buildings: Array[VaultBuilding]) -> String:
 
 
 func _draw() -> void:
-	if map_grid == null:
+	if map_grid == null or not is_instance_valid(map_grid):
 		return
 	var tile_size := float(MapGrid.TILE_SIZE)
 	for cell: Vector2i in _floor_cells:
