@@ -146,7 +146,7 @@ func _build_interface() -> void:
 	summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rail.add_child(summary)
 	objective_label = Label.new()
-	objective_label.text = "NEXT // Begin shift"
+	objective_label.text = "Next: YOU designate · THEY auto-work"
 	objective_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	objective_label.add_theme_color_override("font_color", Color("efc56b"))
 	objective_label.add_theme_font_size_override("font_size", 16)
@@ -258,7 +258,7 @@ func _build_interface() -> void:
 	work_priorities_button = Button.new()
 	work_priorities_button.name = "WorkPrioritiesButton"
 	work_priorities_button.text = "PRIORITIES [P]"
-	work_priorities_button.tooltip_text = "Edit priorities for the whole crew without changing the active map tool."
+	work_priorities_button.tooltip_text = "RimWorld-style work tab: ranks 1 (highest) to 4, OFF never claims. Left-to-right Dig→Haul→Craft→Cook. Defaults already on at 3 — open only to specialize."
 	work_priorities_button.custom_minimum_size = Vector2(122, 28)
 	work_priorities_button.pressed.connect(toggle_work_priorities)
 	roster_header_row.add_child(work_priorities_button)
@@ -454,7 +454,7 @@ func _build_work_priorities_board() -> void:
 	title_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_row.add_child(title_stack)
 	var eyebrow := Label.new()
-	eyebrow.text = "CREW SCHEDULER // ORDINARY WORK"
+	eyebrow.text = "WORK TAB // LEFT → RIGHT WITHIN EACH RANK"
 	eyebrow.add_theme_color_override("font_color", Color("8faeb7"))
 	title_stack.add_child(eyebrow)
 	var title := Label.new()
@@ -470,7 +470,7 @@ func _build_work_priorities_board() -> void:
 	title_row.add_child(work_priorities_close_button)
 
 	var explanation := Label.new()
-	explanation.text = "Click a cell to cycle.  1 = highest  ·  4 = lowest  ·  OFF = never claim. HAUL covers salvage, raw food, and meals. Drafted residents keep editable schedules that resume after undraft. Hatch work overrides numbered ranks, but OFF still blocks it. Recreation is autonomous."
+	explanation.text = "Like RimWorld: click to cycle 1 (do first) → 2 → 3 → 4 → OFF. Same rank scans Dig→Haul→Craft→Cook left to right. Everyone starts at 3 for all four — auto work runs without opening this board. Draft/force is optional override. Hatch urgency beats ranks; OFF still blocks. HAUL = salvage + food."
 	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	explanation.custom_minimum_size.y = 42
 	content.add_child(explanation)
@@ -614,7 +614,7 @@ func _build_briefing() -> void:
 	title.add_theme_color_override("font_color", Color("75d4b4"))
 	shell.add_child(title)
 	var intro := Label.new()
-	intro.text = "Dig salvage, bunk the crew, power food + air, then seal the hatch. Survive seven days."
+	intro.text = "YOU designate dig/build/stockpile. THEY auto-claim from Dig/Haul/Craft/Cook defaults. Draft is optional. Survive seven days."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	intro.custom_minimum_size.y = 36
 	shell.add_child(intro)
@@ -827,22 +827,29 @@ func _toggle_details_rail() -> void:
 func _primary_next_step() -> Dictionary:
 	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
 	var floor_count := game.map_grid.get_floor_cells().size()
+	var dig_marks := game.map_grid.dig_marks.size()
 	if floor_count < initial_floor + 12:
+		if dig_marks <= 0:
+			return {
+				"text": "Next: YOU mark rock [E] · THEY dig on Dig defaults",
+				"help": "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional.",
+				"tool": "dig",
+			}
 		return {
-			"text": "NEXT // Dig rock beside the chamber [E]",
-			"help": "Select DIG [E], mark rock next to the blue chamber, then wait for a digger.",
+			"text": "Next: YOU keep marking digs [E] · THEY dig/haul alone",
+			"help": "Keep designating connected rock. They dig then haul rubble without draft. PRIORITIES [P] only to specialize.",
 			"tool": "dig",
 		}
 	if game.get_completed_building_count(VaultBuilding.Kind.BED) < 2:
 		return {
-			"text": "NEXT // Build 2 bunks on carved floor",
-			"help": "Select BUNK, place on empty carved floor, and let Craft finish both beds.",
+			"text": "Next: YOU place 2 bunks · THEY craft from Craft",
+			"help": "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.",
 			"tool": "bed",
 		}
 	if game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) < 1:
 		return {
-			"text": "NEXT // Build a Charge Node for power",
-			"help": "Select CHARGE, place it, and wait for supply + build. It adds +7 power.",
+			"text": "Next: YOU place a Charge Node · THEY supply/build",
+			"help": "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.",
 			"tool": "generator",
 		}
 	var cook_ok := _has_eligible_worker("cook")
@@ -856,25 +863,25 @@ func _primary_next_step() -> Dictionary:
 	if not food_ready:
 		if game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY) < 1:
 			return {
-				"text": "NEXT // Build and power a Grow Tray",
-				"help": "Select GROW, place it, power it, and keep Haul enabled so output is stored.",
+				"text": "Next: YOU place Grow Tray · THEY haul output",
+				"help": "Designate GROW and keep it powered. Haul defaults move raw food to stock.",
 				"tool": "grow",
 			}
 		if game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) < 1:
 			return {
-				"text": "NEXT // Build and power a Nutrient Station",
-				"help": "Select NUTRI, place it, power it, and keep Cook + Haul enabled.",
+				"text": "Next: YOU place Nutrient Station · THEY cook/haul",
+				"help": "Designate NUTRI, power it, leave Cook + Haul above OFF.",
 				"tool": "kitchen",
 			}
 		return {
-			"text": "NEXT // Power food chain; keep Cook + Haul on",
-			"help": "Enable Grow Tray + Nutrient Station power and leave Cook/Haul above OFF.",
+			"text": "Next: YOU power food chain · THEY cook/haul alone",
+			"help": "Enable Grow + Nutrient power. Keep Cook/Haul above OFF so defaults keep working.",
 			"tool": "select",
 		}
 	if game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) < 1:
 		return {
-			"text": "NEXT // Power an Air Recycler (AIR $14)",
-			"help": "Select AIR, build it, and keep it powered (3 power).",
+			"text": "Next: YOU place Air Recycler · THEY craft it",
+			"help": "Designate AIR $14 and keep it powered (3). Craft auto-builds the blueprint.",
 			"tool": "air",
 		}
 	var hatch_ready := (
@@ -890,24 +897,24 @@ func _primary_next_step() -> Dictionary:
 	)
 	if not hatch_ready:
 		return {
-			"text": "NEXT // Keep 4 salvage + Haul/Craft ready for hatch",
-			"help": "Reserve 4 salvage and leave Haul + Craft above OFF before the hatch warning.",
+			"text": "Next: YOU keep 4 salvage · THEY haul/craft hatch",
+			"help": "Reserve 4 salvage. Leave Haul + Craft above OFF so they auto-respond to the hatch.",
 			"tool": "select",
 		}
 	if not game.breach_system.is_sealed():
 		return {
-			"text": "NEXT // Patch and seal the maintenance hatch",
-			"help": "When the hatch warns, keep Haul + Craft working until the patch completes.",
+			"text": "Next: YOU watch hatch · THEY auto-patch",
+			"help": "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft.",
 			"tool": "select",
 		}
 	if not game.day_cycle.completed:
 		return {
-			"text": "NEXT // Hold the wing through Day 7",
-			"help": "Keep food, power, air, and the sealed hatch stable until Day 7 completes.",
+			"text": "Next: YOU designate needs · THEY hold Day 7",
+			"help": "Keep designating dig/build/stockpile. Defaults keep food, power, and air running.",
 			"tool": "select",
 		}
 	return {
-		"text": "NEXT // Wing stable — check victory blockers",
+		"text": "Next: YOU check blockers · THEY idle on defaults",
 		"help": "Seal and breathable O2 remain required at Day 7.",
 		"tool": "select",
 	}
@@ -922,21 +929,30 @@ func _refresh_objective() -> void:
 			blockers.append("RESTORE O2 TO 15%")
 		objective_label.text = "VICTORY PENDING // %s" % " + ".join(blockers)
 		objective_label.add_theme_color_override("font_color", Color("ef6860"))
+		_expand_details_on_urgency()
 		return
 	var step: Dictionary = _primary_next_step()
 	objective_label.text = str(step.get("text", "NEXT // Survive"))
 	objective_label.add_theme_color_override("font_color", Color("efc56b"))
-	if (
+	_expand_details_on_urgency()
+
+
+func _expand_details_on_urgency() -> void:
+	if not (
 		game.breach_system.phase == BreachSystem.Phase.WARNING
 		or game.breach_system.phase == BreachSystem.Phase.OPEN
 		or game.power_grid.brownout_active
 		or game.oxygen_system.is_low()
+		or (game.day_cycle.completed and not game.ended and (
+			not game.breach_system.is_sealed() or not game.oxygen_system.is_breathable()
+		))
 	):
-		if details_box != null and not _details_expanded:
-			_details_expanded = true
-			details_box.visible = true
-			if details_toggle != null:
-				details_toggle.text = "DETAILS ▾"
+		return
+	if details_box != null and not _details_expanded:
+		_details_expanded = true
+		details_box.visible = true
+		if details_toggle != null:
+			details_toggle.text = "DETAILS ▾"
 
 
 func _refresh_roster() -> void:
@@ -1105,7 +1121,7 @@ func _refresh_inspector() -> void:
 		return
 	_last_inspected_building_id = -1
 	inspector_title.text = "INSPECTOR"
-	inspector_state.text = "Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job. Select a fixture to inspect it; PRIORITIES [P] schedules ordinary work."
+	inspector_state.text = "AUTO WORK is the main loop (Dig/Haul/Craft/Cook defaults). Optional: [R] draft/undraft; right-click drafted = move, undrafted = force once. PRIORITIES [P] only to specialize."
 	_hide_needs_and_work()
 	_hide_fixture_controls()
 
@@ -1359,12 +1375,12 @@ func _refresh_checklist() -> void:
 		lines.append("[color=#efc56b]LIGHTING[/color]  Powered Lumens cover %d tiles. Shed Lumens stop lighting cells; darkness costs awake residents 30 extra mood/day. [L] maps coverage" % LightingSystem.LUMEN_RADIUS)
 		lines.append("Optional: ZONE paints salvage + food drop-offs; CANCEL clears cells")
 		lines.append("Optional: Medical Bed ($8) heals injuries; disable to deny care")
-		lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled")
-		lines.append("[color=#8faeb7][OPTIONAL][/color]  MANUAL ORDERS: select resident → [R] draft/undraft; right-click drafted = move, undrafted = force context job")
+		lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled · left→right Dig·Haul·Craft·Cook (defaults 3)")
+		lines.append("[color=#8faeb7][OPTIONAL][/color]  MANUAL ORDERS (optional override): [R] draft/undraft; right-click force — ordinary auto-work does not need this")
 	checklist.text = "\n".join(lines)
 	if briefing_tips_label != null:
 		if _briefing_is_opening:
-			briefing_tips_label.text = "Tips: HELP after begin · P priorities · L light map · R draft"
+			briefing_tips_label.text = "Tips: YOU designate · THEY auto-work · HELP · P specialize · R draft optional"
 		else:
 			briefing_tips_label.text = "Tips: Esc closes Help · P priorities · L light map · R draft / force orders"
 
@@ -1412,7 +1428,7 @@ func _refresh_work_priorities_board() -> void:
 		coverage_parts.append("%s %d" % [work_type.to_upper(), count])
 		if count <= 0:
 			missing.append(work_type.to_upper())
-	work_priorities_summary.text = "COVERAGE // %s" % "  ·  ".join(coverage_parts)
+	work_priorities_summary.text = "DEFAULTS ON // all start at 3 · open only to specialize\nCOVERAGE // %s" % "  ·  ".join(coverage_parts)
 	var drafted_count := 0
 	for resident: VaultResident in game.residents:
 		if resident.alive and resident.drafted:
