@@ -155,8 +155,10 @@ func begin_shift() -> void:
 	tutorial_open = false
 	user_paused = false
 	player_orders.show_briefing(false)
-	status_message = "First job: DIG [E] rock beside the chamber, then build 2 bunks."
-	status_message_left = 8.0
+	status_message = "YOU designate dig/build. THEY auto-claim Dig/Haul/Craft/Cook from defaults (P optional)."
+	status_message_left = 10.0
+
+
 
 
 func _simulation_step(delta_seconds: float) -> void:
