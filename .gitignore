@@ -1,0 +1,6 @@
+.godot/*
+!.godot/global_script_class_cache.cfg
+*.import
+*.tmp
+*.log
+exports/
