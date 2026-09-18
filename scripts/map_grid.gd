@@ -9,7 +9,10 @@ enum Tile { ROCK, FLOOR }
 
 const WIDTH := 50
 const HEIGHT := 36
+# TILE_SIZE remains the approximate horizontal center spacing (~legacy square size).
+# Pointy-top odd-r offset hex: HEX_SIZE is center-to-vertex so flat-to-flat X == TILE_SIZE.
 const TILE_SIZE := 24
+const HEX_SIZE := 13.856406460551018  # TILE_SIZE / sqrt(3); flat-to-flat X == TILE_SIZE
 const CHAMBER := Rect2i(17, 11, 12, 10)
 
 var cells: Array[int] = []
@@ -154,7 +157,7 @@ func clear_stockpile(cell: Vector2i) -> bool:
 
 
 # One breadth-first traversal selects the closest reachable zone for any inbound
-# cargo. Equal-distance ties follow get_neighbors() order: left, right, up, down.
+# cargo. Equal-distance ties follow get_neighbors() order: W, E, NW, NE, SW, SE.
 # Zones remain destination markers rather than per-cell inventories.
 func nearest_stockpile(from_cell: Vector2i) -> Vector2i:
 	if stockpile_cells.is_empty() or not is_walkable(from_cell):
@@ -236,15 +239,92 @@ func find_path(from_cell: Vector2i, to_cell: Vector2i) -> Array[Vector2i]:
 
 
 func get_neighbors(cell: Vector2i) -> Array[Vector2i]:
-	return [cell + Vector2i.LEFT, cell + Vector2i.RIGHT, cell + Vector2i.UP, cell + Vector2i.DOWN]
+	# Pointy-top odd-r. W-first keeps equal-distance BFS ties left-preferring.
+	if cell.y & 1:
+		return [
+			cell + Vector2i(-1, 0),
+			cell + Vector2i(1, 0),
+			cell + Vector2i(0, -1),
+			cell + Vector2i(1, -1),
+			cell + Vector2i(0, 1),
+			cell + Vector2i(1, 1),
+		]
+	return [
+		cell + Vector2i(-1, 0),
+		cell + Vector2i(1, 0),
+		cell + Vector2i(-1, -1),
+		cell + Vector2i(0, -1),
+		cell + Vector2i(-1, 1),
+		cell + Vector2i(0, 1),
+	]
+
+
+## World position of an odd-r offset cell center (pointy-top).
+static func offset_cell_to_world(cell: Vector2i) -> Vector2:
+	var x := HEX_SIZE * sqrt(3.0) * (float(cell.x) + 0.5 * float(cell.y & 1))
+	var y := HEX_SIZE * 1.5 * float(cell.y)
+	return Vector2(x, y)
 
 
 func cell_to_world(cell: Vector2i) -> Vector2:
-	return Vector2(cell * TILE_SIZE) + Vector2(TILE_SIZE, TILE_SIZE) * 0.5
+	return offset_cell_to_world(cell)
 
 
 func world_to_cell(world_position: Vector2) -> Vector2i:
-	return Vector2i(floori(world_position.x / TILE_SIZE), floori(world_position.y / TILE_SIZE))
+	var q := (sqrt(3.0) / 3.0 * world_position.x - 1.0 / 3.0 * world_position.y) / HEX_SIZE
+	var r := (2.0 / 3.0 * world_position.y) / HEX_SIZE
+	return _axial_round_to_oddr(q, r)
+
+
+## Prefer a walkable hex when a world sample lands on a shared edge / rock seam.
+func snap_to_walkable(world_position: Vector2, hint := Vector2i(-1, -1)) -> Vector2i:
+	var sampled := world_to_cell(world_position)
+	if is_walkable(sampled):
+		return sampled
+	if is_walkable(hint):
+		return hint
+	var best := sampled
+	var best_dist := INF
+	var candidates: Array[Vector2i] = [sampled]
+	candidates.append_array(get_neighbors(sampled))
+	if is_inside(hint):
+		candidates.append(hint)
+		candidates.append_array(get_neighbors(hint))
+	for candidate: Vector2i in candidates:
+		if not is_walkable(candidate):
+			continue
+		var dist := world_position.distance_squared_to(cell_to_world(candidate))
+		if dist < best_dist:
+			best_dist = dist
+			best = candidate
+	return best
+
+
+static func _axial_round_to_oddr(q: float, r: float) -> Vector2i:
+	var s := -q - r
+	var rq := roundf(q)
+	var rr := roundf(r)
+	var rs := roundf(s)
+	var q_diff := absf(rq - q)
+	var r_diff := absf(rr - r)
+	var s_diff := absf(rs - s)
+	if q_diff > r_diff and q_diff > s_diff:
+		rq = -rr - rs
+	elif r_diff > s_diff:
+		rr = -rq - rs
+	var row := int(rr)
+	var col := int(rq + float(row - (row & 1)) / 2.0)
+	return Vector2i(col, row)
+
+
+func hex_polygon(cell: Vector2i, inset := 0.0) -> PackedVector2Array:
+	var center := cell_to_world(cell)
+	var radius := maxf(0.5, HEX_SIZE - inset)
+	var points := PackedVector2Array()
+	for i in 6:
+		var angle := deg_to_rad(60.0 * float(i) - 30.0)
+		points.append(center + Vector2(cos(angle), sin(angle)) * radius)
+	return points
 
 
 func get_chamber_center() -> Vector2i:
@@ -348,31 +428,33 @@ func _draw() -> void:
 	for y in HEIGHT:
 		for x in WIDTH:
 			var cell := Vector2i(x, y)
-			var rect := Rect2(Vector2(cell * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE))
+			var poly := hex_polygon(cell)
 			if get_tile(cell) == Tile.ROCK:
 				var variation := float((x * 17 + y * 31) % 9) / 255.0
 				var rock_color := Color(0.145 + variation, 0.13 + variation, 0.12 + variation)
 				if is_border(cell):
 					rock_color = Color("202b32")
-				draw_rect(rect, rock_color)
+				draw_colored_polygon(poly, rock_color)
 				if (x * 3 + y * 5) % 7 == 0:
-					draw_line(rect.position + Vector2(5, 7), rect.position + Vector2(17, 14), Color(0.24, 0.21, 0.18), 1.0)
+					var center := cell_to_world(cell)
+					draw_line(center + Vector2(-6, -3), center + Vector2(6, 4), Color(0.24, 0.21, 0.18), 1.0)
 			else:
-				draw_rect(rect, Color("26343c"))
-				draw_rect(rect.grow(-2.0), Color("2d414b"))
-			draw_rect(rect, Color(0.08, 0.11, 0.13, 0.52), false, 1.0)
+				draw_colored_polygon(poly, Color("26343c"))
+				draw_colored_polygon(hex_polygon(cell, 2.0), Color("2d414b"))
+			draw_polyline(poly + PackedVector2Array([poly[0]]), Color(0.08, 0.11, 0.13, 0.52), 1.0, true)
 	for cell: Vector2i in dig_marks:
-		var rect := Rect2(Vector2(cell * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE)).grow(-2.0)
-		draw_rect(rect, Color(0.96, 0.65, 0.20, 0.18))
-		draw_rect(rect, Color("e8a13b"), false, 2.0)
-		draw_line(rect.position + Vector2(4, 4), rect.end - Vector2(4, 4), Color("e8a13b"), 1.5)
-		draw_line(Vector2(rect.end.x - 4, rect.position.y + 4), Vector2(rect.position.x + 4, rect.end.y - 4), Color("e8a13b"), 1.5)
+		var mark := hex_polygon(cell, 2.0)
+		draw_colored_polygon(mark, Color(0.96, 0.65, 0.20, 0.18))
+		draw_polyline(mark + PackedVector2Array([mark[0]]), Color("e8a13b"), 2.0, true)
+		var center := cell_to_world(cell)
+		draw_line(center + Vector2(-5, -5), center + Vector2(5, 5), Color("e8a13b"), 1.5)
+		draw_line(center + Vector2(5, -5), center + Vector2(-5, 5), Color("e8a13b"), 1.5)
 	for cell: Vector2i in stockpile_cells:
-		var zone_rect := Rect2(Vector2(cell * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE)).grow(-3.0)
-		draw_rect(zone_rect, Color(0.3, 0.75, 0.85, 0.20))
-		draw_rect(zone_rect, Color("64bdcd"), false, 1.5)
+		var zone := hex_polygon(cell, 3.0)
+		draw_colored_polygon(zone, Color(0.3, 0.75, 0.85, 0.20))
+		draw_polyline(zone + PackedVector2Array([zone[0]]), Color("64bdcd"), 1.5, true)
 	if is_inside(hover_cell) and preview_tool != "select":
-		var hover_rect := Rect2(Vector2(hover_cell * TILE_SIZE), Vector2(TILE_SIZE, TILE_SIZE)).grow(-1.0)
+		var hover := hex_polygon(hover_cell, 1.0)
 		var valid := is_preview_valid(preview_tool, hover_cell)
-		draw_rect(hover_rect, Color(0.35, 0.9, 0.68, 0.16) if valid else Color(0.95, 0.25, 0.22, 0.16))
-		draw_rect(hover_rect, Color("71d6b7") if valid else Color("ef5a54"), false, 2.0)
+		draw_colored_polygon(hover, Color(0.35, 0.9, 0.68, 0.16) if valid else Color(0.95, 0.25, 0.22, 0.16))
+		draw_polyline(hover + PackedVector2Array([hover[0]]), Color("71d6b7") if valid else Color("ef5a54"), 2.0, true)

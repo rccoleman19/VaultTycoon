@@ -140,12 +140,10 @@ func _build_coverage_signature(buildings: Array[VaultBuilding]) -> String:
 func _draw() -> void:
 	if map_grid == null or not is_instance_valid(map_grid):
 		return
-	var tile_size := float(MapGrid.TILE_SIZE)
 	for cell: Vector2i in _floor_cells:
-		var rect := Rect2(Vector2(cell * MapGrid.TILE_SIZE), Vector2.ONE * tile_size)
 		if not is_cell_lit(cell):
-			draw_rect(rect, DARKNESS_COLOR)
+			draw_colored_polygon(map_grid.hex_polygon(cell), DARKNESS_COLOR)
 		elif _coverage_overlay_visible:
-			var inset := rect.grow(-1.5)
-			draw_rect(inset, COVERAGE_FILL_COLOR)
-			draw_rect(inset, COVERAGE_EDGE_COLOR, false, 1.0)
+			var inset := map_grid.hex_polygon(cell, 1.5)
+			draw_colored_polygon(inset, COVERAGE_FILL_COLOR)
+			draw_polyline(inset + PackedVector2Array([inset[0]]), COVERAGE_EDGE_COLOR, 1.0, true)

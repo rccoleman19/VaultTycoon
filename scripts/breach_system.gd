@@ -328,7 +328,7 @@ func _process(_delta: float) -> void:
 
 func _draw() -> void:
 	var tile_size := float(MapGrid.TILE_SIZE)
-	var center := Vector2(HATCH_CELL * MapGrid.TILE_SIZE) + Vector2.ONE * tile_size * 0.5
+	var center := MapGrid.offset_cell_to_world(HATCH_CELL)
 	var hatch_rect := Rect2(center - Vector2.ONE * tile_size * 0.38, Vector2.ONE * tile_size * 0.76)
 	var marker_color := Color("637b85")
 	var phase_text := "HATCH"

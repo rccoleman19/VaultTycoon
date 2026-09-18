@@ -46,6 +46,7 @@ var forced_order: Dictionary = {}
 var _path: Array[Vector2i] = []
 var _path_index := 0
 var _path_destination := Vector2i(-999, -999)
+var _occupancy_cell := Vector2i(-999, -999)
 var _recreation_effect_was_running := false
 
 
@@ -56,6 +57,7 @@ func configure(new_id: int, new_name: String, spawn_cell: Vector2i, map_grid: Ma
 	drafted = false
 	manual_destination = NO_MANUAL_DESTINATION
 	clear_forced_order()
+	_occupancy_cell = spawn_cell
 	position = map_grid.cell_to_world(spawn_cell)
 	queue_redraw()
 
@@ -171,7 +173,15 @@ static func is_serialized_manual_order_data_valid(data: Variant) -> bool:
 
 
 func get_cell(map_grid: MapGrid) -> Vector2i:
-	return map_grid.world_to_cell(position)
+	# Discrete occupancy stays on walkable hexes while lerping between centers.
+	# Resync only for teleports/loads (farther than one hex step from occupancy).
+	var sampled := map_grid.snap_to_walkable(position, _occupancy_cell)
+	if map_grid.is_walkable(_occupancy_cell):
+		var occ_center := map_grid.cell_to_world(_occupancy_cell)
+		if position.distance_squared_to(occ_center) <= float(MapGrid.TILE_SIZE * MapGrid.TILE_SIZE):
+			return _occupancy_cell
+	_occupancy_cell = sampled
+	return _occupancy_cell
 
 
 func advance_needs(
@@ -213,6 +223,7 @@ func get_work_multiplier() -> float:
 func move_to(target_cell: Vector2i, map_grid: MapGrid, delta_seconds: float) -> bool:
 	if get_cell(map_grid) == target_cell and position.distance_to(map_grid.cell_to_world(target_cell)) < 1.0:
 		position = map_grid.cell_to_world(target_cell)
+		_occupancy_cell = target_cell
 		return true
 	if target_cell != _path_destination or _path.is_empty():
 		_path_destination = target_cell
@@ -221,11 +232,14 @@ func move_to(target_cell: Vector2i, map_grid: MapGrid, delta_seconds: float) -> 
 	if _path.is_empty():
 		return false
 	if _path_index >= _path.size():
+		_occupancy_cell = target_cell
 		return true
-	var target_position := map_grid.cell_to_world(_path[_path_index])
+	var step_cell := _path[_path_index]
+	var target_position := map_grid.cell_to_world(step_cell)
 	position = position.move_toward(target_position, MOVE_SPEED * delta_seconds)
-	if position.distance_to(target_position) < 0.5:
+	if position.distance_to(target_position) < 0.65:
 		position = target_position
+		_occupancy_cell = step_cell
 		_path_index += 1
 	return _path_index >= _path.size()
 
@@ -362,6 +376,7 @@ func deserialize(data: Dictionary) -> void:
 	_apply_starting_work_priorities()
 	var saved_position: Array = data.get("position", [0.0, 0.0])
 	position = Vector2(float(saved_position[0]), float(saved_position[1]))
+	_occupancy_cell = Vector2i(-999, -999)
 	needs.deserialize(data.get("needs", {}))
 	alive = bool(data.get("alive", true))
 	var saved_work: Variant = data.get("work_allowed", {})
