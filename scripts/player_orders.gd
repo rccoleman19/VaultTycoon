@@ -40,7 +40,11 @@ var need_labels: Dictionary = {}
 var need_bars: Dictionary = {}
 var work_buttons: Dictionary = {}
 var command_buttons: Dictionary = {}
-var command_grid: GridContainer
+var bottom_panel: PanelContainer
+var architect_panel: Control
+var architect_tab_buttons: Dictionary = {}
+var architect_category_rows: Dictionary = {}
+var _architect_open_tab := ""
 var tool_status: Label
 var checklist: RichTextLabel
 var briefing_overlay: Control
@@ -346,77 +350,133 @@ func _build_interface() -> void:
 	side.add_child(fixture_controls)
 	_hide_fixture_controls()
 
-	var bottom_panel := PanelContainer.new()
+	bottom_panel = PanelContainer.new()
+	bottom_panel.name = "ArchitectRail"
 	bottom_panel.set_anchor(SIDE_RIGHT, 1.0)
 	bottom_panel.set_anchor(SIDE_TOP, 1.0)
 	bottom_panel.set_anchor(SIDE_BOTTOM, 1.0)
 	bottom_panel.offset_left = 8.0
 	bottom_panel.offset_right = -VaultGame.RIGHT_PANEL_WIDTH - 8.0
-	bottom_panel.offset_top = -126.0
+	bottom_panel.offset_top = -72.0
 	bottom_panel.offset_bottom = -8.0
 	bottom_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	bottom_panel.add_theme_stylebox_override("panel", _panel_style(Color("121b21"), Color("45616a")))
 	root.add_child(bottom_panel)
 	var bottom_content := VBoxContainer.new()
-	bottom_content.add_theme_constant_override("separation", 3)
+	bottom_content.add_theme_constant_override("separation", 4)
 	bottom_panel.add_child(bottom_content)
+	architect_panel = Control.new()
+	architect_panel.name = "ArchitectPanel"
+	architect_panel.visible = false
+	architect_panel.custom_minimum_size = Vector2(0, 40)
+	bottom_content.add_child(architect_panel)
+	var tools := {
+		"select": ["SELECT", "Inspect residents and fixtures; Esc returns here", 76],
+		"dig": ["DIG [E]", "Mark rock for excavation", 68],
+		"cancel": ["CANCEL [X]", "Clear zone cells, orders, and blueprints", 96],
+		"bed": ["BUNK $8", "Rest fixture", 80],
+		"lamp": ["LUMEN $5", "1 power; lights floor within %d tiles" % LightingSystem.LUMEN_RADIUS, 90],
+		"generator": ["CHARGE $18", "+7 power", 104],
+		"grow": ["GROW $12", "3 power; yields raw food for hauling", 90],
+		"kitchen": ["NUTRI $10", "2 power; cooks meals for hauling", 96],
+		"zone": ["ZONE", "Paint drop-offs for salvage, raw food, and meals; CANCEL [X] clears", 76],
+		"stockpile": ["BAY $4", "Fallback destination for salvage and food hauling", 64],
+		"air": ["AIR $14", "Air Recycler: 3 power; restores vault oxygen", 86],
+		"medical": ["MED $8", "Medical Bed: automatic injury recovery, +2 HP/s; no power", 82],
+		"rec": ["REC $8", "Rec Console: 1 power; restores one resident's mood", 82],
+	}
+	var categories := [
+		["orders", "ORDERS", ["select"]],
+		["dig", "DIG", ["dig", "zone", "stockpile"]],
+		["build", "BUILD", ["bed", "lamp", "generator", "grow", "kitchen", "air", "medical", "rec"]],
+		["restrict", "RESTRICT", ["cancel"]],
+		["work", "WORK", []],
+		["menu", "MENU", []],
+	]
+	for category in categories:
+		var row := HBoxContainer.new()
+		row.name = "ArchitectRow_%s" % category[0]
+		row.visible = false
+		row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		row.add_theme_constant_override("separation", 5)
+		architect_panel.add_child(row)
+		architect_category_rows[category[0]] = row
+		for tool_id in category[2]:
+			var definition: Array = tools[tool_id]
+			var button := Button.new()
+			button.text = definition[0]
+			button.tooltip_text = definition[1]
+			button.custom_minimum_size = Vector2(float(definition[2]), 36)
+			button.clip_text = true
+			button.pressed.connect(_on_tool_pressed.bind(tool_id))
+			command_buttons[tool_id] = button
+			row.add_child(button)
+		if category[0] == "work":
+			var priorities_rail_button := Button.new()
+			priorities_rail_button.text = "PRIORITIES [P]"
+			priorities_rail_button.tooltip_text = "RimWorld-style work tab: ranks 1 (highest) to 4, OFF never claims."
+			priorities_rail_button.custom_minimum_size = Vector2(122, 36)
+			priorities_rail_button.pressed.connect(toggle_work_priorities)
+			row.add_child(priorities_rail_button)
+		elif category[0] == "menu":
+			var save_button := Button.new()
+			save_button.text = "SAVE"
+			save_button.tooltip_text = "Save one local wing slot"
+			save_button.custom_minimum_size = Vector2(72, 36)
+			save_button.pressed.connect(func() -> void: game.save_game())
+			row.add_child(save_button)
+			var load_button := Button.new()
+			load_button.text = "LOAD"
+			load_button.tooltip_text = "Load the local wing slot"
+			load_button.custom_minimum_size = Vector2(72, 36)
+			load_button.pressed.connect(func() -> void: game.load_game())
+			row.add_child(load_button)
+			help_button = Button.new()
+			help_button.text = "HELP"
+			help_button.tooltip_text = "Pause behind the live first-shift checklist"
+			help_button.custom_minimum_size = Vector2(72, 36)
+			help_button.pressed.connect(open_help)
+			row.add_child(help_button)
+	var tab_rail := HBoxContainer.new()
+	tab_rail.name = "ArchitectTabs"
+	tab_rail.add_theme_constant_override("separation", 4)
+	bottom_content.add_child(tab_rail)
+	for category in categories:
+		var tab := Button.new()
+		tab.text = category[1]
+		tab.custom_minimum_size = Vector2(88, 32)
+		tab.pressed.connect(_on_architect_tab_pressed.bind(category[0]))
+		tab_rail.add_child(tab)
+		architect_tab_buttons[category[0]] = tab
 	tool_status = Label.new()
 	tool_status.text = "SELECT"
 	tool_status.add_theme_color_override("font_color", Color("efc56b"))
 	bottom_content.add_child(tool_status)
-	command_grid = GridContainer.new()
-	command_grid.name = "CommandGrid"
-	command_grid.columns = 8
-	command_grid.add_theme_constant_override("h_separation", 5)
-	command_grid.add_theme_constant_override("v_separation", 4)
-	bottom_content.add_child(command_grid)
-	var tools := [
-		["select", "SELECT", "Inspect residents and fixtures; Esc returns here", 76],
-		["dig", "DIG [E]", "Mark rock for excavation", 68],
-		["cancel", "CANCEL [X]", "Clear zone cells, orders, and blueprints", 96],
-		["bed", "BUNK $8", "Rest fixture", 80],
-		["lamp", "LUMEN $5", "1 power; lights floor within %d tiles" % LightingSystem.LUMEN_RADIUS, 90],
-		["generator", "CHARGE $18", "+7 power", 104],
-		["grow", "GROW $12", "3 power; yields raw food for hauling", 90],
-		["kitchen", "NUTRI $10", "2 power; cooks meals for hauling", 96],
-		["zone", "ZONE", "Paint drop-offs for salvage, raw food, and meals; CANCEL [X] clears", 76],
-		["stockpile", "BAY $4", "Fallback destination for salvage and food hauling", 64],
-		["air", "AIR $14", "Air Recycler: 3 power; restores vault oxygen", 86],
-		["medical", "MED $8", "Medical Bed: automatic injury recovery, +2 HP/s; no power", 82],
-		["rec", "REC $8", "Rec Console: 1 power; restores one resident's mood", 82],
-	]
-	for definition in tools:
-		var button := Button.new()
-		button.text = definition[1]
-		button.tooltip_text = definition[2]
-		button.custom_minimum_size = Vector2(float(definition[3]), 36)
-		button.clip_text = true
-		button.pressed.connect(_on_tool_pressed.bind(definition[0]))
-		command_buttons[definition[0]] = button
-		command_grid.add_child(button)
-	var save_button := Button.new()
-	save_button.text = "SAVE"
-	save_button.tooltip_text = "Save one local wing slot"
-	save_button.custom_minimum_size = Vector2(56, 36)
-	save_button.pressed.connect(func() -> void: game.save_game())
-	command_grid.add_child(save_button)
-	var load_button := Button.new()
-	load_button.text = "LOAD"
-	load_button.tooltip_text = "Load the local wing slot"
-	load_button.custom_minimum_size = Vector2(56, 36)
-	load_button.pressed.connect(func() -> void: game.load_game())
-	command_grid.add_child(load_button)
-	help_button = Button.new()
-	help_button.text = "HELP"
-	help_button.tooltip_text = "Pause behind the live first-shift checklist"
-	help_button.custom_minimum_size = Vector2(62, 36)
-	help_button.pressed.connect(open_help)
-	command_grid.add_child(help_button)
 
 	_build_work_priorities_board()
 	_build_briefing()
 	_build_breach_warning()
 	_build_outcome()
+
+
+func _on_architect_tab_pressed(tab_id: String) -> void:
+	if _architect_open_tab == tab_id:
+		_set_architect_tab("")
+	else:
+		_set_architect_tab(tab_id)
+
+
+func _set_architect_tab(tab_id: String) -> void:
+	_architect_open_tab = tab_id
+	var open := not tab_id.is_empty()
+	architect_panel.visible = open
+	for key: String in architect_category_rows:
+		var row: Control = architect_category_rows[key]
+		row.visible = open and key == tab_id
+	for key: String in architect_tab_buttons:
+		var tab: Button = architect_tab_buttons[key]
+		tab.modulate = Color("efc56b") if key == tab_id else Color.WHITE
+	bottom_panel.offset_top = -118.0 if open else -72.0
 
 
 func _build_work_priorities_board() -> void:
