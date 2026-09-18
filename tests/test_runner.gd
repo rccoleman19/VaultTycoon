@@ -24,6 +24,7 @@ func _run() -> void:
 	_run_case("manual work priorities arbitrate jobs across the crew", _test_work_priority_claiming)
 	_run_case("work priorities persist and legacy permissions migrate", _test_work_priority_save_compatibility)
 	_run_case("the work-priorities board edits crew without changing tools", _test_work_priorities_board)
+	_run_case("hex map neighbors and pathing use six-way adjacency", _test_hex_map_foundation)
 	_run_case("dig orders complete through the job system", _test_dig_completion)
 	_run_case("blueprints are supplied and constructed", _test_blueprint_build)
 	_run_case("cancel previews and powered checklist match their actions", _test_order_preview_and_checklist)
@@ -367,6 +368,33 @@ func _test_work_priorities_board() -> void:
 	game.residents[3].kill()
 	orders.refresh()
 	_assert_true(orders.get_work_priority_button(4, "cook").disabled, "deceased resident priority cells are disabled")
+	_dispose(game)
+
+
+func _test_hex_map_foundation() -> void:
+	var game := _spawn_game()
+	var map_grid: MapGrid = game.map_grid
+	var interior := map_grid.get_chamber_center()
+	var neighbors := map_grid.get_neighbors(interior)
+	_assert_equal(neighbors.size(), 6, "interior cells have six hex neighbors")
+	var unique := {}
+	for neighbor: Vector2i in neighbors:
+		_assert_true(neighbor != interior, "neighbor is not the origin cell")
+		_assert_true(not unique.has(neighbor), "neighbor list has no duplicates")
+		unique[neighbor] = true
+		_assert_true(map_grid.is_inside(neighbor), "chamber-center neighbors stay on-map")
+	# Adjacent chamber floors must path across hex adjacency.
+	var start := MapGrid.CHAMBER.position + Vector2i(2, 2)
+	var goal := start + Vector2i(1, 0)  # east neighbor in odd-r
+	_assert_true(map_grid.is_walkable(start) and map_grid.is_walkable(goal), "adjacent chamber cells are walkable")
+	var path := map_grid.find_path(start, goal)
+	_assert_true(not path.is_empty(), "path exists across adjacent hexes")
+	_assert_true(path.size() >= 2, "adjacent hex path has at least start and goal")
+	_assert_equal(path[0], start, "path begins at start")
+	_assert_equal(path[path.size() - 1], goal, "path ends at goal")
+	# world/cell round-trip stays on the same hex near the chamber center.
+	var world := map_grid.cell_to_world(interior)
+	_assert_equal(map_grid.world_to_cell(world), interior, "cell_to_world/world_to_cell round-trip")
 	_dispose(game)
 
 
