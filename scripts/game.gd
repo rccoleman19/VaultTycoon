@@ -31,6 +31,7 @@ const BUILD_KIND_BY_TOOL := {
 @onready var breach_system: BreachSystem = $BreachSystem
 @onready var save_load: SaveLoad = $SaveLoad
 @onready var world_camera: Camera2D = $Camera2D
+@onready var map_view_3d: MapView3D = $MapView3D
 @onready var player_orders: PlayerOrders = $PlayerOrders
 
 var buildings: Array[VaultBuilding] = []
@@ -76,11 +77,13 @@ func _ready() -> void:
 	breach_system.breach_opened.connect(_on_breach_opened)
 	breach_system.breach_sealed.connect(_on_breach_sealed)
 	player_orders.setup(self)
+	_enable_3d_play_view()
 	new_game(true)
 
 
 func _process(delta: float) -> void:
 	_update_camera(delta)
+	_sync_3d_play_view(false)
 	status_message_left = maxf(0.0, status_message_left - delta)
 	if not is_simulation_paused():
 		_simulation_accumulator += delta * float(simulation_speed)
@@ -139,6 +142,7 @@ func new_game(show_tutorial := false) -> void:
 	oxygen_system.refresh_rates(residents, buildings, false)
 	world_camera.position = map_grid.cell_to_world(map_grid.get_chamber_center())
 	world_camera.zoom = Vector2.ONE
+	_sync_3d_play_view(true)
 	tutorial_open = show_tutorial
 	user_paused = true
 	status_message = "Wing initialized. Stabilize supplies, oxygen, and the pressure hatch."
@@ -1018,20 +1022,20 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mouse_event.button_index == MOUSE_BUTTON_RIGHT and mouse_event.pressed:
 			var selected_resident := get_resident_by_id(selected_resident_id)
 			if selected_resident != null and selected_resident.alive:
-				issue_selected_resident_context_order(map_grid.world_to_cell(get_global_mouse_position()))
+				issue_selected_resident_context_order(_pick_cell_from_screen())
 				return
 			set_tool("select")
 			return
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT and mouse_event.pressed:
-			issue_order(map_grid.world_to_cell(get_global_mouse_position()))
+			issue_order(_pick_cell_from_screen())
 	if event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
 		if _dragging_camera:
 			world_camera.position -= motion.relative / world_camera.zoom.x
 		elif Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and active_tool in ["dig", "cancel", "zone"]:
 			if motion.position.x < get_viewport_rect().size.x - RIGHT_PANEL_WIDTH:
-				issue_order(map_grid.world_to_cell(get_global_mouse_position()))
-		map_grid.hover_cell = map_grid.world_to_cell(get_global_mouse_position())
+				issue_order(_pick_cell_from_screen())
+		map_grid.hover_cell = _pick_cell_from_screen()
 		map_grid.queue_redraw()
 
 
@@ -1076,12 +1080,36 @@ func _update_camera(delta: float) -> void:
 	world_camera.position.y = clampf(world_camera.position.y, 220.0, MapGrid.HEIGHT * MapGrid.TILE_SIZE - 180.0)
 
 
+
+func _enable_3d_play_view() -> void:
+	# Keep Camera2D as focus/zoom state for saves + tests; 3D camera is the live view.
+	world_camera.enabled = false
+	map_grid.visible = false
+	building_root.visible = false
+	resident_root.visible = false
+	breach_system.visible = false
+	lighting_system.visible = false
+	map_view_3d.setup(map_grid, lighting_system)
+
+
+func _sync_3d_play_view(force_rebuild := false) -> void:
+	if map_view_3d == null:
+		return
+	map_view_3d.rebuild_map(force_rebuild)
+	map_view_3d.apply_camera_focus(world_camera.position, world_camera.zoom.x)
+	map_view_3d.sync_actors(residents, buildings, true)
+
+
+func _pick_cell_from_screen() -> Vector2i:
+	return map_view_3d.pick_cell(get_viewport().get_mouse_position())
+
 func _on_rubble_created(cell: Vector2i, amount: int) -> void:
 	job_system.queue_rubble(cell, amount)
 
 
 func _on_map_topology_changed(_cell: Vector2i) -> void:
 	refresh_lighting()
+	_sync_3d_play_view(true)
 
 
 func _on_raw_food_produced(cell: Vector2i, amount: int) -> void:
