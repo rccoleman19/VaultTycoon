@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3]
+[gd_scene load_steps=13 format=3]
 
 [ext_resource path="res://scripts/game_modal_guard.gd" type="Script" id="1_game"]
 [ext_resource path="res://scripts/map_grid.gd" type="Script" id="2_map"]
@@ -11,6 +11,7 @@
 [ext_resource path="res://scripts/breach_system.gd" type="Script" id="9_breach"]
 [ext_resource path="res://scripts/oxygen_system.gd" type="Script" id="10_oxygen"]
 [ext_resource path="res://scripts/lighting_system.gd" type="Script" id="11_lighting"]
+[ext_resource path="res://scripts/map_view_3d.gd" type="Script" id="12_map3d"]
 
 [node name="Game" type="Node2D"]
 script = ExtResource("1_game")
@@ -49,6 +50,27 @@ script = ExtResource("6_day")
 
 [node name="SaveLoad" type="Node" parent="."]
 script = ExtResource("7_save")
+
+
+[node name="MapView3D" type="Node3D" parent="."]
+script = ExtResource("12_map3d")
+
+[node name="Camera3D" type="Camera3D" parent="MapView3D"]
+transform = Transform3D(1, 0, 0, 0, 0.7071068, 0.7071068, 0, -0.7071068, 0.7071068, 0, 380, 300)
+current = true
+fov = 42.0
+
+[node name="HexRoot" type="Node3D" parent="MapView3D"]
+
+[node name="ActorRoot" type="Node3D" parent="MapView3D"]
+
+[node name="FixtureRoot" type="Node3D" parent="MapView3D"]
+
+[node name="MarkerRoot" type="Node3D" parent="MapView3D"]
+
+[node name="Sun" type="DirectionalLight3D" parent="MapView3D"]
+transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 0, 0)
+light_energy = 0.85
 
 [node name="Camera2D" type="Camera2D" parent="."]
 position = Vector2(480, 360)

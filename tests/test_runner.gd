@@ -90,6 +90,10 @@ func _test_scene_boot_and_initial_state() -> void:
 
 	_assert_true(game.is_inside_tree(), "main scene entered the SceneTree")
 	_assert_true(game.get_node_or_null("MapGrid") != null, "MapGrid exists")
+	_assert_true(game.get_node_or_null("MapView3D") != null, "MapView3D play surface exists")
+	_assert_true(game.get_node_or_null("MapView3D/Camera3D") != null, "Camera3D colony camera exists")
+	var map_view := game.get_node_or_null("MapView3D") as MapView3D
+	_assert_true(map_view != null and map_view.camera_3d != null and map_view.camera_3d.current, "Camera3D is current")
 	_assert_true(game.get_node_or_null("BreachSystem") != null, "fixed pressure-hatch system exists")
 	_assert_true(game.get_node_or_null("OxygenSystem") != null, "global vault oxygen system exists")
 	_assert_true(game.get_node_or_null("JobSystem") != null, "JobSystem exists")
