@@ -8,7 +8,6 @@ extends Node3D
 const ROCK_HEIGHT := 6.0
 const FLOOR_HEIGHT := 0.55
 const DIG_HEIGHT := 5.2
-const HEX_RADIUS_SCALE := 0.92
 const CAMERA_HEIGHT := 380.0
 const CAMERA_BACK := 300.0
 const CAMERA_SIDE := 40.0
@@ -49,6 +48,11 @@ func _ready() -> void:
 		camera_3d.current = true
 
 
+func get_hex_prism_radius() -> float:
+	_ensure_materials()
+	return _shared_hex_mesh.top_radius
+
+
 func setup(grid: MapGrid, lighting: LightingSystem = null) -> void:
 	map_grid = grid
 	lighting_system = lighting
@@ -59,8 +63,8 @@ func setup(grid: MapGrid, lighting: LightingSystem = null) -> void:
 func _ensure_materials() -> void:
 	if _shared_hex_mesh == null:
 		_shared_hex_mesh = CylinderMesh.new()
-		_shared_hex_mesh.top_radius = MapGrid.HEX_SIZE * HEX_RADIUS_SCALE
-		_shared_hex_mesh.bottom_radius = MapGrid.HEX_SIZE * HEX_RADIUS_SCALE
+		_shared_hex_mesh.top_radius = MapGrid.HEX_SIZE
+		_shared_hex_mesh.bottom_radius = MapGrid.HEX_SIZE
 		_shared_hex_mesh.height = 1.0
 		_shared_hex_mesh.radial_segments = 6
 		_shared_hex_mesh.rings = 1

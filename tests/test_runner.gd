@@ -396,6 +396,15 @@ func _test_hex_map_foundation() -> void:
 	_assert_true(path.size() >= 2, "adjacent hex path has at least start and goal")
 	_assert_equal(path[0], start, "path begins at start")
 	_assert_equal(path[path.size() - 1], goal, "path ends at goal")
+	# Pointy-top odd-r: east neighbor centers are flat-to-flat apart (√3 * HEX_SIZE),
+	# matching CylinderMesh radius == HEX_SIZE for seamless shared edges.
+	var east := interior + Vector2i(1, 0)
+	var spacing := map_grid.cell_to_world(interior).distance_to(map_grid.cell_to_world(east))
+	_assert_true(absf(spacing - MapGrid.HEX_SIZE * sqrt(3.0)) < 0.02, "east neighbor spacing matches hex flat-to-flat")
+	var map_view := game.get_node_or_null("MapView3D") as MapView3D
+	_assert_true(map_view != null, "MapView3D present for seam check")
+	map_view.setup(map_grid, game.lighting_system)
+	_assert_true(absf(map_view.get_hex_prism_radius() - MapGrid.HEX_SIZE) < 0.001, "3D hex prism radius equals HEX_SIZE (no gap scale)")
 	# world/cell round-trip stays on the same hex near the chamber center.
 	var world := map_grid.cell_to_world(interior)
 	_assert_equal(map_grid.world_to_cell(world), interior, "cell_to_world/world_to_cell round-trip")
