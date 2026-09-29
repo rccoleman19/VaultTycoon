@@ -405,6 +405,7 @@ func _test_hex_map_foundation() -> void:
 	_assert_true(map_view != null, "MapView3D present for seam check")
 	map_view.setup(map_grid, game.lighting_system)
 	_assert_true(absf(map_view.get_hex_prism_radius() - MapGrid.HEX_SIZE) < 0.001, "3D hex prism radius equals HEX_SIZE (no gap scale)")
+	_assert_equal(map_view.get_hex_mesh_yaw_degrees(), 0.0, "hex mesh yaw stays 0 so vertices sit on the row axis (pointy-top)")
 	# world/cell round-trip stays on the same hex near the chamber center.
 	var world := map_grid.cell_to_world(interior)
 	_assert_equal(map_grid.world_to_cell(world), interior, "cell_to_world/world_to_cell round-trip")

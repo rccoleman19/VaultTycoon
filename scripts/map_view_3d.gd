@@ -11,6 +11,7 @@ const DIG_HEIGHT := 5.2
 const CAMERA_HEIGHT := 380.0
 const CAMERA_BACK := 300.0
 const CAMERA_SIDE := 40.0
+const HEX_MESH_YAW_DEGREES := 0.0
 const COLONIST_RADIUS := 3.2
 const COLONIST_HEIGHT := 8.0
 
@@ -51,6 +52,10 @@ func _ready() -> void:
 func get_hex_prism_radius() -> float:
 	_ensure_materials()
 	return _shared_hex_mesh.top_radius
+
+
+func get_hex_mesh_yaw_degrees() -> float:
+	return HEX_MESH_YAW_DEGREES
 
 
 func setup(grid: MapGrid, lighting: LightingSystem = null) -> void:
@@ -154,8 +159,8 @@ func _make_hex_instance(cell: Vector2i) -> MeshInstance3D:
 			height = maxf(height, DIG_HEIGHT)
 	instance.scale = Vector3(1.0, height, 1.0)
 	instance.position = Vector3(center.x, height * 0.5, center.y)
-	# Pointy-top: 2D verts at 60*i-30; CylinderMesh flats need +30° yaw.
-	instance.rotation_degrees.y = 30.0
+	# CylinderMesh vertices sit on ±Z at yaw 0. World Z is the row axis, so yaw 0 is pointy-top and matches odd-r centers. +30° would turn the mesh flat-top and open interior seams.
+	instance.rotation_degrees.y = HEX_MESH_YAW_DEGREES
 	instance.material_override = mat
 	return instance
 
