@@ -111,18 +111,27 @@ func rebuild_map(force := false) -> void:
 			hex_root.add_child(_make_hex_instance(Vector2i(x, y)))
 
 
+func _dig_bucket(cell: Vector2i) -> int:
+	var progress := float(map_grid.dig_progress.get(cell, 0.0))
+	return floori(clampf(progress / 8.0, 0.0, 1.0) * 8.0)
+
+
 func _map_signature() -> String:
 	var hover := map_grid.hover_cell
-	var dig_bits := map_grid.dig_marks.size()
+	var dig_cells := map_grid.dig_marks.keys()
+	dig_cells.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.y * MapGrid.WIDTH + a.x < b.y * MapGrid.WIDTH + b.x)
+	var dig_bits := PackedStringArray()
+	for cell: Vector2i in dig_cells:
+		dig_bits.append("%d,%d,%d" % [cell.x, cell.y, _dig_bucket(cell)])
 	var zone_bits := map_grid.stockpile_cells.size()
 	var lit_bits := 0
 	if lighting_system != null and is_instance_valid(lighting_system):
 		lit_bits = lighting_system.get_lit_floor_count()
 		if lighting_system.is_coverage_overlay_visible():
 			lit_bits += 100000
-	return "%d:%d:%d:%d:%d:%s:%d" % [
+	return "%d:%s:%d:%d:%d:%s:%d" % [
 		map_grid.topology_revision,
-		dig_bits,
+		";".join(dig_bits),
 		zone_bits,
 		hover.x,
 		hover.y,
@@ -139,7 +148,7 @@ func _make_hex_instance(cell: Vector2i) -> MeshInstance3D:
 	var mat := _mat_floor
 	var is_rock := map_grid.get_tile(cell) == MapGrid.Tile.ROCK
 	if is_rock:
-		height = DIG_HEIGHT if map_grid.dig_marks.has(cell) else ROCK_HEIGHT
+		height = lerpf(DIG_HEIGHT, FLOOR_HEIGHT, _dig_bucket(cell) / 8.0) if map_grid.dig_marks.has(cell) else ROCK_HEIGHT
 		if map_grid.is_border(cell):
 			mat = _mat_rock_border
 		elif map_grid.dig_marks.has(cell):
@@ -155,7 +164,7 @@ func _make_hex_instance(cell: Vector2i) -> MeshInstance3D:
 			mat = _mat_floor
 	if cell == map_grid.hover_cell and map_grid.preview_tool != "select":
 		mat = _mat_hover_ok if map_grid.is_preview_valid(map_grid.preview_tool, cell) else _mat_hover_bad
-		if is_rock:
+		if is_rock and not map_grid.dig_marks.has(cell):
 			height = maxf(height, DIG_HEIGHT)
 	instance.scale = Vector3(1.0, height, 1.0)
 	instance.position = Vector3(center.x, height * 0.5, center.y)
