@@ -30,6 +30,7 @@ func _run() -> void:
 	_run_case("3D dig prisms carve in stable progress buckets", _test_dig_progress_prisms)
 	_run_case("3D rubble props follow unfinished haul jobs", _test_rubble_props)
 	_run_case("3D fixture proxies grow with supply and assembly progress", _test_fixture_proxy_progress)
+	_run_case("3D colonist capsules lie down only at their sleeping destination", _test_sleeping_capsule_pose)
 	_run_case("blueprints are supplied and constructed", _test_blueprint_build)
 	_run_case("cancel previews and powered checklist match their actions", _test_order_preview_and_checklist)
 	_run_case("power is allocated by supply and priority", _test_power_allocation)
@@ -857,6 +858,105 @@ func _test_fixture_proxy_progress() -> void:
 		lamp.complete = false
 		sync.call()
 		assert_proxy.call(lamp, 0.875, 1.925, "Lumen at half its five-second build time")
+	_dispose(game)
+
+
+func _test_sleeping_capsule_pose() -> void:
+	var game := _spawn_game()
+	var view := game.get_node("MapView3D") as MapView3D
+	var resident: VaultResident = game.residents[0]
+	var bunk := _add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(23, 15))
+	var bed_center := game.map_grid.cell_to_world(bunk.cell)
+	var sync := func() -> void:
+		view.sync_actors(game.residents, game.buildings, false, game.job_system.jobs)
+	sync.call()
+	var original_proxy := view._resident_proxies.get(resident.resident_id) as MeshInstance3D
+	_assert_true(original_proxy != null, "resident has a capsule proxy")
+	if original_proxy == null:
+		_dispose(game)
+		return
+	var original_mesh := original_proxy.mesh as CapsuleMesh
+	var assert_pose := func(expected_xz: Vector2, expected_y: float, lying: bool, label: String) -> void:
+		sync.call()
+		var proxy := view._resident_proxies.get(resident.resident_id) as MeshInstance3D
+		_assert_true(proxy == original_proxy, "%s retains the same proxy" % label)
+		_assert_true(proxy.position.is_equal_approx(Vector3(expected_xz.x, expected_y, expected_xz.y)), "%s center position" % label)
+		_assert_true(proxy.rotation.is_equal_approx(Vector3(PI / 2, 0, 0) if lying else Vector3.ZERO), "%s rotation" % label)
+		_assert_equal(proxy.scale, Vector3.ONE, "%s does not scale the capsule" % label)
+		_assert_true(proxy.mesh == original_mesh, "%s retains the capsule mesh" % label)
+		_assert_approximately(original_mesh.radius, 2.4, 0.0001, "%s capsule radius" % label)
+		_assert_approximately(original_mesh.height, 13.0, 0.0001, "%s capsule height" % label)
+	resident.needs.rest = 20.0
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	_assert_true(resident.sleeping, "survival handler seeks a bunk for low rest")
+	_assert_equal(resident.state, "Seeking rest", "first tick starts seeking rest")
+	_assert_equal(resident.bed_id, bunk.building_id, "survival handler assigns the completed bunk")
+	assert_pose.call(resident.position, 6.5, false, "seeking rest")
+	var seeking_position := resident.position
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	_assert_equal(resident.state, "Going to bunk", "next tick walks toward the bunk")
+	_assert_true(resident.position != seeking_position, "resident actually walks toward the bunk")
+	assert_pose.call(resident.position, 6.5, false, "walking to bunk")
+
+	var travelling_snapshot := game.create_snapshot()
+	var loaded := _spawn_game()
+	_assert_true(loaded.apply_snapshot(travelling_snapshot), "travelling sleeper snapshot loads")
+	var loaded_resident: VaultResident = loaded.residents[0]
+	var loaded_view := loaded.get_node("MapView3D") as MapView3D
+	_assert_true(loaded_resident.sleeping, "load restores sleeping flag while travelling")
+	_assert_equal(loaded_resident.state, "Sleeping", "load sets Sleeping even while travelling")
+	_assert_true(loaded_resident.position.distance_to(bed_center) > 1.0, "loaded sleeper has not reached the bunk")
+	loaded_view.sync_actors(loaded.residents, loaded.buildings, false, loaded.job_system.jobs)
+	var loaded_proxy := loaded_view._resident_proxies.get(loaded_resident.resident_id) as MeshInstance3D
+	_assert_true(loaded_proxy.position.is_equal_approx(Vector3(loaded_resident.position.x, 6.5, loaded_resident.position.y)), "loaded travelling sleeper stays at resident xz and standing height")
+	_assert_equal(loaded_proxy.rotation, Vector3.ZERO, "distance keeps loaded Sleeping resident upright")
+	_dispose(loaded)
+
+	for _tick in 100:
+		if resident.state == "Sleeping":
+			break
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+	_assert_equal(resident.state, "Sleeping", "arrival changes state to Sleeping through simulation")
+	assert_pose.call(bed_center, 6.85, true, "sleeping on bunk")
+	resident.selected = true
+	sync.call()
+	_assert_true(original_proxy.material_override == view._mat_colonist_selected, "selected sleeper uses selected material")
+	resident.selected = false
+	sync.call()
+	_assert_true(original_proxy.material_override == view._mat_colonist, "deselecting sleeper restores normal material")
+
+	# Invalid assigned fixtures must reset a previously lying proxy to upright.
+	bunk.complete = false
+	assert_pose.call(resident.position, 6.5, false, "unfinished bunk")
+	bunk.complete = true
+	bunk.kind = VaultBuilding.Kind.LAMP
+	assert_pose.call(resident.position, 6.5, false, "non-bed fixture")
+	bunk.kind = VaultBuilding.Kind.BED
+	var assigned_bed_id := resident.bed_id
+	resident.bed_id = game.next_building_id + 100
+	assert_pose.call(resident.position, 6.5, false, "missing building id")
+	resident.bed_id = assigned_bed_id
+	assert_pose.call(bed_center, 6.85, true, "valid bunk restored")
+	resident.needs.rest = 86.0
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	_assert_false(resident.sleeping, "rest at 86 wakes bunk sleeper through survival handler")
+	assert_pose.call(resident.position, 6.5, false, "awake after bunk rest")
+
+	game.buildings.erase(bunk)
+	bunk.free()
+	resident.needs.rest = 0.0
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	_assert_true(resident.sleeping, "zero rest without a bunk triggers floor sleep")
+	_assert_equal(resident.bed_id, -1, "floor sleeper has no assigned bunk")
+	_assert_equal(resident.state, "Collapsed on floor", "initial floor sleep has collapse state")
+	assert_pose.call(resident.position, 2.4, true, "collapsed on floor")
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	_assert_equal(resident.state, "Sleeping", "floor sleep progresses beyond collapse state")
+	assert_pose.call(resident.position, 2.4, true, "sleeping on floor")
+	resident.needs.rest = 44.0
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	_assert_false(resident.sleeping, "rest at 44 wakes floor sleeper through survival handler")
+	assert_pose.call(resident.position, 6.5, false, "awake after floor rest")
 	_dispose(game)
 
 

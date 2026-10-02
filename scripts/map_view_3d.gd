@@ -257,7 +257,20 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 			_resident_proxies[resident.resident_id] = proxy
 		proxy.visible = true
 		var pos := resident.position
+		proxy.rotation = Vector3.ZERO
 		proxy.position = Vector3(pos.x, COLONIST_HEIGHT * 0.5, pos.y)
+		if resident.sleeping and resident.bed_id < 0:
+			proxy.rotation = Vector3(PI / 2, 0, 0)
+			proxy.position.y = COLONIST_RADIUS
+		elif resident.sleeping and resident.state == "Sleeping":
+			for building: VaultBuilding in buildings:
+				if building.building_id != resident.bed_id or not building.complete or building.kind != VaultBuilding.Kind.BED:
+					continue
+				var bed_center := MapGrid.offset_cell_to_world(building.cell)
+				if pos.distance_to(bed_center) <= 1.0:
+					proxy.rotation = Vector3(PI / 2, 0, 0)
+					proxy.position = Vector3(bed_center.x, 2.2 + 4.5 / 2 + COLONIST_RADIUS, bed_center.y)
+				break
 		if not resident.alive:
 			proxy.material_override = _mat_colonist_dead
 		elif resident.selected:
