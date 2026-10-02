@@ -28,6 +28,7 @@ func _run() -> void:
 	_run_case("hex map neighbors and pathing use six-way adjacency", _test_hex_map_foundation)
 	_run_case("dig orders complete through the job system", _test_dig_completion)
 	_run_case("3D dig prisms carve in stable progress buckets", _test_dig_progress_prisms)
+	_run_case("3D rubble props follow unfinished haul jobs", _test_rubble_props)
 	_run_case("blueprints are supplied and constructed", _test_blueprint_build)
 	_run_case("cancel previews and powered checklist match their actions", _test_order_preview_and_checklist)
 	_run_case("power is allocated by supply and priority", _test_power_allocation)
@@ -636,6 +637,140 @@ func _test_dig_progress_prisms() -> void:
 	_assert_equal(rubble_events.size(), 1, "further work does not emit rubble again")
 	view.rebuild_map(false)
 	assert_prism.call(target, 0.55, "completed floor")
+	_dispose(game)
+
+
+func _test_rubble_props() -> void:
+	var game := _spawn_game()
+	var view := game.get_node("MapView3D") as MapView3D
+	var target := MapGrid.CHAMBER.position + Vector2i.LEFT
+	var center := MapGrid.offset_cell_to_world(target)
+	var source_position := Vector3(center.x, 1.0, center.y)
+	var initial_salvage: int = game.food_system.salvage
+	var sync := func() -> void:
+		view.sync_actors(game.residents, game.buildings, false, game.job_system.jobs)
+	var chunks := func() -> Array[MeshInstance3D]:
+		var found: Array[MeshInstance3D] = []
+		var prop_root := view.get_node_or_null("PropRoot")
+		if prop_root != null:
+			for child in prop_root.get_children():
+				if child is MeshInstance3D:
+					found.append(child)
+		return found
+	var assert_chunk := func(expected: Vector3, label: String) -> MeshInstance3D:
+		var found: Array[MeshInstance3D] = chunks.call()
+		_assert_equal(found.size(), 1, "%s has exactly one chunk" % label)
+		if found.size() != 1:
+			return null
+		var chunk := found[0]
+		_assert_true(chunk.position.distance_to(expected) < 0.05, "%s chunk position" % label)
+		_assert_true(chunk.get_parent() == view.get_node("PropRoot"), "%s chunk is under PropRoot" % label)
+		_assert_true(chunk.mesh is BoxMesh, "%s chunk uses a BoxMesh" % label)
+		if chunk.mesh is BoxMesh:
+			_assert_equal((chunk.mesh as BoxMesh).size, Vector3(3.2, 2.0, 3.2), "%s chunk size" % label)
+		var material := chunk.material_override as StandardMaterial3D
+		_assert_true(material != null, "%s chunk has a map material" % label)
+		if material != null:
+			_assert_equal(material.albedo_color, Color("bd8f52"), "%s chunk color" % label)
+			_assert_equal(material.shading_mode, BaseMaterial3D.SHADING_MODE_UNSHADED, "%s chunk is unshaded" % label)
+		return chunk
+	_assert_true(game.map_grid.queue_dig(target), "rock beside chamber accepts excavation")
+	game.job_system.queue_dig(target)
+	_assert_false(game.map_grid.apply_dig_work(target, 4.0), "four dig work remains partial")
+	view.rebuild_map(false)
+	for child in view.hex_root.get_children():
+		if child is MeshInstance3D and not child.is_queued_for_deletion():
+			if Vector2(child.position.x, child.position.z).distance_to(center) < 0.05:
+				_assert_approximately(child.scale.y, 2.875, 0.001, "four-work dig prism retains its height")
+	_assert_true(game.map_grid.apply_dig_work(target, 4.0), "eight dig work completes excavation")
+	_assert_equal(game.map_grid.get_tile(target), MapGrid.Tile.FLOOR, "completed excavation is floor")
+	_assert_equal(game.food_system.salvage, initial_salvage, "excavation does not deposit salvage")
+	var job: Dictionary = game.job_system._find_matching_job(JobSystem.JobType.HAUL_RUBBLE, target, -1)
+	_assert_false(job.is_empty(), "real rubble signal queued a haul")
+	if job.is_empty():
+		_dispose(game)
+		return
+	_assert_equal(int(job.amount), 3, "rubble haul contains three salvage")
+	sync.call()
+	var chunk: MeshInstance3D = assert_chunk.call(source_position, "unclaimed haul")
+	var carrier: VaultResident = game.residents[0]
+	var assign := func(phase: String, amount: int) -> void:
+		job.reserved_by = carrier.resident_id
+		carrier.current_job_id = int(job.id)
+		carrier.current_job_type = int(job.type)
+		carrier.job_phase = phase
+		carrier.carrying = amount
+	carrier.position = game.map_grid.cell_to_world(game.map_grid.get_chamber_center())
+	assign.call("target", 0)
+	sync.call()
+	_assert_true(assert_chunk.call(source_position, "approaching haul") == chunk, "approach retains the same chunk")
+	assign.call("deposit", int(job.amount))
+	sync.call()
+	var carried_position := Vector3(carrier.position.x + 4.6, 1.0, carrier.position.y)
+	_assert_true(assert_chunk.call(carried_position, "carried haul") == chunk, "pickup moves the same chunk")
+	_assert_true(chunk == null or chunk.position.distance_to(source_position) > 0.05, "no chunk remains on source while carried")
+	_assert_equal(game.food_system.salvage, initial_salvage, "visual pickup adds no salvage")
+	carrier.alive = false
+	sync.call()
+	_assert_true(assert_chunk.call(source_position, "dead carrier") == chunk, "dead carrier leaves the chunk on source")
+	carrier.alive = true
+	game.job_system.release_resident(carrier)
+	_assert_equal(carrier.carrying, 0, "release clears rubble carrying")
+	_assert_false(bool(job.done), "release leaves haul unfinished")
+	sync.call()
+	_assert_true(assert_chunk.call(source_position, "released haul") == chunk, "release returns the same single chunk")
+	assign.call("deposit", int(job.amount))
+	sync.call()
+	carrier.position = game.map_grid.cell_to_world(game.job_system._stockpile_cell())
+	carrier.clear_path()
+	game.job_system._process_job(carrier, 0.1)
+	_assert_true(bool(job.done), "real deposit finishes haul")
+	_assert_equal(game.food_system.salvage, initial_salvage + 3, "real deposit adds exactly three salvage")
+	sync.call()
+	_assert_equal(chunks.call().size(), 0, "finished job removes chunk")
+	sync.call()
+	_assert_equal(chunks.call().size(), 0, "repeated sync creates no finished chunk")
+	_assert_equal(game.food_system.salvage, initial_salvage + 3, "repeated sync adds no salvage")
+
+	var second := target + Vector2i.DOWN
+	_assert_true(game.map_grid.queue_dig(second), "second chamber rock accepts excavation")
+	game.job_system.queue_dig(second)
+	_assert_true(game.map_grid.apply_dig_work(second, 8.0), "second excavation emits another real haul")
+	sync.call()
+	var second_center := MapGrid.offset_cell_to_world(second)
+	assert_chunk.call(Vector3(second_center.x, 1.0, second_center.y), "second unfinished haul")
+	var save_path := "user://headless_rubble_props.json"
+	_remove_test_save(save_path)
+	_assert_true(game.save_game(false, save_path), "unfinished rubble haul saves")
+	_assert_true(game.load_game(save_path), "unfinished rubble haul loads")
+	sync.call()
+	assert_chunk.call(Vector3(second_center.x, 1.0, second_center.y), "restored haul without orphans")
+	var restored := game.job_system._find_matching_job(JobSystem.JobType.HAUL_RUBBLE, second, -1)
+	_assert_false(restored.is_empty(), "loaded jobs contain unfinished rubble haul")
+	game.new_game()
+	sync.call()
+	_assert_equal(chunks.call().size(), 0, "new game clears all rubble props")
+	carrier = game.residents[0]
+	for type: int in [JobSystem.JobType.HAUL_RAW_FOOD, JobSystem.JobType.HAUL_MEAL, JobSystem.JobType.SUPPLY_BUILD, JobSystem.JobType.SUPPLY_BREACH]:
+		game.job_system._add_job(type, game.map_grid.get_chamber_center(), -1, 3)
+		var other: Dictionary = game.job_system.jobs.back()
+		other.reserved_by = carrier.resident_id
+		carrier.current_job_id = int(other.id)
+		carrier.current_job_type = type
+		carrier.job_phase = "deposit"
+		carrier.carrying = 3
+		carrier.carrying_kind = "raw_food" if type == JobSystem.JobType.HAUL_RAW_FOOD else ("meal" if type == JobSystem.JobType.HAUL_MEAL else "salvage")
+		sync.call()
+		_assert_equal(chunks.call().size(), 0, "non-rubble cargo type %d creates no chunk" % type)
+	_assert_equal(view._resident_proxies.size(), game.residents.size(), "every resident still has one proxy")
+	for resident: VaultResident in game.residents:
+		var proxy := view._resident_proxies.get(resident.resident_id) as MeshInstance3D
+		_assert_true(proxy != null and proxy.mesh is CapsuleMesh, "resident stays one capsule")
+		if proxy != null and proxy.mesh is CapsuleMesh:
+			_assert_approximately((proxy.mesh as CapsuleMesh).radius, 2.4, 0.001, "capsule radius stays 2.4")
+			_assert_approximately((proxy.mesh as CapsuleMesh).height, 13.0, 0.001, "capsule height stays 13")
+			_assert_equal(proxy.get_child_count(), 0, "capsule has no child meshes")
+	_remove_test_save(save_path)
 	_dispose(game)
 
 
