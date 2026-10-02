@@ -27,6 +27,7 @@ func _run() -> void:
 	_run_case("the work-priorities board edits crew without changing tools", _test_work_priorities_board)
 	_run_case("hex map neighbors and pathing use six-way adjacency", _test_hex_map_foundation)
 	_run_case("dig orders complete through the job system", _test_dig_completion)
+	_run_case("3D dig prisms carve in stable progress buckets", _test_dig_progress_prisms)
 	_run_case("blueprints are supplied and constructed", _test_blueprint_build)
 	_run_case("cancel previews and powered checklist match their actions", _test_order_preview_and_checklist)
 	_run_case("power is allocated by supply and priority", _test_power_allocation)
@@ -538,6 +539,103 @@ func _test_hex_map_foundation() -> void:
 	# world/cell round-trip stays on the same hex near the chamber center.
 	var world := map_grid.cell_to_world(interior)
 	_assert_equal(map_grid.world_to_cell(world), interior, "cell_to_world/world_to_cell round-trip")
+	_dispose(game)
+
+
+func _test_dig_progress_prisms() -> void:
+	var game := _spawn_game()
+	var map_grid: MapGrid = game.map_grid
+	var view := game.get_node("MapView3D") as MapView3D
+	var target := MapGrid.CHAMBER.position + Vector2i.LEFT
+	var second := target + Vector2i.DOWN
+	var unmarked := target + Vector2i.LEFT
+	var floor_cell := map_grid.get_chamber_center()
+	# Rebuilds queue old children for deletion; only inspect the live prism.
+	var find_prism := func(cell: Vector2i) -> MeshInstance3D:
+		var center := map_grid.cell_to_world(cell)
+		for child in view.hex_root.get_children():
+			if child is MeshInstance3D and not child.is_queued_for_deletion():
+				if Vector2(child.position.x, child.position.z).distance_to(center) < 0.05:
+					return child as MeshInstance3D
+		return null
+	var assert_prism := func(cell: Vector2i, height: float, label: String) -> void:
+		var prism: MeshInstance3D = find_prism.call(cell)
+		_assert_true(prism != null, "%s has a live prism" % label)
+		if prism != null:
+			_assert_approximately(prism.scale.y, height, 0.001, "%s height" % label)
+			_assert_approximately(prism.position.y, height * 0.5, 0.001, "%s stays grounded" % label)
+	var rubble_events: Array = []
+	map_grid.rubble_created.connect(func(cell: Vector2i, amount: int) -> void: rubble_events.append([cell, amount]))
+
+	_assert_true(map_grid.queue_dig(target), "rock beside chamber accepts a mark")
+	_assert_true(map_grid.queue_dig(second), "second rock beside chamber accepts an independent mark")
+	view.rebuild_map(false)
+	assert_prism.call(target, 5.2, "zero work")
+	_assert_false(map_grid.is_walkable(target), "zero-work mark stays unwalkable")
+	assert_prism.call(unmarked, 6.0, "unmarked neighbor rock")
+	assert_prism.call(floor_cell, 0.55, "ordinary floor")
+	_assert_false(map_grid.apply_dig_work(target, 4.0), "four work does not complete excavation")
+	_assert_false(map_grid.apply_dig_work(second, 2.2), "second mark remains partial")
+	view.rebuild_map(false)
+	assert_prism.call(target, 2.875, "four work")
+	_assert_false(map_grid.is_walkable(target), "four-work mark stays unwalkable")
+	var four_prism: MeshInstance3D = find_prism.call(target)
+	var second_prism: MeshInstance3D = find_prism.call(second)
+	_assert_true(four_prism.material_override == view._mat_dig, "partial rock keeps dig orange")
+	map_grid.dig_progress[target] = 4.1
+	map_grid.dig_progress[second] = 2.3
+	view.rebuild_map(false)
+	_assert_true(find_prism.call(target) == four_prism, "raw progress within a bucket keeps the same instance")
+	_assert_false(four_prism.is_queued_for_deletion(), "same-bucket instance is not queued for deletion")
+	_assert_true(find_prism.call(second) == second_prism, "second same-bucket instance is retained")
+	assert_prism.call(target, 2.875, "four-point-one work")
+	# Reverse dictionary insertion order without changing coordinates or buckets.
+	map_grid.dig_marks.erase(target)
+	map_grid.dig_marks[target] = true
+	view.rebuild_map(false)
+	_assert_true(find_prism.call(target) == four_prism, "dictionary order does not flap the signature")
+	_assert_false(four_prism.is_queued_for_deletion(), "dictionary reordering does not rebuild")
+	map_grid.dig_progress[target] = 5.0
+	view.rebuild_map(false)
+	_assert_true(four_prism.is_queued_for_deletion() or find_prism.call(target) != four_prism, "bucket change replaces the old prism")
+	var five_height := lerpf(5.2, 0.55, 5.0 / 8.0)
+	assert_prism.call(target, five_height, "five work")
+	assert_prism.call(second, lerpf(5.2, 0.55, 2.0 / 8.0), "second mark keeps its own bucket")
+
+	map_grid.hover_cell = target
+	map_grid.preview_tool = "dig"
+	view.rebuild_map(false)
+	assert_prism.call(target, five_height, "Dig hover on partial rock")
+	_assert_true(map_grid.cancel_dig(target), "partial dig can be canceled")
+	view.rebuild_map(false)
+	assert_prism.call(target, 6.0, "canceled mark is unmarked rock")
+	map_grid.hover_cell = Vector2i(-1, -1)
+	map_grid.preview_tool = "select"
+	_assert_true(map_grid.queue_dig(target), "canceled chamber neighbor can be marked again")
+	var saved := map_grid.serialize()
+	for entry: Array in saved.dig_marks:
+		if Vector2i(int(entry[0]), int(entry[1])) == target:
+			entry[2] = 4.0
+	_assert_true(map_grid.deserialize(saved), "partial progress loads into the same grid")
+	_assert_true(map_grid.is_diggable(target) and map_grid.has_walkable_neighbor(target), "loaded mark remains diggable and connected")
+	_assert_true(map_grid.dig_marks.has(target), "deserialize retains the connected mark")
+	_assert_approximately(float(map_grid.dig_progress.get(target, -1.0)), 4.0, 0.001, "loaded mark has four work")
+	view.rebuild_map(true)
+	assert_prism.call(target, 2.875, "loaded four work")
+	_assert_false(map_grid.apply_dig_work(target, 3.999), "just under eight work does not complete")
+	view.rebuild_map(false)
+	assert_prism.call(target, lerpf(5.2, 0.55, 7.0 / 8.0), "seven-point-nine-nine-nine work uses bucket seven")
+	_assert_false(map_grid.is_walkable(target), "just under eight work stays unwalkable")
+	_assert_equal(rubble_events.size(), 0, "partial work creates no rubble")
+	_assert_true(map_grid.apply_dig_work(target, 0.01), "crossing eight work completes excavation")
+	_assert_equal(map_grid.get_tile(target), MapGrid.Tile.FLOOR, "completed rock becomes floor")
+	_assert_true(map_grid.is_walkable(target), "completed floor becomes walkable")
+	_assert_false(map_grid.dig_marks.has(target), "completion removes the dig mark")
+	_assert_equal(rubble_events, [[target, 3]], "completion emits rubble once with amount three")
+	_assert_false(map_grid.apply_dig_work(target, 1.0), "completed floor rejects further dig work")
+	_assert_equal(rubble_events.size(), 1, "further work does not emit rubble again")
+	view.rebuild_map(false)
+	assert_prism.call(target, 0.55, "completed floor")
 	_dispose(game)
 
 
