@@ -11,6 +11,8 @@ func _run() -> void:
 	_run_case("brownout shedding removes lumen coverage until power recovers", _test_brownout_and_recovery)
 	_run_case("lighting is derived across active and legacy snapshots", _test_derived_save_and_legacy_state)
 	_run_case("coverage display control does not mutate the simulation", _test_display_only_control)
+	_run_case("live 3D coverage materials preserve previews and geometry", _test_live_coverage_materials)
+	_run_case("live amber coverage follows completed powered Lumens", _test_live_lumen_materials)
 	await _run_layout_case()
 
 	print("")
@@ -383,6 +385,182 @@ func _test_display_only_control() -> void:
 	_assert_true(game.apply_snapshot(snapshot), "display-reset fixture snapshot loads")
 	_assert_false(game.lighting_system.is_coverage_overlay_visible(), "applying a snapshot resets transient coverage guides to off")
 	_dispose(game)
+
+
+func _test_live_coverage_materials() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.user_paused = true
+	game.set_tool("select")
+	game.select_resident(game.residents[0].resident_id)
+	game.world_camera.position = Vector2(512.0, 408.0)
+	game.world_camera.zoom = Vector2(1.2, 1.2)
+	var view: MapView3D = game.map_view_3d
+	var lit_cell := Vector2i(27, 19)
+	var zone_cell := Vector2i(26, 19)
+	var dark_cell := Vector2i(28, 20)
+	var dig_cell := MapGrid.CHAMBER.position + Vector2i.LEFT
+	var rock_cell := dig_cell + Vector2i.LEFT
+	_assert_true(game.map_grid.paint_stockpile(zone_cell), "material fixture paints a lit stockpile")
+	_assert_true(game.map_grid.queue_dig(dig_cell), "material fixture queues a dig prism")
+	game.map_grid.apply_dig_work(dig_cell, 3.0)
+	game._sync_3d_play_view()
+	_assert_equal(_live_hex(view, lit_cell).material_override, view._mat_floor, "overlay off uses normal lit floor")
+	_assert_equal(_live_hex(view, zone_cell).material_override, view._mat_zone, "overlay off uses stockpile cyan")
+	_assert_equal(_live_hex(view, dark_cell).material_override, view._mat_floor_dark, "overlay off keeps today's dark floor")
+	var geometry_before := {}
+	for cell: Vector2i in [lit_cell, zone_cell, dark_cell, rock_cell, dig_cell]:
+		geometry_before[cell] = _live_hex(view, cell).transform
+	var rock_material := _live_hex(view, rock_cell).material_override
+	var dig_material := _live_hex(view, dig_cell).material_override
+	var hex_mesh := _live_hex(view, lit_cell).mesh as CylinderMesh
+	var hatch := view._hatch_proxy
+	var hatch_mesh := hatch.mesh as CylinderMesh
+	var hatch_transform := hatch.transform
+	var hatch_color := view._mat_hatch.albedo_color
+	var camera_before := game.world_camera.transform
+	var zoom_before := game.world_camera.zoom
+	var camera_3d_before := view.camera_3d.transform
+	var fov_before := view.camera_3d.fov
+	var selection_before := game.selected_resident_id
+	var building_selection_before := game.selected_building_id
+	var salvage_before := game.food_system.salvage
+	var supply_before := game.power_grid.supply
+	var demand_before := game.power_grid.demand
+	var coverage_before := _lit_floor_cells(game)
+
+	var lighting_event := InputEventKey.new()
+	lighting_event.physical_keycode = KEY_L
+	lighting_event.pressed = true
+	game._unhandled_input(lighting_event)
+	game._sync_3d_play_view()
+	_assert_true(game.lighting_system.is_coverage_overlay_visible(), "L input turns the live Light Map on")
+	var amber := _live_hex(view, lit_cell).material_override as StandardMaterial3D
+	_assert_equal(amber.albedo_color, Color(1.0, 0.78, 0.28, 1.0), "lit floor uses the exact amber color")
+	_assert_equal(amber.transparency, BaseMaterial3D.TRANSPARENCY_DISABLED, "amber transparency stays disabled")
+	_assert_equal(amber.albedo_color.a, 1.0, "amber alpha is opaque")
+	_assert_equal(amber.shading_mode, BaseMaterial3D.SHADING_MODE_UNSHADED, "amber is unshaded")
+	_assert_true(amber != dig_material, "coverage amber is a separate material from dig orange")
+	_assert_true(amber.albedo_color != Color(0.85, 0.55, 0.18), "coverage does not reuse dig orange")
+	_assert_equal(_live_hex(view, zone_cell).material_override, amber, "lit stockpile shares amber instead of cyan")
+	_assert_equal(_live_hex(view, dark_cell).material_override, view._mat_floor_dark, "Light Map uses existing dark material on unlit walkable floor")
+	_assert_equal(view._mat_floor_dark.albedo_color, Color(0.08, 0.11, 0.14), "dark floor keeps its exact color")
+	_assert_equal(_amber_floor_cells(game), coverage_before, "every lit walkable floor shares amber")
+
+	# The Light Map button calls this same public control while paused.
+	game.toggle_lighting_overlay()
+	game._sync_3d_play_view()
+	_assert_false(game.lighting_system.is_coverage_overlay_visible(), "Light Map button control turns coverage off")
+	_assert_equal(_live_hex(view, lit_cell).material_override, view._mat_floor, "button control restores normal floor")
+	_assert_equal(_live_hex(view, zone_cell).material_override, view._mat_zone, "button control restores stockpile cyan")
+	_assert_equal(_live_hex(view, dark_cell).material_override, view._mat_floor_dark, "button control restores today's dark floor")
+	_assert_equal(view._mat_zone.albedo_color, Color(0.28, 0.62, 0.70), "zone cyan stays unchanged")
+	game.toggle_lighting_overlay()
+	game._process(0.0)
+	_assert_equal(_live_hex(view, lit_cell).material_override, amber, "paused process repaints amber on the next sync")
+	game._sync_3d_play_view()
+
+	_assert_equal(game.food_system.salvage, salvage_before, "overlay toggles preserve salvage")
+	_assert_equal(game.power_grid.supply, supply_before, "overlay toggles preserve power supply")
+	_assert_equal(game.power_grid.demand, demand_before, "overlay toggles preserve power demand")
+	_assert_equal(_lit_floor_cells(game), coverage_before, "overlay toggles preserve every coverage member")
+	_assert_equal(game.world_camera.transform, camera_before, "overlay toggles preserve world camera")
+	_assert_equal(game.world_camera.zoom, zoom_before, "overlay toggles preserve world zoom")
+	_assert_equal(view.camera_3d.transform, camera_3d_before, "overlay toggles preserve 3D camera")
+	_assert_equal(view.camera_3d.fov, fov_before, "overlay toggles preserve camera FOV")
+	_assert_equal(game.selected_resident_id, selection_before, "overlay toggles preserve resident selection")
+	_assert_equal(game.selected_building_id, building_selection_before, "overlay toggles preserve building selection")
+	_assert_true(game.is_simulation_paused(), "overlay toggles never unpause the shift")
+	for cell: Vector2i in geometry_before:
+		var prism := _live_hex(view, cell)
+		_assert_equal(prism.transform, geometry_before[cell], "Light Map preserves prism position, scale, and yaw at %s" % cell)
+		_assert_equal(prism.mesh, hex_mesh, "Light Map retains the shared hex mesh at %s" % cell)
+		_assert_equal(prism.rotation_degrees.y, 0.0, "hex yaw remains zero at %s" % cell)
+	_assert_approximately(hex_mesh.top_radius, MapGrid.HEX_SIZE, 0.001, "hex top radius remains HEX_SIZE")
+	_assert_approximately(hex_mesh.bottom_radius, MapGrid.HEX_SIZE, 0.001, "hex bottom radius remains HEX_SIZE")
+	_assert_equal(_live_hex(view, rock_cell).material_override, rock_material, "rock keeps its material")
+	_assert_equal(_live_hex(view, dig_cell).material_override, dig_material, "dig prism keeps its orange material")
+	_assert_equal(view._mat_dig.albedo_color, Color(0.85, 0.55, 0.18), "dig orange stays unchanged")
+	_assert_equal(view._hatch_proxy, hatch, "Light Map retains the hatch cylinder instance")
+	_assert_equal(hatch.transform, hatch_transform, "hatch cylinder stays put")
+	_assert_equal(hatch.mesh, hatch_mesh, "hatch cylinder mesh stays unchanged")
+	_assert_equal(hatch_mesh.top_radius, 5.0, "hatch cylinder radius stays unchanged")
+	_assert_equal(hatch_mesh.height, 3.0, "hatch cylinder height stays unchanged")
+	_assert_equal(view._mat_hatch.albedo_color, hatch_color, "hatch color stays unchanged")
+
+	game.map_grid.hover_cell = lit_cell
+	game.map_grid.preview_tool = "zone"
+	game._sync_3d_play_view()
+	_assert_true(game.map_grid.is_preview_valid("zone", lit_cell), "valid preview fixture targets empty lit floor")
+	_assert_equal(_live_hex(view, lit_cell).material_override, view._mat_hover_ok, "valid placement hover wins over amber")
+	game.map_grid.hover_cell = zone_cell
+	game._sync_3d_play_view()
+	_assert_false(game.map_grid.is_preview_valid("zone", zone_cell), "invalid preview fixture targets existing stockpile")
+	_assert_equal(_live_hex(view, zone_cell).material_override, view._mat_hover_bad, "invalid placement hover wins over stockpile amber")
+	game.map_grid.hover_cell = dark_cell
+	game._sync_3d_play_view()
+	_assert_equal(_live_hex(view, dark_cell).material_override, view._mat_hover_ok, "placement hover also wins over dark coverage")
+	_dispose(game)
+
+
+func _test_live_lumen_materials() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.user_paused = true
+	game.set_tool("select")
+	game.toggle_lighting_overlay()
+	game._sync_3d_play_view()
+	var amber_before := _amber_floor_cells(game)
+	_assert_equal(amber_before.size(), 99, "starting powered Lumen paints ninety-nine amber cells")
+	var target := Vector2i(28, 20)
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.LAMP, target), "second Lumen fixture accepts a blueprint on dark floor")
+	game.power_grid.recalculate(game.buildings)
+	game._sync_3d_play_view()
+	_assert_equal(_amber_floor_cells(game), amber_before, "incomplete Lumen adds no amber")
+	var lumen: VaultBuilding = game.get_building_at(target)
+	lumen.add_delivery(lumen.get_cost())
+	lumen.apply_build_work(lumen.get_build_time())
+	lumen.manually_disabled = true
+	game.power_grid.recalculate(game.buildings)
+	game._sync_3d_play_view()
+	_assert_true(lumen.complete and not lumen.powered, "completed second Lumen is unpowered")
+	_assert_equal(_amber_floor_cells(game), amber_before, "completed unpowered Lumen adds no amber")
+	_assert_true(game.toggle_building_enabled(lumen.building_id), "completed second Lumen can receive power")
+	game._sync_3d_play_view()
+	_assert_true(lumen.complete and lumen.powered, "second completed Lumen is powered")
+	var amber_after := _amber_floor_cells(game)
+	_assert_true(amber_after.size() > amber_before.size(), "powered second Lumen expands the live amber set")
+	for cell: Vector2i in amber_before:
+		_assert_true(amber_after.has(cell), "second Lumen preserves existing amber at %s" % cell)
+	_assert_true(amber_after.has(target), "powered second Lumen paints its formerly dark floor amber")
+	_assert_equal(amber_after, _lit_floor_cells(game), "expanded amber set matches exact simulated coverage")
+	_dispose(game)
+
+
+func _live_hex(view: MapView3D, cell: Vector2i) -> MeshInstance3D:
+	var center := view.map_grid.cell_to_world(cell)
+	for child in view.hex_root.get_children():
+		if child is MeshInstance3D and not child.is_queued_for_deletion():
+			if Vector2(child.position.x, child.position.z).distance_to(center) < 0.05:
+				return child as MeshInstance3D
+	return null
+
+
+func _lit_floor_cells(game: VaultGame) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for cell: Vector2i in game.map_grid.get_floor_cells():
+		if game.lighting_system.is_cell_lit(cell):
+			cells.append(cell)
+	return cells
+
+
+func _amber_floor_cells(game: VaultGame) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for cell: Vector2i in game.map_grid.get_floor_cells():
+		var prism := _live_hex(game.map_view_3d, cell)
+		if prism != null and prism.material_override == game.map_view_3d._mat_floor_lit:
+			cells.append(cell)
+	return cells
 
 
 func _prepare_stable_residents(game: VaultGame) -> void:

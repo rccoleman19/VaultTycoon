@@ -34,6 +34,7 @@ var _mat_rock: StandardMaterial3D
 var _mat_rock_border: StandardMaterial3D
 var _mat_floor: StandardMaterial3D
 var _mat_floor_dark: StandardMaterial3D
+var _mat_floor_lit: StandardMaterial3D
 var _mat_dig: StandardMaterial3D
 var _mat_zone: StandardMaterial3D
 var _mat_hover_ok: StandardMaterial3D
@@ -79,6 +80,7 @@ func _ensure_materials() -> void:
 		_mat_rock_border = _make_mat(Color(0.125, 0.17, 0.20))
 		_mat_floor = _make_mat(Color(0.18, 0.27, 0.31))
 		_mat_floor_dark = _make_mat(Color(0.08, 0.11, 0.14))
+		_mat_floor_lit = _make_mat(Color(1.0, 0.78, 0.28, 1.0))
 		_mat_dig = _make_mat(Color(0.85, 0.55, 0.18))
 		_mat_zone = _make_mat(Color(0.28, 0.62, 0.70))
 		_mat_hover_ok = _make_mat(Color(0.35, 0.85, 0.65))
@@ -157,7 +159,9 @@ func _make_hex_instance(cell: Vector2i) -> MeshInstance3D:
 		else:
 			mat = _mat_rock
 	else:
-		if map_grid.stockpile_cells.has(cell):
+		if lighting_system != null and is_instance_valid(lighting_system) and lighting_system.is_coverage_overlay_visible():
+			mat = _mat_floor_lit if lighting_system.is_cell_lit(cell) else _mat_floor_dark
+		elif map_grid.stockpile_cells.has(cell):
 			mat = _mat_zone
 		elif lighting_system != null and is_instance_valid(lighting_system) and lighting_system.is_floor_dark(cell):
 			mat = _mat_floor_dark
