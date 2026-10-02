@@ -27,6 +27,7 @@ var lighting_system: LightingSystem
 var _last_map_signature := ""
 var _resident_proxies: Dictionary = {}
 var _building_proxies: Dictionary = {}
+var _rubble_props: Dictionary = {}
 var _hatch_proxy: MeshInstance3D
 var _shared_hex_mesh: CylinderMesh
 var _mat_rock: StandardMaterial3D
@@ -205,8 +206,45 @@ func pick_cell(screen_pos: Vector2) -> Vector2i:
 	return map_grid.world_to_cell(screen_to_world_xz(screen_pos))
 
 
-func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding], show_hatch: bool) -> void:
+func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding], show_hatch: bool, jobs: Array = []) -> void:
 	_ensure_materials()
+	var prop_root := get_node_or_null("PropRoot") as Node3D
+	if prop_root == null:
+		prop_root = Node3D.new()
+		prop_root.name = "PropRoot"
+		add_child(prop_root)
+	var live_rubble: Dictionary = {}
+	for job: Dictionary in jobs:
+		if int(job.type) != JobSystem.JobType.HAUL_RUBBLE or bool(job.done):
+			continue
+		live_rubble[job.id] = true
+		var prop: MeshInstance3D = _rubble_props.get(job.id)
+		if prop == null or not is_instance_valid(prop):
+			prop = MeshInstance3D.new()
+			var box := BoxMesh.new()
+			box.size = Vector3(3.2, 2.0, 3.2)
+			prop.mesh = box
+			prop.material_override = _make_mat(Color("bd8f52"))
+			prop_root.add_child(prop)
+			_rubble_props[job.id] = prop
+		var center := MapGrid.offset_cell_to_world(job.target)
+		prop.position = Vector3(center.x, 1.0, center.y)
+		for resident: VaultResident in residents:
+			if (
+				is_instance_valid(resident) and resident.alive
+				and resident.current_job_id == int(job.id)
+				and resident.job_phase == "deposit" and resident.carrying > 0
+			):
+				prop.position = Vector3(resident.position.x + 4.6, 1.0, resident.position.y)
+				break
+	for id: Variant in _rubble_props.keys():
+		if live_rubble.has(id):
+			continue
+		var stale_prop: MeshInstance3D = _rubble_props[id]
+		if is_instance_valid(stale_prop):
+			stale_prop.get_parent().remove_child(stale_prop)
+			stale_prop.queue_free()
+		_rubble_props.erase(id)
 	var live_residents: Dictionary = {}
 	for resident: VaultResident in residents:
 		if not is_instance_valid(resident):
