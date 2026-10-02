@@ -30,6 +30,7 @@ func _run() -> void:
 	_run_case("3D dig prisms carve in stable progress buckets", _test_dig_progress_prisms)
 	_run_case("3D rubble props follow unfinished haul jobs", _test_rubble_props)
 	_run_case("3D fixture proxies grow with supply and assembly progress", _test_fixture_proxy_progress)
+	_run_case("3D hatch tint follows breach phase and remaining patch work", _test_hatch_material_progress)
 	_run_case("3D colonist capsules lie down only at their sleeping destination", _test_sleeping_capsule_pose)
 	_run_case("blueprints are supplied and constructed", _test_blueprint_build)
 	_run_case("cancel previews and powered checklist match their actions", _test_order_preview_and_checklist)
@@ -858,6 +859,87 @@ func _test_fixture_proxy_progress() -> void:
 		lamp.complete = false
 		sync.call()
 		assert_proxy.call(lamp, 0.875, 1.925, "Lumen at half its five-second build time")
+	_dispose(game)
+
+
+func _test_hatch_material_progress() -> void:
+	var game := _spawn_game()
+	var view := game.get_node("MapView3D") as MapView3D
+	var breach: BreachSystem = game.breach_system
+	var sync := func() -> void:
+		game._sync_3d_play_view()
+	var assert_color := func(expected: Color, label: String) -> void:
+		_assert_true(view._mat_hatch.albedo_color.is_equal_approx(expected), "%s hatch color" % label)
+		_assert_true(view._hatch_proxy.material_override == view._mat_hatch, "%s uses the existing shared hatch material" % label)
+	var rust := Color(0.75, 0.35, 0.28)
+	var gold := Color("EFC56B")
+	var red := Color("EF6860")
+	var teal := Color("75D4B4")
+	for stage: Array in [
+		[BreachSystem.Phase.DORMANT, 8.0, rust, "dormant"],
+		[BreachSystem.Phase.WARNING, 8.0, gold, "warning before work"],
+		[BreachSystem.Phase.OPEN, 8.0, red, "open before work"],
+		[BreachSystem.Phase.SEALED, 8.0, teal, "sealed phase"],
+		[BreachSystem.Phase.WARNING, 4.0, gold.lerp(teal, 0.5), "warning half repaired"],
+		[BreachSystem.Phase.OPEN, 4.0, red.lerp(teal, 0.5), "opening mid-repair"],
+		[BreachSystem.Phase.WARNING, 0.0, teal, "warning work boundary"],
+		[BreachSystem.Phase.OPEN, 0.0, teal, "open work boundary"],
+		[BreachSystem.Phase.SEALED, 0.0, teal, "sealed with no work left"],
+		[BreachSystem.Phase.WARNING, 10.0, gold, "work above full clamps"],
+		[BreachSystem.Phase.OPEN, -1.0, teal, "work below zero clamps"],
+	]:
+		breach.phase = stage[0] as BreachSystem.Phase
+		breach.patch_work_left = float(stage[1])
+		sync.call()
+		assert_color.call(stage[2], stage[3])
+
+	for phase: BreachSystem.Phase in [BreachSystem.Phase.WARNING, BreachSystem.Phase.OPEN]:
+		breach.phase = phase
+		breach.patch_work_left = BreachSystem.PATCH_WORK_SECONDS
+		breach.patch_delivered = 0
+		sync.call()
+		var phase_color := gold if phase == BreachSystem.Phase.WARNING else red
+		breach.patch_delivered = 2
+		sync.call()
+		assert_color.call(phase_color, "partial supply without work in phase %s" % phase)
+
+	breach.patch_delivered = BreachSystem.PATCH_COST
+	_assert_false(breach.apply_patch_work(4.0), "four seconds of work leaves the hatch unsealed")
+	sync.call()
+	assert_color.call(red.lerp(teal, 0.5), "earned half repair")
+	for resident: VaultResident in game.residents:
+		resident.position = game.map_grid.cell_to_world(Vector2i(18, 12))
+	sync.call()
+	assert_color.call(red.lerp(teal, 0.5), "interrupted repair with nobody at the hatch")
+
+	var saved := breach.serialize()
+	saved["patch_work_left"] = 2.0
+	breach.reset()
+	breach.deserialize(saved, 80.0)
+	_assert_approximately(breach.patch_work_left, 2.0, 0.0001, "loaded partial repair restores remaining work")
+	sync.call()
+	assert_color.call(red.lerp(teal, 0.75), "loaded partial repair")
+	_assert_true(breach.apply_patch_work(2.0), "remaining two seconds seal the hatch")
+	sync.call()
+	assert_color.call(teal, "completed repair")
+	var original_proxy := view._hatch_proxy
+	game.new_game()
+	sync.call()
+	_assert_equal(breach.phase, BreachSystem.Phase.DORMANT, "new game resets breach phase")
+	assert_color.call(rust, "new game after sealing")
+	_assert_true(view._hatch_proxy == original_proxy, "reset retains the existing hatch proxy")
+	var cylinder := view._hatch_proxy.mesh as CylinderMesh
+	_assert_true(cylinder != null, "live hatch retains its cylinder mesh")
+	if cylinder != null:
+		_assert_equal(cylinder.top_radius, 5.0, "hatch top radius remains five")
+		_assert_equal(cylinder.bottom_radius, 5.0, "hatch bottom radius remains five")
+		_assert_equal(cylinder.height, 3.0, "hatch height remains three")
+		_assert_equal(cylinder.radial_segments, 8, "hatch radial segments remain eight")
+	_assert_equal(view._hatch_proxy.position.y, 2.0, "hatch center y remains two")
+	view.sync_actors(game.residents, game.buildings, true, game.job_system.jobs, BreachSystem.Phase.SEALED, 0.0)
+	assert_color.call(teal, "explicit trailing arguments")
+	view.sync_actors(game.residents, game.buildings, true)
+	assert_color.call(rust, "default trailing arguments after sealing")
 	_dispose(game)
 
 

@@ -1097,7 +1097,7 @@ func _sync_3d_play_view(force_rebuild := false) -> void:
 		return
 	map_view_3d.rebuild_map(force_rebuild)
 	map_view_3d.apply_camera_focus(world_camera.position, world_camera.zoom.x)
-	map_view_3d.sync_actors(residents, buildings, true, job_system.jobs)
+	map_view_3d.sync_actors(residents, buildings, true, job_system.jobs, breach_system.phase, breach_system.patch_work_left)
 
 
 func _pick_cell_from_screen() -> Vector2i:
