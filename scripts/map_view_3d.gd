@@ -8,12 +8,12 @@ extends Node3D
 const ROCK_HEIGHT := 6.0
 const FLOOR_HEIGHT := 0.55
 const DIG_HEIGHT := 5.2
-const CAMERA_HEIGHT := 380.0
-const CAMERA_BACK := 300.0
-const CAMERA_SIDE := 40.0
+const CAMERA_HEIGHT := 170.0
+const CAMERA_BACK := 200.0
+const CAMERA_SIDE := 30.0
 const HEX_MESH_YAW_DEGREES := 0.0
-const COLONIST_RADIUS := 3.2
-const COLONIST_HEIGHT := 8.0
+const COLONIST_RADIUS := 2.4
+const COLONIST_HEIGHT := 13.0
 
 var map_grid: MapGrid
 var lighting_system: LightingSystem
