@@ -1221,7 +1221,18 @@ func _refresh_alerts() -> void:
 	var dark_residents := game.get_dark_resident_count()
 	if dark_residents > 0:
 		alerts.append("DARKNESS · %d CREW UNLIT" % dark_residents)
-	if game.get_completed_building_count(VaultBuilding.Kind.BED) < game.get_alive_count():
+	var residents_needing_bunks := 0
+	var occupied_bunks: Dictionary = {}
+	for resident: VaultResident in game.residents:
+		if resident.sleeping and resident.bed_id >= 0:
+			occupied_bunks[resident.bed_id] = true
+		if resident.alive and not resident.drafted and (resident.needs.rest <= 28.0 or (resident.sleeping and resident.bed_id < 0)):
+			residents_needing_bunks += 1
+	var free_bunks := 0
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.BED and building.complete and not occupied_bunks.has(building.building_id):
+			free_bunks += 1
+	if residents_needing_bunks > free_bunks:
 		alerts.append("BED SHORTAGE")
 	var injured := 0
 	var free_medical := 0

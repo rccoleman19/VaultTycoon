@@ -20,6 +20,7 @@ func _init() -> void:
 
 func _run() -> void:
 	_run_case("main scene boots with a sealed four-resident wing", _test_scene_boot_and_initial_state)
+	_run_case("bed shortage compares undrafted bunk need with free completed bunks", _test_bed_shortage_alert)
 	_run_case("tool hotkeys and help match the documented controls", _test_tool_hotkeys_and_help)
 	_run_case("manual work priorities arbitrate jobs across the crew", _test_work_priority_claiming)
 	_run_case("work priorities persist and legacy permissions migrate", _test_work_priority_save_compatibility)
@@ -131,6 +132,87 @@ func _test_scene_boot_and_initial_state() -> void:
 	_assert_true(game.get_building_at(BreachSystem.HATCH_CELL) == null, "pressure hatch is not a removable fixture")
 	game.begin_shift()
 	_assert_false(game.place_blueprint(VaultBuilding.Kind.BED, BreachSystem.HATCH_CELL), "pressure hatch rejects fixture blueprints")
+	_dispose(game)
+
+
+func _test_bed_shortage_alert() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.player_orders.refresh()
+	_assert_equal(game.residents.size(), 4, "fresh shift has four residents")
+	_assert_equal(game.active_tool, "select", "fresh shift keeps Select active")
+	_assert_equal(game.map_grid.dig_marks.size(), 0, "fresh shift has no dig marks")
+	_assert_equal(game.player_orders.objective_label.text, "Next: YOU mark rock [E] · THEY dig on Dig defaults", "fresh shift keeps the initial dig objective")
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "fresh shift needs no bunks yet")
+	for resident: VaultResident in game.residents:
+		resident.needs.rest = 60.0
+		resident.drafted = false
+		resident.sleeping = false
+		resident.bed_id = -1
+	game.residents[0].needs.rest = 28.0
+	game.player_orders.refresh()
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "rest 28 needs a bunk when none exist")
+	game.residents[0].needs.rest = 29.0
+	game.player_orders.refresh()
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "rest 29 does not need a bunk")
+	var bunk := _add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	game.residents[0].needs.rest = 28.0
+	game.player_orders.refresh()
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "one free completed bunk meets one tired resident's need")
+	game.residents[1].needs.rest = 28.0
+	game.player_orders.refresh()
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "two tired residents outnumber one free bunk")
+	game.residents[1].needs.rest = 60.0
+	game.residents[1].sleeping = true
+	game.residents[1].bed_id = bunk.building_id
+	game.player_orders.refresh()
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "an occupied completed bunk is not free")
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
+	for resident: VaultResident in game.residents:
+		resident.needs.rest = 60.0
+		resident.sleeping = false
+		resident.bed_id = -1
+	game.player_orders.refresh()
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "two completed bunks with a rested crew cause no shortage")
+	_dispose(game)
+
+	game = _spawn_game()
+	game.begin_shift()
+	for resident: VaultResident in game.residents:
+		resident.needs.rest = 60.0
+		resident.drafted = false
+		resident.sleeping = false
+		resident.bed_id = -1
+	game.residents[0].needs.rest = 28.0
+	game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(18, 12))
+	game.player_orders.refresh()
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "an unfinished bunk cannot satisfy one tired resident")
+	_dispose(game)
+
+	game = _spawn_game()
+	game.begin_shift()
+	for resident: VaultResident in game.residents:
+		resident.needs.rest = 60.0
+		resident.drafted = false
+		resident.sleeping = false
+		resident.bed_id = -1
+	game.residents[0].drafted = true
+	game.residents[0].needs.rest = 28.0
+	game.player_orders.refresh()
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "a drafted tired resident does not need a bunk")
+	game.residents[0].drafted = false
+	game.residents[0].alive = false
+	game.player_orders.refresh()
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "a dead tired resident does not need a bunk")
+	game.residents[0].alive = true
+	game.residents[0].needs.rest = 60.0
+	game.residents[0].sleeping = true
+	game.residents[0].bed_id = -1
+	game.player_orders.refresh()
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "an undrafted floor sleeper needs a bunk even above rest 28")
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	game.player_orders.refresh()
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "one free completed bunk clears the floor sleeper's shortage immediately")
 	_dispose(game)
 
 
