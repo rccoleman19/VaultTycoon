@@ -29,6 +29,7 @@ func _run() -> void:
 	_run_case("dig orders complete through the job system", _test_dig_completion)
 	_run_case("3D dig prisms carve in stable progress buckets", _test_dig_progress_prisms)
 	_run_case("3D rubble props follow unfinished haul jobs", _test_rubble_props)
+	_run_case("3D fixture proxies grow with supply and assembly progress", _test_fixture_proxy_progress)
 	_run_case("blueprints are supplied and constructed", _test_blueprint_build)
 	_run_case("cancel previews and powered checklist match their actions", _test_order_preview_and_checklist)
 	_run_case("power is allocated by supply and priority", _test_power_allocation)
@@ -771,6 +772,91 @@ func _test_rubble_props() -> void:
 			_assert_approximately((proxy.mesh as CapsuleMesh).height, 13.0, 0.001, "capsule height stays 13")
 			_assert_equal(proxy.get_child_count(), 0, "capsule has no child meshes")
 	_remove_test_save(save_path)
+	_dispose(game)
+
+
+func _test_fixture_proxy_progress() -> void:
+	var game := _spawn_game()
+	var view := game.get_node("MapView3D") as MapView3D
+	var sync := func() -> void:
+		view.sync_actors(game.residents, game.buildings, false, game.job_system.jobs)
+	var assert_proxy := func(building: VaultBuilding, expected_scale: float, expected_y: float, label: String) -> MeshInstance3D:
+		var proxy := view._building_proxies.get(building.building_id) as MeshInstance3D
+		_assert_true(proxy != null, "%s has a building proxy" % label)
+		if proxy != null:
+			_assert_approximately(proxy.scale.x, expected_scale, 0.0001, "%s scale x" % label)
+			_assert_approximately(proxy.scale.y, expected_scale, 0.0001, "%s scale y" % label)
+			_assert_approximately(proxy.scale.z, expected_scale, 0.0001, "%s scale z" % label)
+			_assert_approximately(proxy.position.y, expected_y, 0.0001, "%s center height" % label)
+		return proxy
+	sync.call()
+	for building: VaultBuilding in game.buildings:
+		_assert_true(building.complete, "starter fixture is complete")
+		assert_proxy.call(building, 1.0, 2.2, "completed starter fixture")
+	game.begin_shift()
+	var target := Vector2i(18, 12)
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, target), "bunk blueprint can be placed")
+	var bunk: VaultBuilding = game.get_building_at(target)
+	if bunk == null:
+		_dispose(game)
+		return
+	_assert_equal(bunk.get_cost(), 8, "bunk costs eight salvage")
+	_assert_approximately(bunk.get_build_time(), 8.0, 0.0001, "bunk takes eight seconds to assemble")
+	sync.call()
+	var original_proxy: MeshInstance3D = assert_proxy.call(bunk, 0.5, 1.1, "placed bunk 0/8")
+	for stage: Array in [
+		[0, 8.0, false, 0.500, 1.100, "bunk 0/8"],
+		[4, 8.0, false, 0.625, 1.375, "bunk 4/8"],
+		[8, 8.0, false, 0.750, 1.650, "bunk supplied, eight seconds left"],
+		[8, 4.0, false, 0.875, 1.925, "bunk four seconds left"],
+		[8, 0.0, true, 1.000, 2.200, "bunk complete"],
+	]:
+		bunk.delivered = int(stage[0])
+		bunk.construction_left = float(stage[1])
+		bunk.complete = bool(stage[2])
+		sync.call()
+		_assert_true(assert_proxy.call(bunk, stage[3], stage[4], stage[5]) == original_proxy, "%s retains the original proxy" % stage[5])
+
+	bunk.complete = false
+	bunk.delivered = bunk.get_cost() - 1
+	bunk.construction_left = bunk.get_build_time()
+	sync.call()
+	_assert_true(assert_proxy.call(bunk, 0.71875, 1.58125, "last partial supply") == original_proxy, "partial supply retains the original proxy")
+	bunk.delivered = bunk.get_cost()
+	var supply_endpoint := lerpf(0.50, 0.75, float(bunk.delivered) / float(bunk.get_cost()))
+	_assert_approximately(supply_endpoint, 0.750, 0.0001, "supply lerp ends at scale 0.750")
+	_assert_approximately(2.2 * supply_endpoint, 1.650, 0.0001, "supply lerp ends at height 1.650")
+	sync.call()
+	_assert_true(assert_proxy.call(bunk, supply_endpoint, 2.2 * supply_endpoint, "first assembly step") == original_proxy, "crossing from supply to assembly keeps the same proxy")
+	if original_proxy != null:
+		var unchanged_position := original_proxy.position
+		var unchanged_scale := original_proxy.scale
+		sync.call()
+		_assert_true(view._building_proxies.get(bunk.building_id) == original_proxy, "sync without work retains the same proxy")
+		_assert_equal(original_proxy.position, unchanged_position, "sync without work does not move the proxy")
+		_assert_equal(original_proxy.scale, unchanged_scale, "sync without work does not resize the proxy")
+
+	for restored: Dictionary in [
+		{"delivered": 4, "construction_left": 8.0, "complete": false, "scale": 0.625, "y": 1.375},
+		{"delivered": 8, "construction_left": 2.0, "complete": false, "scale": 0.9375, "y": 2.0625},
+	]:
+		bunk.delivered = int(restored.delivered)
+		bunk.construction_left = float(restored.construction_left)
+		bunk.complete = bool(restored.complete)
+		sync.call()
+		_assert_true(assert_proxy.call(bunk, restored.scale, restored.y, "restored progress on next sync") == original_proxy, "restored fields update the existing proxy")
+
+	var lamp_cell := Vector2i(19, 12)
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.LAMP, lamp_cell), "Lumen blueprint can be placed")
+	var lamp: VaultBuilding = game.get_building_at(lamp_cell)
+	if lamp != null:
+		_assert_equal(lamp.get_cost(), 5, "Lumen costs five salvage")
+		_assert_approximately(lamp.get_build_time(), 5.0, 0.0001, "Lumen takes five seconds to assemble")
+		lamp.delivered = lamp.get_cost()
+		lamp.construction_left = lamp.get_build_time() * 0.5
+		lamp.complete = false
+		sync.call()
+		assert_proxy.call(lamp, 0.875, 1.925, "Lumen at half its five-second build time")
 	_dispose(game)
 
 
