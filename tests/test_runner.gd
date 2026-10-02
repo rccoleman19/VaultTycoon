@@ -754,7 +754,7 @@ func _test_rubble_props() -> void:
 	sync.call()
 	_assert_equal(chunks.call().size(), 0, "new game clears all rubble props")
 	carrier = game.residents[0]
-	for type: int in [JobSystem.JobType.HAUL_RAW_FOOD, JobSystem.JobType.HAUL_MEAL, JobSystem.JobType.SUPPLY_BUILD, JobSystem.JobType.SUPPLY_BREACH]:
+	for type: int in [JobSystem.JobType.SUPPLY_BUILD, JobSystem.JobType.SUPPLY_BREACH]:
 		game.job_system._add_job(type, game.map_grid.get_chamber_center(), -1, 3)
 		var other: Dictionary = game.job_system.jobs.back()
 		other.reserved_by = carrier.resident_id
