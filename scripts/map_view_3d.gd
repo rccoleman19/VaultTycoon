@@ -283,8 +283,14 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 			fixture_root.add_child(proxy)
 			_building_proxies[building.building_id] = proxy
 		var center := MapGrid.offset_cell_to_world(building.cell)
-		proxy.position = Vector3(center.x, 2.2 if building.complete else 1.4, center.y)
-		proxy.scale = Vector3.ONE * (1.0 if building.complete else 0.75)
+		var s := 1.0
+		if not building.complete:
+			if building.delivered < building.get_cost():
+				s = lerpf(0.50, 0.75, float(building.delivered) / float(building.get_cost()))
+			else:
+				s = lerpf(0.75, 1.00, 1.0 - building.construction_left / building.get_build_time())
+		proxy.position = Vector3(center.x, 2.2 * s, center.y)
+		proxy.scale = Vector3.ONE * s
 		var color := _building_color(building)
 		if proxy.material_override is StandardMaterial3D:
 			(proxy.material_override as StandardMaterial3D).albedo_color = color
