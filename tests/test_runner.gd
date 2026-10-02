@@ -406,6 +406,53 @@ func _test_hex_map_foundation() -> void:
 	map_view.setup(map_grid, game.lighting_system)
 	_assert_true(absf(map_view.get_hex_prism_radius() - MapGrid.HEX_SIZE) < 0.001, "3D hex prism radius equals HEX_SIZE (no gap scale)")
 	_assert_equal(map_view.get_hex_mesh_yaw_degrees(), 0.0, "hex mesh yaw stays 0 so vertices sit on the row axis (pointy-top)")
+	map_view.sync_actors(game.residents, game.buildings, false)
+	_assert_true(not game.residents.is_empty(), "resident proxy checks have residents")
+	_assert_equal(map_view._resident_proxies.size(), game.residents.size(), "each resident has exactly one proxy")
+	for resident: VaultResident in game.residents:
+		var proxy := map_view._resident_proxies.get(resident.resident_id) as MeshInstance3D
+		_assert_true(proxy != null, "resident has a MeshInstance3D proxy keyed by resident_id")
+		if proxy == null:
+			continue
+		_assert_true(proxy.mesh is CapsuleMesh, "resident proxy is one CapsuleMesh")
+		if proxy.mesh is CapsuleMesh:
+			var capsule := proxy.mesh as CapsuleMesh
+			_assert_approximately(capsule.radius, 2.4, 0.001, "resident capsule radius is 2.4")
+			_assert_approximately(capsule.height, 13.0, 0.001, "resident capsule height is 13")
+		_assert_equal(proxy.get_child_count(), 0, "resident proxy has no child meshes or other children")
+		_assert_equal(proxy.position.x, resident.position.x, "resident proxy x matches resident x")
+		_assert_equal(proxy.position.z, resident.position.y, "resident proxy z matches resident y")
+		_assert_equal(proxy.position.y, 6.5, "resident proxy center keeps feet on y=0")
+
+	var camera_3d := map_view.camera_3d
+	camera_3d.current = true
+	var focus := map_grid.cell_to_world(start)
+	var odd_cell := start if start.y % 2 == 1 else start + Vector2i(0, 1)
+	var even_cell := start if start.y % 2 == 0 else start + Vector2i(0, 1)
+	for cell: Vector2i in [odd_cell, even_cell]:
+		_assert_true(MapGrid.CHAMBER.has_point(cell), "projection test cell is inside chamber")
+		_assert_equal(map_grid.get_tile(cell), MapGrid.Tile.FLOOR, "projection test cell is floor")
+	for zoom: float in [0.75, 1.0, 1.8]:
+		map_view.apply_camera_focus(focus, zoom)
+		var offset := camera_3d.position - Vector3(focus.x, 0.0, focus.y)
+		var expected_offset := Vector3(30.0, 170.0, 200.0) / zoom
+		_assert_approximately(offset.x, expected_offset.x, 0.01, "camera side offset at zoom %s" % zoom)
+		_assert_approximately(offset.y, expected_offset.y, 0.01, "camera height offset at zoom %s" % zoom)
+		_assert_approximately(offset.z, expected_offset.z, 0.01, "camera back offset at zoom %s" % zoom)
+		_assert_equal(camera_3d.fov, 42.0, "camera FOV stays 42 at zoom %s" % zoom)
+		for cell: Vector2i in [odd_cell, even_cell]:
+			var center := map_grid.cell_to_world(cell)
+			map_view.apply_camera_focus(center, zoom)
+			var screen := camera_3d.unproject_position(Vector3(center.x, 0.0, center.y))
+			_assert_equal(map_view.pick_cell(screen), cell, "floor projection round-trip for row %d at zoom %s" % [cell.y, zoom])
+		if not game.residents.is_empty():
+			var resident: VaultResident = game.residents[0]
+			var proxy := map_view._resident_proxies.get(resident.resident_id) as MeshInstance3D
+			if proxy != null:
+				var resident_focus := Vector2(resident.position.x, resident.position.y)
+				map_view.apply_camera_focus(resident_focus, zoom)
+				var screen := camera_3d.unproject_position(Vector3(proxy.position))
+				_assert_equal(map_view.pick_cell(screen), map_grid.world_to_cell(resident_focus), "ground-plane pick through pill center lands on resident cell at zoom %s" % zoom)
 	# world/cell round-trip stays on the same hex near the chamber center.
 	var world := map_grid.cell_to_world(interior)
 	_assert_equal(map_grid.world_to_cell(world), interior, "cell_to_world/world_to_cell round-trip")
