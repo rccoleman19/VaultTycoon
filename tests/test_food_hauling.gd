@@ -10,6 +10,7 @@ func _run() -> void:
 	_run_case("an injured sole hauler finishes critical carried food", _test_injured_food_carrier)
 	_run_case("food cargo saves round trip and malformed payloads reject atomically", _test_food_haul_saves)
 	_run_case("stockpile guidance names every supported cargo type", _test_food_haul_hud)
+	_run_case("3D food props follow unfinished haul jobs without changing inventory", _test_food_haul_props)
 	print("FOOD HAULING TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -321,6 +322,126 @@ func _test_food_haul_saves() -> void:
 	game.new_game(false)
 	_assert_equal(game.job_system.get_pending_raw_food(), 0, "New Wing clears pending raw food")
 	_assert_equal(game.job_system.get_pending_meals(), 0, "New Wing clears pending meals")
+	_dispose(game)
+
+
+func _test_food_haul_props() -> void:
+	var game := _food_game()
+	var view := game.get_node("MapView3D") as MapView3D
+	var carrier: VaultResident = game.residents[0]
+	var initial_meals: int = game.food_system.meals
+	var initial_raw_food: int = game.food_system.raw_food
+	var initial_salvage: int = game.food_system.salvage
+	var sync := func() -> void:
+		view.sync_actors(game.residents, game.buildings, false, game.job_system.jobs)
+		_assert_equal(game.food_system.meals, initial_meals, "visual sync preserves stored meals")
+		_assert_equal(game.food_system.raw_food, initial_raw_food, "visual sync preserves stored raw food")
+		_assert_equal(game.food_system.salvage, initial_salvage, "visual sync preserves stored salvage")
+	var meshes := func() -> Array[MeshInstance3D]:
+		var found: Array[MeshInstance3D] = []
+		for child in view.get_node("PropRoot").get_children():
+			if child is MeshInstance3D:
+				found.append(child)
+		return found
+	var assert_box := func(prop: MeshInstance3D, expected: Vector3, size: Vector3, color: Color, label: String) -> void:
+		_assert_true(is_instance_valid(prop), "%s prop exists" % label)
+		if not is_instance_valid(prop):
+			return
+		_assert_equal(prop.position, expected, "%s prop position" % label)
+		_assert_true(prop.get_parent() == view.get_node("PropRoot"), "%s prop is under world PropRoot" % label)
+		_assert_true(prop.mesh is BoxMesh, "%s prop uses BoxMesh" % label)
+		if prop.mesh is BoxMesh:
+			_assert_equal((prop.mesh as BoxMesh).size, size, "%s box size" % label)
+		var material := prop.material_override as StandardMaterial3D
+		_assert_true(material != null, "%s prop uses the existing map material" % label)
+		if material != null:
+			_assert_equal(material.albedo_color, color, "%s box color" % label)
+			_assert_equal(material.shading_mode, BaseMaterial3D.SHADING_MODE_UNSHADED, "%s material is unshaded" % label)
+
+	var meal_source := Vector2i(20, 12)
+	var raw_source := Vector2i(21, 12)
+	var rubble_source := Vector2i(22, 12)
+	game.job_system._add_job(JobSystem.JobType.HAUL_MEAL, meal_source, -1, 1)
+	var meal_job: Dictionary = game.job_system.jobs.back()
+	game.job_system._add_job(JobSystem.JobType.HAUL_RAW_FOOD, raw_source, -1, 1)
+	var raw_job: Dictionary = game.job_system.jobs.back()
+	game.job_system._add_job(JobSystem.JobType.HAUL_RUBBLE, rubble_source, -1, 3)
+	var rubble_job: Dictionary = game.job_system.jobs.back()
+	sync.call()
+	var meal_prop := view._food_props.get(meal_job.id) as MeshInstance3D
+	var raw_prop := view._food_props.get(raw_job.id) as MeshInstance3D
+	var rubble_prop := view._rubble_props.get(rubble_job.id) as MeshInstance3D
+	var meal_center := MapGrid.offset_cell_to_world(meal_source)
+	var raw_center := MapGrid.offset_cell_to_world(raw_source)
+	var rubble_center := MapGrid.offset_cell_to_world(rubble_source)
+	var meal_position := Vector3(meal_center.x, 0.7, meal_center.y)
+	var raw_position := Vector3(raw_center.x, 0.7, raw_center.y)
+	assert_box.call(meal_prop, meal_position, Vector3(2.4, 1.4, 2.4), Color("c46a3a"), "pending meal")
+	assert_box.call(raw_prop, raw_position, Vector3(2.4, 1.4, 2.4), Color("74b76c"), "pending raw food")
+	assert_box.call(rubble_prop, Vector3(rubble_center.x, 1.0, rubble_center.y), Vector3(3.2, 2.0, 3.2), Color("bd8f52"), "rubble")
+	_assert_true(meal_prop != raw_prop and meal_prop != rubble_prop and raw_prop != rubble_prop, "food and rubble jobs have separate nodes")
+	_assert_equal(meshes.call().size(), 3, "two food jobs and one rubble job create three world boxes")
+	sync.call()
+	_assert_equal(meshes.call().size(), 3, "second sync creates no duplicate boxes")
+	_assert_true(view._food_props.get(meal_job.id) == meal_prop, "second sync reuses the meal mesh")
+	_assert_true(view._food_props.get(raw_job.id) == raw_prop, "second sync reuses the raw-food mesh")
+	_assert_true(view._rubble_props.get(rubble_job.id) == rubble_prop, "second sync reuses the rubble mesh")
+
+	carrier.position = game.map_grid.cell_to_world(Vector2i(27, 19))
+	for job: Dictionary in [meal_job, raw_job]:
+		var prop := view._food_props.get(job.id) as MeshInstance3D
+		var source_position := meal_position if job == meal_job else raw_position
+		job.reserved_by = carrier.resident_id
+		carrier.current_job_id = int(job.id)
+		carrier.current_job_type = int(job.type)
+		carrier.carrying_kind = "meal" if job == meal_job else "raw_food"
+		carrier.job_phase = "target"
+		carrier.carrying = 1
+		sync.call()
+		_assert_equal(prop.position, source_position, "food stays at source before deposit phase")
+		carrier.job_phase = "deposit"
+		carrier.carrying = 0
+		sync.call()
+		_assert_equal(prop.position, source_position, "empty-handed resident leaves food at source")
+		carrier.carrying = 1
+		carrier.alive = false
+		sync.call()
+		_assert_equal(prop.position, source_position, "dead resident leaves food at source")
+		carrier.alive = true
+		carrier.current_job_id = int(rubble_job.id)
+		sync.call()
+		_assert_equal(prop.position, source_position, "resident on another job leaves food at source")
+		carrier.current_job_id = int(job.id)
+		sync.call()
+		_assert_true(view._food_props.get(job.id) == prop, "deposit moves the same food mesh")
+		_assert_equal(prop.position, Vector3(carrier.position.x + 4.6, 0.7, carrier.position.y), "carried food sits beside the pill")
+		_assert_true(prop.position != source_position, "carried food leaves its source")
+		sync.call()
+		_assert_equal(meshes.call().size(), 3, "carried food retains one box per live job")
+		_assert_true(view._food_props.get(job.id) == prop, "repeated deposit sync reuses the food mesh")
+		for resident: VaultResident in game.residents:
+			var proxy := view._resident_proxies.get(resident.resident_id) as MeshInstance3D
+			_assert_true(proxy != null and proxy.mesh is CapsuleMesh, "resident has one capsule proxy")
+			if proxy != null:
+				_assert_equal(proxy.get_child_count(), 0, "capsule has no food children")
+		_assert_true(prop.get_parent() == view.get_node("PropRoot"), "carried food stays under world PropRoot")
+
+	meal_job.done = true
+	sync.call()
+	_assert_false(view._food_props.has(meal_job.id), "done meal job is erased from food props")
+	_assert_true(meal_prop.is_queued_for_deletion(), "done meal prop is queued for deletion")
+	_assert_equal(meshes.call().size(), 2, "done meal prop leaves PropRoot")
+	game.job_system.jobs.erase(raw_job)
+	sync.call()
+	_assert_false(view._food_props.has(raw_job.id), "removed raw-food job is erased from food props")
+	_assert_true(raw_prop.is_queued_for_deletion(), "removed raw-food prop is queued for deletion")
+	_assert_equal(meshes.call().size(), 1, "removing food jobs preserves only the rubble prop")
+	carrier.current_job_id = -1
+	for kind: String in ["meal", "raw_food"]:
+		carrier.carrying_kind = kind
+		sync.call()
+		_assert_equal(view._food_props.size(), 0, "carrying_kind %s alone creates no food prop" % kind)
+		_assert_equal(meshes.call().size(), 1, "carrying_kind alone leaves only the rubble box")
 	_dispose(game)
 
 

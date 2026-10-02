@@ -28,6 +28,7 @@ var _last_map_signature := ""
 var _resident_proxies: Dictionary = {}
 var _building_proxies: Dictionary = {}
 var _rubble_props: Dictionary = {}
+var _food_props: Dictionary = {}
 var _hatch_proxy: MeshInstance3D
 var _shared_hex_mesh: CylinderMesh
 var _mat_rock: StandardMaterial3D
@@ -265,6 +266,38 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 			stale_prop.get_parent().remove_child(stale_prop)
 			stale_prop.queue_free()
 		_rubble_props.erase(id)
+	var live_food: Dictionary = {}
+	for job: Dictionary in jobs:
+		if int(job.type) not in [JobSystem.JobType.HAUL_MEAL, JobSystem.JobType.HAUL_RAW_FOOD] or bool(job.done):
+			continue
+		live_food[job.id] = true
+		var prop: MeshInstance3D = _food_props.get(job.id)
+		if prop == null or not is_instance_valid(prop):
+			prop = MeshInstance3D.new()
+			var box := BoxMesh.new()
+			box.size = Vector3(2.4, 1.4, 2.4)
+			prop.mesh = box
+			prop.material_override = _make_mat(Color("c46a3a") if int(job.type) == JobSystem.JobType.HAUL_MEAL else Color("74b76c"))
+			prop_root.add_child(prop)
+			_food_props[job.id] = prop
+		var center := MapGrid.offset_cell_to_world(job.target)
+		prop.position = Vector3(center.x, 0.7, center.y)
+		for resident: VaultResident in residents:
+			if (
+				is_instance_valid(resident) and resident.alive
+				and resident.current_job_id == int(job.id)
+				and resident.job_phase == "deposit" and resident.carrying > 0
+			):
+				prop.position = Vector3(resident.position.x + 4.6, 0.7, resident.position.y)
+				break
+	for id: Variant in _food_props.keys():
+		if live_food.has(id):
+			continue
+		var stale_prop: MeshInstance3D = _food_props[id]
+		if is_instance_valid(stale_prop):
+			stale_prop.get_parent().remove_child(stale_prop)
+			stale_prop.queue_free()
+		_food_props.erase(id)
 	var live_residents: Dictionary = {}
 	for resident: VaultResident in residents:
 		if not is_instance_valid(resident):
