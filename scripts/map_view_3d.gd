@@ -167,6 +167,13 @@ func _make_hex_instance(cell: Vector2i) -> MeshInstance3D:
 			mat = _mat_floor_dark
 		else:
 			mat = _mat_floor
+	if (
+		map_grid.preview_tool == "lamp"
+		and map_grid.is_preview_valid("lamp", map_grid.hover_cell)
+		and map_grid.is_walkable(cell)
+		and LightingSystem.is_cell_in_lumen_range(cell, map_grid.hover_cell)
+	):
+		mat = _mat_hover_ok
 	if cell == map_grid.hover_cell and map_grid.preview_tool != "select":
 		mat = _mat_hover_ok if map_grid.is_preview_valid(map_grid.preview_tool, cell) else _mat_hover_bad
 		if is_rock and not map_grid.dig_marks.has(cell):

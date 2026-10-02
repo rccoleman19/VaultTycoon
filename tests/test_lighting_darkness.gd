@@ -12,6 +12,7 @@ func _run() -> void:
 	_run_case("lighting is derived across active and legacy snapshots", _test_derived_save_and_legacy_state)
 	_run_case("coverage display control does not mutate the simulation", _test_display_only_control)
 	_run_case("live 3D coverage materials preserve previews and geometry", _test_live_coverage_materials)
+	_run_case("live lamp hover previews coverage without changing the simulation", _test_live_lamp_hover)
 	_run_case("live amber coverage follows completed powered Lumens", _test_live_lumen_materials)
 	await _run_layout_case()
 
@@ -501,6 +502,115 @@ func _test_live_coverage_materials() -> void:
 	game._sync_3d_play_view()
 	_assert_equal(_live_hex(view, dark_cell).material_override, view._mat_hover_ok, "placement hover also wins over dark coverage")
 	_dispose(game)
+
+
+func _test_live_lamp_hover() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.user_paused = true
+	var grid: MapGrid = game.map_grid
+	var view: MapView3D = game.map_view_3d
+	var hover := Vector2i(18, 12)
+	var corner := hover + Vector2i(5, 5)
+	var outside := hover + Vector2i(6, 0)
+	var rock := Vector2i(16, 12)
+	var zone := Vector2i(19, 13)
+	var moved_hover := Vector2i(27, 19)
+	_assert_true(grid.paint_stockpile(zone), "hover fixture paints an empty lit stockpile")
+	grid.preview_tool = "select"
+	game._sync_3d_play_view()
+	var coverage_before := _lit_floor_cells(game)
+	var buildings_before := game.buildings.duplicate()
+	var salvage_before := game.food_system.salvage
+	var supply_before := game.power_grid.supply
+	var demand_before := game.power_grid.demand
+	var powered_before := []
+	for building: VaultBuilding in game.buildings:
+		powered_before.append(building.powered)
+
+	for overlay: bool in [true, false]:
+		game.lighting_system.set_coverage_overlay_visible(overlay)
+		grid.preview_tool = "select"
+		game._sync_3d_play_view()
+		var baseline := {}
+		for cell: Vector2i in grid.get_floor_cells():
+			var expected := view._mat_floor
+			if overlay:
+				expected = view._mat_floor_lit if game.lighting_system.is_cell_lit(cell) else view._mat_floor_dark
+			elif grid.stockpile_cells.has(cell):
+				expected = view._mat_zone
+			elif game.lighting_system.is_floor_dark(cell):
+				expected = view._mat_floor_dark
+			baseline[cell] = expected
+
+		grid.hover_cell = hover
+		grid.preview_tool = "lamp"
+		game._sync_3d_play_view()
+		_assert_true(grid.is_preview_valid("lamp", hover), "lamp hover targets valid empty floor")
+		var expected_footprint: Array[Vector2i] = []
+		for cell: Vector2i in grid.get_floor_cells():
+			if LightingSystem.is_cell_in_lumen_range(cell, hover):
+				expected_footprint.append(cell)
+		_assert_equal(_green_hex_cells(view), expected_footprint, "valid lamp preview paints every floor in range with overlay %s" % overlay)
+		_assert_equal(_live_hex(view, hover).material_override, view._mat_hover_ok, "valid lamp hover itself stays green")
+		_assert_equal(_live_hex(view, corner).material_override, view._mat_hover_ok, "lamp footprint includes offset five by five")
+		_assert_equal(_live_hex(view, outside).material_override, baseline[outside], "lamp footprint excludes Chebyshev distance six")
+		_assert_true(_live_hex(view, rock).material_override != view._mat_hover_ok, "lamp footprint excludes rock within range")
+		_assert_true(game.lighting_system.is_cell_lit(zone), "stockpile fixture is already lit")
+		_assert_equal(_live_hex(view, zone).material_override, view._mat_hover_ok, "lamp footprint includes already-lit stockpile floor")
+
+		grid.hover_cell = moved_hover
+		game._sync_3d_play_view()
+		_assert_true(grid.is_preview_valid("lamp", moved_hover), "moved lamp hover targets valid floor")
+		_assert_equal(_live_hex(view, moved_hover).material_override, view._mat_hover_ok, "moved lamp hover paints the new cell")
+		var cleared_count := 0
+		for cell: Vector2i in expected_footprint:
+			if not LightingSystem.is_cell_in_lumen_range(cell, moved_hover):
+				_assert_equal(_live_hex(view, cell).material_override, baseline[cell], "moving hover restores old footprint at %s" % cell)
+				cleared_count += 1
+		_assert_true(cleared_count > 0, "moving hover checks cells outside the new footprint")
+
+		var occupied := BreachSystem.HATCH_CELL
+		_assert_true(grid.is_walkable(occupied), "occupied hatch fixture is walkable floor")
+		for invalid: Vector2i in [occupied, rock, Vector2i(-1, -1)]:
+			grid.hover_cell = invalid
+			game._sync_3d_play_view()
+			_assert_false(grid.is_preview_valid("lamp", invalid), "lamp hover is invalid at %s" % invalid)
+			_assert_equal(_green_hex_cells(view).size(), 0, "invalid lamp hover paints no footprint at %s" % invalid)
+			if grid.is_inside(invalid):
+				_assert_equal(_live_hex(view, invalid).material_override, view._mat_hover_bad, "invalid in-map lamp hover stays red")
+
+		grid.hover_cell = hover
+		game._sync_3d_play_view()
+		grid.hover_cell = rock
+		grid.preview_tool = "dig"
+		game._sync_3d_play_view()
+		_assert_true(grid.is_preview_valid("dig", rock), "dig hover targets reachable rock")
+		_assert_equal(_green_hex_cells(view), [rock], "dig hover paints exactly one cell")
+		grid.preview_tool = "select"
+		game._sync_3d_play_view()
+		_assert_equal(_green_hex_cells(view).size(), 0, "select clears hover materials")
+		for cell: Vector2i in baseline:
+			_assert_equal(_live_hex(view, cell).material_override, baseline[cell], "select restores exact baseline at %s with overlay %s" % [cell, overlay])
+
+	_assert_equal(_lit_floor_cells(game), coverage_before, "hover preserves every coverage member")
+	_assert_equal(game.buildings, buildings_before, "hover preserves the buildings array")
+	_assert_equal(game.food_system.salvage, salvage_before, "hover preserves salvage")
+	_assert_equal(game.power_grid.supply, supply_before, "hover preserves power supply")
+	_assert_equal(game.power_grid.demand, demand_before, "hover preserves power demand")
+	var powered_after := []
+	for building: VaultBuilding in game.buildings:
+		powered_after.append(building.powered)
+	_assert_equal(powered_after, powered_before, "hover preserves fixture power allocation")
+	_dispose(game)
+
+
+func _green_hex_cells(view: MapView3D) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for child in view.hex_root.get_children():
+		if child is MeshInstance3D and not child.is_queued_for_deletion() and child.material_override == view._mat_hover_ok:
+			cells.append(view.map_grid.world_to_cell(Vector2(child.position.x, child.position.z)))
+	return cells
 
 
 func _test_live_lumen_materials() -> void:
