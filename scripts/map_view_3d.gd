@@ -206,8 +206,17 @@ func pick_cell(screen_pos: Vector2) -> Vector2i:
 	return map_grid.world_to_cell(screen_to_world_xz(screen_pos))
 
 
-func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding], show_hatch: bool, jobs: Array = []) -> void:
+func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding], show_hatch: bool, jobs: Array = [], breach_phase: BreachSystem.Phase = BreachSystem.Phase.DORMANT, patch_work_left: float = BreachSystem.PATCH_WORK_SECONDS) -> void:
 	_ensure_materials()
+	match breach_phase:
+		BreachSystem.Phase.DORMANT:
+			_mat_hatch.albedo_color = Color(0.75, 0.35, 0.28)
+		BreachSystem.Phase.SEALED:
+			_mat_hatch.albedo_color = Color("75D4B4")
+		BreachSystem.Phase.WARNING, BreachSystem.Phase.OPEN:
+			var progress := clampf(1.0 - patch_work_left / BreachSystem.PATCH_WORK_SECONDS, 0.0, 1.0)
+			var phase_color := Color("EFC56B") if breach_phase == BreachSystem.Phase.WARNING else Color("EF6860")
+			_mat_hatch.albedo_color = phase_color.lerp(Color("75D4B4"), progress)
 	var prop_root := get_node_or_null("PropRoot") as Node3D
 	if prop_root == null:
 		prop_root = Node3D.new()
