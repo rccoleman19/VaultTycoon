@@ -41,6 +41,8 @@ var _mat_zone: StandardMaterial3D
 var _mat_hover_ok: StandardMaterial3D
 var _mat_hover_bad: StandardMaterial3D
 var _mat_colonist: StandardMaterial3D
+var _mat_colonist_uneasy: StandardMaterial3D
+var _mat_colonist_break: StandardMaterial3D
 var _mat_colonist_selected: StandardMaterial3D
 var _mat_colonist_dead: StandardMaterial3D
 var _mat_hatch: StandardMaterial3D
@@ -87,6 +89,8 @@ func _ensure_materials() -> void:
 		_mat_hover_ok = _make_mat(Color(0.35, 0.85, 0.65))
 		_mat_hover_bad = _make_mat(Color(0.90, 0.30, 0.28))
 		_mat_colonist = _make_mat(Color(0.44, 0.78, 0.71))
+		_mat_colonist_uneasy = _make_mat(Color("a68462"))
+		_mat_colonist_break = _make_mat(Color("ef5a54"))
 		_mat_colonist_selected = _make_mat(Color(0.96, 0.78, 0.30))
 		_mat_colonist_dead = _make_mat(Color(0.38, 0.41, 0.42))
 		_mat_hatch = _make_mat(Color(0.75, 0.35, 0.28))
@@ -328,8 +332,12 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 			proxy.material_override = _mat_colonist_dead
 		elif resident.selected:
 			proxy.material_override = _mat_colonist_selected
-		else:
+		elif resident.needs.mood >= 70.0:
 			proxy.material_override = _mat_colonist
+		elif resident.needs.mood > ResidentNeeds.BREAK_MOOD_THRESHOLD:
+			proxy.material_override = _mat_colonist_uneasy
+		else:
+			proxy.material_override = _mat_colonist_break
 	for id: Variant in _resident_proxies.keys():
 		if live_residents.has(id):
 			continue
