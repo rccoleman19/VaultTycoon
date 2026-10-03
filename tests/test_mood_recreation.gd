@@ -15,6 +15,7 @@ func _init() -> void:
 
 func _run() -> void:
 	_run_case("mood rates, thresholds, and compatibility alias are deterministic", _test_mood_model)
+	_run_case("colonist mood bands preserve precedence, shared colors, and capsule identity", _test_colonist_mood_materials)
 	_run_case("rec console fixture and optional power priority match the contract", _test_console_power_contract)
 	_run_case("recreation thresholds and single-console capacity are exact", _test_recreation_thresholds_and_capacity)
 	_run_case("recreation requires a powered reachable console and cleans up", _test_recreation_availability_and_cleanup)
@@ -170,6 +171,63 @@ func _test_mood_model() -> void:
 	game.oxygen_system.oxygen = OxygenSystem.LOW_OXYGEN_THRESHOLD
 	game._simulation_step(VaultGame.SIMULATION_TICK)
 	_assert_approximately(game_resident.needs.mood, 99.895, 0.0002, "oxygen exactly thirty-five applies the low-oxygen modifier")
+	_dispose(game)
+
+
+func _test_colonist_mood_materials() -> void:
+	var game := _spawn_game()
+	var view := game.get_node("MapView3D") as MapView3D
+	for resident: VaultResident in game.residents:
+		resident.needs.mood = 80.0
+		resident.selected = false
+		resident.alive = true
+	var resident: VaultResident = game.residents[0]
+	resident.needs.mood = 70.0
+	view.sync_actors(game.residents, game.buildings, false, game.job_system.jobs)
+	var proxies := view._resident_proxies.duplicate()
+	var proxy := proxies[resident.resident_id] as MeshInstance3D
+	var steady_proxy := proxies[game.residents[1].resident_id] as MeshInstance3D
+	var cases := [
+		{"mood": 70.0, "selected": false, "alive": true, "material": view._mat_colonist, "color": Color(0.44, 0.78, 0.71)},
+		{"mood": 69.0, "selected": false, "alive": true, "material": view._mat_colonist_uneasy, "color": Color("a68462")},
+		{"mood": 9.0001, "selected": false, "alive": true, "material": view._mat_colonist_uneasy, "color": Color("a68462")},
+		{"mood": 9.0, "selected": false, "alive": true, "material": view._mat_colonist_break, "color": Color("ef5a54")},
+		{"mood": 20.0, "selected": true, "alive": true, "material": view._mat_colonist_selected, "color": Color(0.96, 0.78, 0.30)},
+		{"mood": 0.0, "selected": true, "alive": false, "material": view._mat_colonist_dead, "color": Color(0.38, 0.41, 0.42)},
+	]
+	for entry: Dictionary in cases:
+		resident.needs.mood = entry.mood
+		resident.selected = entry.selected
+		resident.alive = entry.alive
+		view.sync_actors(game.residents, game.buildings, false, game.job_system.jobs)
+		_assert_equal(proxy.material_override, entry.material, "mood %s selected %s alive %s uses its shared material" % [entry.mood, entry.selected, entry.alive])
+		_assert_equal((proxy.material_override as StandardMaterial3D).albedo_color, entry.color, "mood %s uses the exact band or precedence color" % entry.mood)
+		_assert_equal(resident.needs.mood, entry.mood, "actor sync preserves mood %s exactly" % entry.mood)
+
+	resident.alive = true
+	resident.selected = false
+	resident.needs.mood = 70.0
+	view.sync_actors(game.residents, game.buildings, false, game.job_system.jobs)
+	_assert_equal(proxy.material_override, view._mat_colonist, "living unselected resident returns to steady at seventy")
+	_assert_equal(resident.needs.mood, 70.0, "steady sync preserves the assigned mood")
+	resident.needs.mood = 69.0
+	for sync_index in 2:
+		view.sync_actors(game.residents, game.buildings, false, game.job_system.jobs)
+		_assert_equal(view._resident_proxies[resident.resident_id], proxy, "band change and repeated sync retain the same MeshInstance3D")
+		_assert_equal(proxy.material_override, view._mat_colonist_uneasy, "band change and repeated sync use shared uneasy material")
+		_assert_equal((proxy.material_override as StandardMaterial3D).albedo_color, Color("a68462"), "changed pill is uneasy")
+		_assert_equal(steady_proxy.material_override, view._mat_colonist, "different resident at eighty retains shared steady material")
+		_assert_equal(view._mat_colonist.albedo_color, Color(0.44, 0.78, 0.71), "steady shared material is never recolored")
+		var capsule_count := 0
+		for child: Node in view.actor_root.get_children():
+			if child is MeshInstance3D and child.mesh is CapsuleMesh:
+				capsule_count += 1
+		_assert_equal(capsule_count, game.residents.size(), "sync %d keeps exactly one colonist capsule per resident" % sync_index)
+		_assert_equal(view._resident_proxies.size(), game.residents.size(), "sync retains exactly one proxy entry per resident")
+		for index in game.residents.size():
+			var current: VaultResident = game.residents[index]
+			_assert_equal(view._resident_proxies[current.resident_id], proxies[current.resident_id], "every resident retains its original proxy")
+			_assert_equal(current.needs.mood, 69.0 if index == 0 else 80.0, "sync preserves every assigned mood")
 	_dispose(game)
 
 
