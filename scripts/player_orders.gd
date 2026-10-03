@@ -885,6 +885,65 @@ func _toggle_details_rail() -> void:
 
 
 func _primary_next_step() -> Dictionary:
+	var critical_resident := false
+	var mood_break_risk := false
+	var injured_without_reservation := false
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			continue
+		if resident.needs.food < 20.0 or resident.needs.rest < 15.0:
+			critical_resident = true
+		if resident.needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD:
+			mood_break_risk = true
+		if resident.needs.health < 100.0 and resident.medical_bed_id < 0:
+			injured_without_reservation = true
+	if critical_resident and game.food_system.meals < game.get_alive_count():
+		var completed_kitchens := game.get_completed_building_count(VaultBuilding.Kind.KITCHEN)
+		if completed_kitchens < 1:
+			return {
+				"text": "Next: YOU place a Nutrient Station · THEY cook",
+				"help": "Place and power a Nutrient Station so Cook can turn raw food into meals.",
+				"tool": "kitchen",
+			}
+		if completed_kitchens > 0 and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) == 0:
+			return {
+				"text": "Next: YOU power the Nutrient Station · THEY cook",
+				"help": "Power the Nutrient Station so Cook can run.",
+				"tool": "select",
+			}
+	if mood_break_risk and game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) < 1:
+		return {
+			"text": "Next: YOU place a Rec Console · THEY recover mood",
+			"help": "Place a Rec Console so crew can recover mood.",
+			"tool": "rec",
+		}
+	var free_medical := 0
+	for bed: VaultBuilding in game.buildings:
+		if bed.kind == VaultBuilding.Kind.MEDICAL_BED and bed.complete and not bed.manually_disabled and bed.reserved_by < 0:
+			free_medical += 1
+	if injured_without_reservation and free_medical == 0:
+		return {
+			"text": "Next: YOU place a Med Bed · THEY treat",
+			"help": "Place a Med Bed so the injured can be treated.",
+			"tool": "medical",
+		}
+	var residents_needing_bunks := 0
+	var occupied_bunks: Dictionary = {}
+	for resident: VaultResident in game.residents:
+		if resident.sleeping and resident.bed_id >= 0:
+			occupied_bunks[resident.bed_id] = true
+		if resident.alive and not resident.drafted and (resident.needs.rest <= 28.0 or (resident.sleeping and resident.bed_id < 0)):
+			residents_needing_bunks += 1
+	var free_bunks := 0
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.BED and building.complete and not occupied_bunks.has(building.building_id):
+			free_bunks += 1
+	if residents_needing_bunks > free_bunks:
+		return {
+			"text": "Next: YOU place bunks · THEY craft",
+			"help": "Place bunks so tired undrafted crew have a bed.",
+			"tool": "bed",
+		}
 	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
 	var floor_count := game.map_grid.get_floor_cells().size()
 	var dig_marks := game.map_grid.dig_marks.size()
