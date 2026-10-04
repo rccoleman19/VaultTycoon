@@ -149,7 +149,7 @@ func _test_returning_bed(middle_tool: String) -> void:
 	game.residents[0].needs.rest = 100.0
 	if middle_tool == "select":
 		var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
-		kitchen.powered = false
+		kitchen.manually_disabled = true
 		game.residents[0].needs.food = 19.0
 		game.food_system.meals = 0
 		_assert_equal(orders._primary_next_step()["text"], "Next: YOU power the Nutrient Station · THEY cook", "Select comes from the real power-kitchen step")
@@ -169,9 +169,10 @@ func _test_non_build_suggestions() -> void:
 	_dispose(game)
 	game = _healthy_game()
 	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
-	kitchen.powered = false
+	kitchen.manually_disabled = true
 	game.residents[0].needs.food = 19.0
 	game.food_system.meals = 0
+	_assert_equal(game.player_orders._primary_next_step()["text"], "Next: YOU power the Nutrient Station · THEY cook", "disabled kitchen suggests Select")
 	_refresh_and_assert(game, "select", "")
 	game.player_orders._set_architect_tab("dig")
 	_refresh_and_assert(game, "select", "dig")

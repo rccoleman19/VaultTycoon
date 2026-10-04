@@ -926,10 +926,21 @@ func _primary_next_step() -> Dictionary:
 				"tool": "kitchen",
 			}
 		if completed_kitchens > 0 and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) == 0:
+			var all_kitchens_disabled := true
+			for kitchen: VaultBuilding in game.buildings:
+				if kitchen.kind == VaultBuilding.Kind.KITCHEN and kitchen.complete and not kitchen.manually_disabled:
+					all_kitchens_disabled = false
+					break
+			if all_kitchens_disabled:
+				return {
+					"text": "Next: YOU power the Nutrient Station · THEY cook",
+					"help": "Power the Nutrient Station so Cook can run.",
+					"tool": "select",
+				}
 			return {
-				"text": "Next: YOU power the Nutrient Station · THEY cook",
-				"help": "Power the Nutrient Station so Cook can run.",
-				"tool": "select",
+				"text": "Next: YOU place a Charge Node · THEY power the kitchen",
+				"help": "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power.",
+				"tool": "generator",
 			}
 	if mood_break_risk and game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) < 1:
 		return {
