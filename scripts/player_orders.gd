@@ -975,6 +975,25 @@ func _primary_next_step() -> Dictionary:
 			"help": "Place bunks so tired undrafted crew have a bed.",
 			"tool": "bed",
 		}
+	if critical_resident and game.food_system.meals < game.get_alive_count() and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) >= 1:
+		if not _has_eligible_worker("cook"):
+			return {
+				"text": "Next: YOU enable Cook · THEY cook",
+				"tool": "select",
+				"help": "Enable Cook on a living, undrafted resident so the powered Nutrient Station can run.",
+			}
+		elif game.food_system.can_cook():
+			return {
+				"text": "Next: YOU leave Cook on · THEY cook",
+				"tool": "select",
+				"help": "Meals are short. The powered Nutrient Station can cook.",
+			}
+		else:
+			return {
+				"text": "Next: YOU leave Cook on · THEY cook",
+				"tool": "select",
+				"help": "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food.",
+			}
 	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
 	var floor_count := game.map_grid.get_floor_cells().size()
 	var dig_marks := game.map_grid.dig_marks.size()
