@@ -3,6 +3,8 @@ extends "res://tests/test_runner.gd"
 const DIG_NEXT := "Next: YOU mark rock [E] · THEY dig on Dig defaults"
 const KITCHEN_NEXT := "Next: YOU place a Nutrient Station · THEY cook"
 const POWER_NEXT := "Next: YOU power the Nutrient Station · THEY cook"
+const CHARGE_NEXT := "Next: YOU place a Charge Node · THEY power the kitchen"
+const CHARGE_HELP := "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power."
 const REC_NEXT := "Next: YOU place a Rec Console · THEY recover mood"
 const MED_NEXT := "Next: YOU place a Med Bed · THEY treat"
 const BUNK_NEXT := "Next: YOU place bunks · THEY craft"
@@ -15,6 +17,12 @@ func _init() -> void:
 func _run() -> void:
 	_test_interrupts_and_priority()
 	_test_kitchen_guards()
+	_test_enabled_kitchen_shed()
+	_test_disabled_kitchens()
+	_test_mixed_kitchen_power()
+	_test_unfinished_kitchens()
+	_test_powered_kitchen()
+	_test_existing_charge_node_insufficient()
 	_test_medical_availability()
 	_test_bunk_shortage()
 	_test_living_residents_only()
@@ -58,7 +66,7 @@ func _test_interrupts_and_priority() -> void:
 	resident.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
 	_assert_equal(game.player_orders._primary_next_step()["text"], KITCHEN_NEXT, "missing kitchen beats missing recreation")
 	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
-	kitchen.powered = false
+	kitchen.manually_disabled = true
 	_assert_step(game, POWER_NEXT, "select", "Power the Nutrient Station so Cook can run.")
 	_assert_equal(game.player_orders._primary_next_step()["text"], POWER_NEXT, "kitchen power beats recreation")
 	resident.needs.food = 100.0
@@ -102,6 +110,103 @@ func _test_kitchen_guards() -> void:
 	spare.powered = false
 	_assert_true(game.player_orders._primary_next_step()["text"] != POWER_NEXT, "offline spare does not interrupt a powered kitchen")
 	_assert_dig(game, "powered kitchen plus offline spare leaves the dig hint")
+	_dispose(game)
+
+
+func _critical_game() -> VaultGame:
+	var game := _healthy_game()
+	game.residents[0].needs.food = 19.0
+	game.food_system.meals = 0
+	return game
+
+
+func _test_enabled_kitchen_shed() -> void:
+	var game := _critical_game()
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	game.power_grid.recalculate(game.buildings)
+	_assert_equal(game.power_grid.supply, 2, "Emergency Core supplies two power")
+	_assert_equal(game.power_grid.served, 1, "starting Lumen consumes one power")
+	_assert_true(game.power_grid.is_building_shed(kitchen.building_id), "enabled kitchen is shed by starter grid")
+	_assert_step(game, CHARGE_NEXT, "generator", CHARGE_HELP)
+	_dispose(game)
+
+
+func _test_disabled_kitchens() -> void:
+	var game := _critical_game()
+	var first := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	var second := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(21, 12))
+	first.manually_disabled = true
+	second.manually_disabled = true
+	game.power_grid.recalculate(game.buildings)
+	_assert_step(game, POWER_NEXT, "select", "Power the Nutrient Station so Cook can run.")
+	first.manually_disabled = false
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(game.power_grid.is_building_shed(first.building_id), "reenabled kitchen is shed")
+	_assert_step(game, CHARGE_NEXT, "generator", CHARGE_HELP)
+	_dispose(game)
+
+
+func _test_mixed_kitchen_power() -> void:
+	var game := _critical_game()
+	var disabled := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	var enabled := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(21, 12))
+	disabled.manually_disabled = true
+	var starting_lumen: VaultBuilding
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.LAMP:
+			starting_lumen = building
+			starting_lumen.manually_disabled = true
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(enabled.powered, "starter grid powers enabled kitchen with Lumen disabled")
+	_assert_true(not disabled.powered, "disabled spare stays unpowered")
+	_assert_true(game.player_orders._primary_next_step()["text"] != POWER_NEXT, "powered kitchen skips Select power line")
+	_assert_true(game.player_orders._primary_next_step()["text"] != CHARGE_NEXT, "powered kitchen skips Charge Node power line")
+	_assert_dig(game, "powered kitchen with disabled spare leaves dig hint")
+	starting_lumen.manually_disabled = false
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(game.power_grid.is_building_shed(enabled.building_id), "Lumen demand sheds enabled kitchen beside disabled spare")
+	_assert_step(game, CHARGE_NEXT, "generator", CHARGE_HELP)
+	_dispose(game)
+
+
+func _test_unfinished_kitchens() -> void:
+	var game := _critical_game()
+	var completed := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	completed.manually_disabled = true
+	var unfinished := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(21, 12))
+	unfinished.complete = false
+	game.power_grid.recalculate(game.buildings)
+	_assert_step(game, POWER_NEXT, "select", "Power the Nutrient Station so Cook can run.")
+	completed.complete = false
+	game.power_grid.recalculate(game.buildings)
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.KITCHEN), 0, "unfinished kitchens do not count as completed")
+	_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
+	_dispose(game)
+
+
+func _test_powered_kitchen() -> void:
+	var game := _critical_game()
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(21, 12))
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(kitchen.powered, "recalculated grid powers the kitchen")
+	_assert_true(game.player_orders._primary_next_step()["text"] != POWER_NEXT, "powered kitchen skips Select power line")
+	_assert_true(game.player_orders._primary_next_step()["text"] != CHARGE_NEXT, "powered kitchen skips Charge Node power line")
+	_assert_dig(game, "powered kitchen leaves dig hint")
+	_dispose(game)
+
+
+func _test_existing_charge_node_insufficient() -> void:
+	var game := _critical_game()
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(21, 12))
+	# Three higher-priority Air Recyclers consume all nine available power.
+	for index in 3:
+		_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(22 + index, 12))
+	game.power_grid.recalculate(game.buildings)
+	_assert_equal(game.power_grid.supply, 9, "extra completed Charge Node adds seven power")
+	_assert_true(game.power_grid.is_building_shed(kitchen.building_id), "higher-priority demand sheds kitchen despite existing Charge Node")
+	_assert_step(game, CHARGE_NEXT, "generator", CHARGE_HELP)
 	_dispose(game)
 
 
