@@ -45,6 +45,8 @@ var architect_panel: Control
 var architect_tab_buttons: Dictionary = {}
 var architect_category_rows: Dictionary = {}
 var _architect_open_tab := ""
+var _last_processed_suggested_tool := ""
+var _has_processed_suggested_tool := false
 var tool_status: Label
 var checklist: RichTextLabel
 var briefing_overlay: Control
@@ -835,6 +837,7 @@ func refresh() -> void:
 			active_help = select_help
 	tool_status.text = "%s // %s" % [game.active_tool.to_upper(), active_help]
 	var suggested := str(step.get("tool", ""))
+	_open_suggested_tab(suggested)
 	for key: String in command_buttons:
 		var button: Button = command_buttons[key]
 		if key == game.active_tool:
@@ -874,6 +877,23 @@ func refresh() -> void:
 	_refresh_inspector()
 	_refresh_alerts()
 	_refresh_checklist()
+
+
+func _open_suggested_tab(suggested: String) -> void:
+	if (
+		game.tutorial_open
+		or is_help_open()
+		or game.ended
+		or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
+		or is_work_priorities_open()
+	):
+		return
+	if _has_processed_suggested_tool and suggested == _last_processed_suggested_tool:
+		return
+	_last_processed_suggested_tool = suggested
+	_has_processed_suggested_tool = true
+	if suggested in ["bed", "lamp", "generator", "grow", "kitchen", "air", "medical", "rec"]:
+		_set_architect_tab("build")
 
 
 func _toggle_details_rail() -> void:
