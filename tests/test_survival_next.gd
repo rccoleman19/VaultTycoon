@@ -2,6 +2,8 @@ extends "res://tests/test_runner.gd"
 
 const DIG_NEXT := "Next: YOU mark rock [E] · THEY dig on Dig defaults"
 const KITCHEN_NEXT := "Next: YOU place a Nutrient Station · THEY cook"
+const FINISH_NUTRIENT_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station"
+const FINISH_NUTRIENT_HELP := "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint."
 const POWER_NEXT := "Next: YOU power the Nutrient Station · THEY cook"
 const CHARGE_NEXT := "Next: YOU place a Charge Node · THEY power the kitchen"
 const CHARGE_HELP := "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power."
@@ -52,6 +54,8 @@ func _run() -> void:
 	_test_disabled_kitchens()
 	_test_mixed_kitchen_power()
 	_test_unfinished_kitchens()
+	_test_nutrient_finish_restore()
+	_test_progression_nutrient_finish()
 	_test_powered_kitchen()
 	_test_cook_ready()
 	_test_drafted_cooks()
@@ -265,14 +269,94 @@ func _test_unfinished_kitchens() -> void:
 	var game := _critical_game()
 	var completed := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
 	completed.manually_disabled = true
-	var unfinished := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(21, 12))
-	unfinished.complete = false
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.KITCHEN, Vector2i(21, 12)), "mixed kitchen case places unfinished blueprint")
 	game.power_grid.recalculate(game.buildings)
 	_assert_step(game, POWER_NEXT, "select", "Power the Nutrient Station so Cook can run.")
+	completed.manually_disabled = false
+	game.power_grid.recalculate(game.buildings)
+	_assert_step(game, CHARGE_NEXT, "generator", CHARGE_HELP)
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(22, 12))
+	game.power_grid.recalculate(game.buildings)
+	_assert_step(game, COOK_NEXT, "select", COOK_HELP)
+	for resident in game.residents:
+		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+	_assert_step(game, ENABLE_COOK_NEXT, "select", ENABLE_COOK_HELP)
 	completed.complete = false
 	game.power_grid.recalculate(game.buildings)
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.KITCHEN), 0, "unfinished kitchens do not count as completed")
+	_assert_step(game, FINISH_NUTRIENT_NEXT, "select", FINISH_NUTRIENT_HELP)
+	_dispose(game)
+
+
+func _test_nutrient_finish_restore() -> void:
+	var game := _critical_game()
 	_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.KITCHEN, Vector2i(20, 12)), "Kitchen blueprint can be placed")
+	var kitchen := game.get_building_at(Vector2i(20, 12))
+	_assert_false(kitchen.complete, "Kitchen blueprint starts unfinished")
+	_assert_equal(kitchen.delivered, 0, "Kitchen blueprint starts unsupplied")
+	_assert_step(game, FINISH_NUTRIENT_NEXT, "select", FINISH_NUTRIENT_HELP)
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "Nutrient finish refresh preserves active dig tool")
+	_assert_equal(game.player_orders.objective_label.text, FINISH_NUTRIENT_NEXT, "refresh displays Nutrient finish")
+	game.residents[0].needs.mood = 9.0
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(21, 12)), "Nutrient finish priority case has unfinished Rec")
+	_assert_step(game, FINISH_NUTRIENT_NEXT, "select", FINISH_NUTRIENT_HELP)
+	game.residents[0].needs.mood = 100.0
+	_assert_equal(kitchen.add_delivery(kitchen.get_cost()), kitchen.get_cost(), "Kitchen blueprint receives salvage cost")
+	_assert_true(kitchen.is_supplied(), "Kitchen blueprint fully supplied")
+	_assert_false(kitchen.complete, "supplied Kitchen still needs construction")
+	_assert_step(game, FINISH_NUTRIENT_NEXT, "select", FINISH_NUTRIENT_HELP)
+	game.active_tool = "cancel"
+	_assert_true(game.issue_order(Vector2i(20, 12)), "cancel removes unfinished Kitchen blueprint")
+	_assert_equal(game.get_building_at(Vector2i(20, 12)), null, "canceled Kitchen leaves no blueprint")
+	_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.KITCHEN, Vector2i(20, 12)), "Kitchen replaced after cancellation")
+	kitchen = game.get_building_at(Vector2i(20, 12))
+	_assert_equal(kitchen.add_delivery(kitchen.get_cost()), kitchen.get_cost(), "replacement Kitchen receives salvage")
+	_assert_true(kitchen.apply_build_work(kitchen.get_build_time()), "ordinary work completes Kitchen")
+	kitchen.manually_disabled = true
+	game.power_grid.recalculate(game.buildings)
+	_assert_step(game, POWER_NEXT, "select", "Power the Nutrient Station so Cook can run.")
+	kitchen.manually_disabled = false
+	game.power_grid.recalculate(game.buildings)
+	_assert_step(game, CHARGE_NEXT, "generator", CHARGE_HELP)
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(22, 12))
+	game.power_grid.recalculate(game.buildings)
+	_assert_step(game, COOK_NEXT, "select", COOK_HELP)
+	for resident in game.residents:
+		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+	_assert_step(game, ENABLE_COOK_NEXT, "select", ENABLE_COOK_HELP)
+	_dispose(game)
+
+
+func _test_progression_nutrient_finish() -> void:
+	var game := _progression_bunk_game()
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(20, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(21, 12))
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(22, 12))
+	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(23, 12))
+	game.power_grid.recalculate(game.buildings)
+	var place_next := "Next: YOU place Nutrient Station · THEY cook/haul"
+	var place_help := "Designate NUTRI, power it, leave Cook + Haul above OFF."
+	_assert_step(game, place_next, "kitchen", place_help)
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.KITCHEN, Vector2i(24, 12)), "progression Kitchen blueprint placed")
+	var kitchen := game.get_building_at(Vector2i(24, 12))
+	_assert_step(game, FINISH_NUTRIENT_NEXT, "select", FINISH_NUTRIENT_HELP)
+	_assert_equal(kitchen.add_delivery(kitchen.get_cost()), kitchen.get_cost(), "progression Kitchen supplied")
+	_assert_step(game, FINISH_NUTRIENT_NEXT, "select", FINISH_NUTRIENT_HELP)
+	game.active_tool = "cancel"
+	_assert_true(game.issue_order(Vector2i(24, 12)), "progression Kitchen canceled")
+	_assert_step(game, place_next, "kitchen", place_help)
+	var completed := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(24, 12))
+	completed.manually_disabled = true
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.KITCHEN, Vector2i(25, 12)), "progression completed Kitchen has unfinished spare")
+	game.power_grid.recalculate(game.buildings)
+	_assert_step(game, "Next: YOU power food chain · THEY cook/haul alone", "select", "Enable Grow + Nutrient power. Keep Cook/Haul above OFF so defaults keep working.")
+	completed.manually_disabled = false
+	game.power_grid.recalculate(game.buildings)
+	_assert_step(game, "Next: YOU place Air Recycler · THEY craft it", "air", "Designate AIR $14 and keep it powered (3). Craft auto-builds the blueprint.")
 	_dispose(game)
 
 

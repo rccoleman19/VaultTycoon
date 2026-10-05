@@ -920,6 +920,16 @@ func _primary_next_step() -> Dictionary:
 	if critical_resident and game.food_system.meals < game.get_alive_count():
 		var completed_kitchens := game.get_completed_building_count(VaultBuilding.Kind.KITCHEN)
 		if completed_kitchens < 1:
+			var unfinished_kitchens := 0
+			for kitchen: VaultBuilding in game.buildings:
+				if kitchen.kind == VaultBuilding.Kind.KITCHEN and not kitchen.complete:
+					unfinished_kitchens += 1
+			if unfinished_kitchens >= 1:
+				return {
+					"text": "Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station",
+					"help": "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint.",
+					"tool": "select",
+				}
 			return {
 				"text": "Next: YOU place a Nutrient Station · THEY cook",
 				"help": "Place and power a Nutrient Station so Cook can turn raw food into meals.",
@@ -1147,6 +1157,16 @@ func _primary_next_step() -> Dictionary:
 				"tool": "grow",
 			}
 		if game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) < 1:
+			var unfinished_kitchens := 0
+			for kitchen: VaultBuilding in game.buildings:
+				if kitchen.kind == VaultBuilding.Kind.KITCHEN and not kitchen.complete:
+					unfinished_kitchens += 1
+			if unfinished_kitchens >= 1:
+				return {
+					"text": "Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station",
+					"help": "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint.",
+					"tool": "select",
+				}
 			return {
 				"text": "Next: YOU place Nutrient Station · THEY cook/haul",
 				"help": "Designate NUTRI, power it, leave Cook + Haul above OFF.",
