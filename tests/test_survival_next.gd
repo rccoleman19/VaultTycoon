@@ -18,6 +18,10 @@ const FINISH_MED_HELP := "Keep Haul + Craft above OFF so crew supply and finish 
 const BUNK_NEXT := "Next: YOU place bunks · THEY craft"
 const FINISH_BUNK_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the bunks"
 const FINISH_BUNK_HELP := "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints."
+const PLACE_TWO_BUNKS_NEXT := "Next: YOU place 2 bunks · THEY craft from Craft"
+const PLACE_TWO_BUNKS_HELP := "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them."
+const PROGRESSION_CHARGE_NEXT := "Next: YOU place a Charge Node · THEY supply/build"
+const PROGRESSION_CHARGE_HELP := "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power."
 const ENABLE_COOK_NEXT := "Next: YOU enable Cook · THEY cook"
 const ENABLE_COOK_HELP := "Enable Cook on a living, undrafted resident so the powered Nutrient Station can run."
 const COOK_NEXT := "Next: YOU leave Cook on · THEY cook"
@@ -82,6 +86,11 @@ func _run() -> void:
 	_test_bunk_finish_guards()
 	_test_bunk_finish_priority()
 	_test_bunk_finish_before_food_work()
+	_test_progression_bunk_deficit()
+	_test_progression_bunk_finish_restore()
+	_test_progression_bunk_dig_priority()
+	_test_progression_bunk_crisis_priority()
+	_test_progression_bunk_after_food_work()
 	_test_living_residents_only()
 	print("Survival next tests: %d assertions, %d failures" % [_assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
@@ -99,6 +108,17 @@ func _healthy_game() -> VaultGame:
 		resident.sleeping = false
 		resident.bed_id = -1
 		resident.medical_bed_id = -1
+	return game
+
+
+func _progression_bunk_game() -> VaultGame:
+	var game := _healthy_game()
+	game.food_system.meals = game.get_alive_count()
+	for x in range(17, 29):
+		var cell := Vector2i(x, 10)
+		_assert_true(game.map_grid.queue_dig(cell), "progression fixture queues connected rock")
+		_assert_true(game.map_grid.apply_dig_work(cell, 8.0), "progression fixture carves floor")
+	_assert_equal(game.map_grid.get_floor_cells().size(), 132, "progression fixture clears the floor gate")
 	return game
 
 
@@ -1065,6 +1085,104 @@ func _test_bunk_finish_before_food_work() -> void:
 		_assert_true(bunk.apply_build_work(bunk.get_build_time()), "real construction resolves bunk shortage before food work")
 		_assert_step(game, expected, tool, help)
 		_dispose(game)
+
+
+func _test_progression_bunk_deficit() -> void:
+	# Completed bunks, unfinished bunks, expected recommendation.
+	for row in [[0, 0, PLACE_TWO_BUNKS_NEXT], [0, 1, PLACE_TWO_BUNKS_NEXT], [1, 0, PLACE_TWO_BUNKS_NEXT], [0, 2, FINISH_BUNK_NEXT], [1, 1, FINISH_BUNK_NEXT], [0, 3, FINISH_BUNK_NEXT], [2, 0, PROGRESSION_CHARGE_NEXT], [2, 1, PROGRESSION_CHARGE_NEXT]]:
+		var game := _progression_bunk_game()
+		for index in range(row[0]):
+			_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(17 + index, 10))
+		for index in range(row[1]):
+			_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(20 + index, 10)), "progression deficit case places a real bunk blueprint")
+		match row[2]:
+			PLACE_TWO_BUNKS_NEXT:
+				_assert_step(game, PLACE_TWO_BUNKS_NEXT, "bed", PLACE_TWO_BUNKS_HELP)
+			FINISH_BUNK_NEXT:
+				_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+			PROGRESSION_CHARGE_NEXT:
+				_assert_step(game, PROGRESSION_CHARGE_NEXT, "generator", PROGRESSION_CHARGE_HELP)
+		_dispose(game)
+
+
+func _test_progression_bunk_finish_restore() -> void:
+	var game := _progression_bunk_game()
+	for cell in [Vector2i(17, 10), Vector2i(18, 10)]:
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, cell), "progression restore places a real bunk blueprint")
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "progression finish refresh preserves dig")
+	_assert_equal(game.player_orders.objective_label.text, FINISH_BUNK_NEXT, "refresh displays progression bunk finish")
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "healthy progression finish has no bunk shortage alert")
+	game.player_orders._refresh_checklist()
+	_assert_true("[    ][/color]  Assemble at least 2 bunks" in game.player_orders.checklist.text, "two blueprints leave bunk checklist incomplete")
+	var first := game.get_building_at(Vector2i(17, 10))
+	_assert_equal(first.add_delivery(first.get_cost()), first.get_cost(), "first progression bunk receives salvage")
+	_assert_true(first.apply_build_work(first.get_build_time()), "real construction completes first progression bunk")
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	game.player_orders._refresh_checklist()
+	_assert_true("[    ][/color]  Assemble at least 2 bunks" in game.player_orders.checklist.text, "one completed bunk leaves checklist incomplete")
+	var second := game.get_building_at(Vector2i(18, 10))
+	_assert_equal(second.add_delivery(second.get_cost()), second.get_cost(), "second progression bunk receives salvage")
+	_assert_true(second.apply_build_work(second.get_build_time()), "real construction completes second progression bunk")
+	_assert_step(game, PROGRESSION_CHARGE_NEXT, "generator", PROGRESSION_CHARGE_HELP)
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "completed progression bunks preserve dig")
+	_assert_equal(game.player_orders.objective_label.text, PROGRESSION_CHARGE_NEXT, "refresh advances to progression Charge")
+	game.player_orders._refresh_checklist()
+	_assert_true("[DONE][/color]  Assemble at least 2 bunks" in game.player_orders.checklist.text, "two completed bunks complete checklist")
+	_dispose(game)
+
+
+func _test_progression_bunk_dig_priority() -> void:
+	var game := _healthy_game()
+	game.food_system.meals = game.get_alive_count()
+	for x in range(17, 28):
+		var cell := Vector2i(x, 10)
+		_assert_true(game.map_grid.queue_dig(cell), "dig priority case queues connected rock")
+		_assert_true(game.map_grid.apply_dig_work(cell, 8.0), "dig priority case carves floor")
+	_assert_equal(game.map_grid.get_floor_cells().size(), 131, "eleven carved cells leave floor gate incomplete")
+	for cell in [Vector2i(17, 10), Vector2i(18, 10)]:
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, cell), "dig priority case has covering bunk blueprints")
+	_assert_dig(game, "floor gate beats progression bunk finish")
+	_assert_true(game.map_grid.queue_dig(Vector2i(28, 10)), "twelfth cell can be queued")
+	_assert_true(game.map_grid.apply_dig_work(Vector2i(28, 10), 8.0), "twelfth cell completes floor gate")
+	_assert_equal(game.map_grid.get_floor_cells().size(), 132, "twelve carved cells clear floor gate")
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	_dispose(game)
+
+
+func _test_progression_bunk_crisis_priority() -> void:
+	var game := _progression_bunk_game()
+	for cell in [Vector2i(17, 10), Vector2i(18, 10)]:
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, cell), "crisis priority case has covering bunk blueprints")
+	game.residents[0].needs.rest = 28.0
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	game.player_orders.refresh()
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "tired resident triggers crisis shortage despite covering blueprints")
+	game.residents[0].needs.rest = 100.0
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	game.player_orders.refresh()
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "restored rest leaves progression finish without crisis alert")
+	_dispose(game)
+
+
+func _test_progression_bunk_after_food_work() -> void:
+	var game := _powered_critical_game()
+	for x in range(17, 29):
+		var cell := Vector2i(x, 10)
+		_assert_true(game.map_grid.queue_dig(cell), "food priority case queues connected rock")
+		_assert_true(game.map_grid.apply_dig_work(cell, 8.0), "food priority case carves floor")
+	_assert_equal(game.map_grid.get_floor_cells().size(), 132, "food priority case clears floor gate")
+	for cell in [Vector2i(17, 10), Vector2i(18, 10)]:
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, cell), "food priority case has covering progression bunk blueprints")
+	_assert_step(game, COOK_NEXT, "select", COOK_HELP)
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+	game.food_system.meals = game.get_alive_count()
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	_dispose(game)
 
 
 func _test_living_residents_only() -> void:

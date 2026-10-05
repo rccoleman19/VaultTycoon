@@ -1100,7 +1100,14 @@ func _primary_next_step() -> Dictionary:
 			"help": "Keep designating connected rock. They dig then haul rubble without draft. PRIORITIES [P] only to specialize.",
 			"tool": "dig",
 		}
-	if game.get_completed_building_count(VaultBuilding.Kind.BED) < 2:
+	var completed_bunks := game.get_completed_building_count(VaultBuilding.Kind.BED)
+	if completed_bunks < 2:
+		if unfinished_bunks >= (2 - completed_bunks):
+			return {
+				"text": "Next: YOU leave Haul + Craft on · THEY finish the bunks",
+				"tool": "select",
+				"help": "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints.",
+			}
 		return {
 			"text": "Next: YOU place 2 bunks · THEY craft from Craft",
 			"help": "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.",
