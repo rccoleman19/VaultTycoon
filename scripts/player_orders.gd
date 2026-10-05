@@ -970,6 +970,29 @@ func _primary_next_step() -> Dictionary:
 		if bed.kind == VaultBuilding.Kind.MEDICAL_BED and bed.complete and not bed.manually_disabled and bed.reserved_by < 0:
 			free_medical += 1
 	if injured_without_reservation and free_medical == 0:
+		var total_medical := 0
+		var completed_medical := 0
+		var enabled_completed_medical := 0
+		for bed: VaultBuilding in game.buildings:
+			if bed.kind != VaultBuilding.Kind.MEDICAL_BED:
+				continue
+			total_medical += 1
+			if bed.complete:
+				completed_medical += 1
+				if not bed.manually_disabled:
+					enabled_completed_medical += 1
+		if completed_medical > 0 and enabled_completed_medical == 0:
+			return {
+				"text": "Next: YOU enable a Med Bed · THEY treat",
+				"tool": "select",
+				"help": "Select a completed Med Bed and click ENABLE so the injured can be treated.",
+			}
+		if total_medical > 0 and completed_medical == 0:
+			return {
+				"text": "Next: YOU leave Haul + Craft on · THEY finish the Med Bed",
+				"tool": "select",
+				"help": "Keep Haul + Craft above OFF so crew supply and finish the Med Bed blueprint.",
+			}
 		return {
 			"text": "Next: YOU place a Med Bed · THEY treat",
 			"help": "Place a Med Bed so the injured can be treated.",

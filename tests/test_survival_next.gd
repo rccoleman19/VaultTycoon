@@ -11,6 +11,10 @@ const ENABLE_REC_HELP := "Select a completed Rec Console and click ENABLE so cre
 const REC_CHARGE_NEXT := "Next: YOU place a Charge Node · THEY power the Rec Console"
 const REC_CHARGE_HELP := "The grid lacks available power for the Rec Console. Place a Charge Node to add 7 power."
 const MED_NEXT := "Next: YOU place a Med Bed · THEY treat"
+const ENABLE_MED_NEXT := "Next: YOU enable a Med Bed · THEY treat"
+const ENABLE_MED_HELP := "Select a completed Med Bed and click ENABLE so the injured can be treated."
+const FINISH_MED_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the Med Bed"
+const FINISH_MED_HELP := "Keep Haul + Craft above OFF so crew supply and finish the Med Bed blueprint."
 const BUNK_NEXT := "Next: YOU place bunks · THEY craft"
 const ENABLE_COOK_NEXT := "Next: YOU enable Cook · THEY cook"
 const ENABLE_COOK_HELP := "Enable Cook on a living, undrafted resident so the powered Nutrient Station can run."
@@ -63,6 +67,12 @@ func _run() -> void:
 	_test_kitchen_before_offline_rec()
 	_test_offline_rec_priority()
 	_test_medical_availability()
+	_test_medical_finish_restore()
+	_test_medical_enable_restore()
+	_test_medical_mixed_fallbacks()
+	_test_medical_guards()
+	_test_medical_priority()
+	_test_medical_brownout()
 	_test_bunk_shortage()
 	_test_living_residents_only()
 	print("Survival next tests: %d assertions, %d failures" % [_assertion_count, _failure_count])
@@ -704,23 +714,161 @@ func _test_medical_availability() -> void:
 	var game := _healthy_game()
 	var resident: VaultResident = game.residents[0]
 	resident.needs.health = 99.0
+	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
 	var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12))
-	bed.complete = true
-	bed.manually_disabled = false
-	bed.reserved_by = -1
 	_assert_dig(game, "free usable medical bed avoids the medical interrupt")
-	bed.complete = false
-	_assert_equal(game.player_orders._primary_next_step()["text"], MED_NEXT, "unfinished medical bed is not usable")
-	bed.complete = true
 	bed.manually_disabled = true
-	_assert_equal(game.player_orders._primary_next_step()["text"], MED_NEXT, "disabled medical bed is not usable")
+	_assert_step(game, ENABLE_MED_NEXT, "select", ENABLE_MED_HELP)
 	bed.manually_disabled = false
+	_assert_dig(game, "enabling a completed medical bed restores free care")
 	bed.reserved_by = resident.resident_id
-	_assert_equal(game.player_orders._primary_next_step()["text"], MED_NEXT, "reserved medical bed is not free")
+	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
 	resident.medical_bed_id = bed.building_id
 	_assert_dig(game, "only injured resident already reserved does not request a med bed")
 	game.residents[1].needs.health = 99.0
-	_assert_equal(game.player_orders._primary_next_step()["text"], MED_NEXT, "another unreserved injured resident still needs a med bed")
+	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	_dispose(game)
+
+
+func _test_medical_finish_restore() -> void:
+	var game := _healthy_game()
+	game.residents[0].needs.health = 99.0
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12)), "Med Bed blueprint can be placed")
+	var bed := game.get_building_at(Vector2i(20, 12))
+	_assert_false(bed.complete, "Med Bed blueprint starts unfinished")
+	_assert_step(game, FINISH_MED_NEXT, "select", FINISH_MED_HELP)
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "Med finish refresh preserves active dig tool")
+	_assert_equal(game.player_orders.objective_label.text, FINISH_MED_NEXT, "refresh displays Med finish")
+	_assert_equal(bed.add_delivery(bed.get_cost()), bed.get_cost(), "Med blueprint receives its salvage cost")
+	_assert_true(bed.apply_build_work(bed.get_build_time()), "normal construction work completes Med blueprint")
+	_assert_dig(game, "finished free Med Bed suppresses medical Next")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, DIG_NEXT, "refresh clears resolved Med finish")
+	_assert_equal(game.active_tool, "dig", "resolved finish refresh preserves dig")
+	_dispose(game)
+
+
+func _test_medical_enable_restore() -> void:
+	var game := _healthy_game()
+	game.residents[0].needs.health = 99.0
+	var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12))
+	var spare := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(21, 12))
+	bed.manually_disabled = true
+	spare.manually_disabled = true
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, Vector2i(22, 12)), "enabled unfinished Med blueprint can be placed beside disabled beds")
+	_assert_false(game.get_building_at(Vector2i(22, 12)).manually_disabled, "unfinished Med blueprint is enabled")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.MEDICAL_BED), 2, "unfinished Med blueprint is excluded from completed count")
+	_assert_step(game, ENABLE_MED_NEXT, "select", ENABLE_MED_HELP)
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "Med enable refresh preserves active dig tool")
+	_assert_equal(game.player_orders.objective_label.text, ENABLE_MED_NEXT, "refresh displays Med enable")
+	bed.manually_disabled = false
+	_assert_dig(game, "free Med Bed suppresses medical Next beside disabled and unfinished beds")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, DIG_NEXT, "refresh clears resolved Med enable")
+	_assert_equal(game.active_tool, "dig", "resolved enable refresh preserves dig")
+	_dispose(game)
+
+
+func _test_medical_mixed_fallbacks() -> void:
+	var game := _healthy_game()
+	game.residents[0].needs.health = 99.0
+	var reserved := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12))
+	reserved.reserved_by = game.residents[1].resident_id
+	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, Vector2i(21, 12)), "unfinished Med blueprint can be placed beside reserved bed")
+	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	var spare := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(22, 12))
+	spare.manually_disabled = true
+	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	game.active_tool = "cancel"
+	_assert_true(game.issue_order(Vector2i(21, 12)), "cancel removes unfinished Med blueprint")
+	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	_dispose(game)
+
+
+func _test_medical_guards() -> void:
+	for unfinished in [false, true]:
+		var game := _healthy_game()
+		var resident: VaultResident = game.residents[0]
+		if unfinished:
+			_assert_true(game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12)), "guard case has Med blueprint")
+		else:
+			var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12))
+			bed.manually_disabled = true
+		_assert_dig(game, "health 100 suppresses Med enable/finish")
+		resident.needs.health = 99.0
+		_assert_step(game, FINISH_MED_NEXT if unfinished else ENABLE_MED_NEXT, "select", FINISH_MED_HELP if unfinished else ENABLE_MED_HELP)
+		resident.alive = false
+		_assert_dig(game, "dead injured resident suppresses Med enable/finish")
+		resident.alive = true
+		resident.medical_bed_id = game.get_building_at(Vector2i(20, 12)).building_id
+		_assert_dig(game, "reserved injured resident suppresses Med enable/finish")
+		_dispose(game)
+
+
+func _test_medical_priority() -> void:
+	for unfinished in [false, true]:
+		for lower_step in ["bunks", "haul", "enable_cook", "cook", "grow"]:
+			var game := _powered_critical_game()
+			var resident: VaultResident = game.residents[0]
+			var expected := COOK_NEXT
+			match lower_step:
+				"bunks":
+					game.food_system.meals = game.get_alive_count()
+					resident.needs.rest = 28.0
+					expected = BUNK_NEXT
+				"haul":
+					game.job_system.queue_meals(Vector2i(20, 12), 2)
+					for crew: VaultResident in game.residents:
+						crew.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+					expected = ENABLE_HAUL_NEXT
+				"enable_cook":
+					for crew: VaultResident in game.residents:
+						crew.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+					expected = ENABLE_COOK_NEXT
+				"grow":
+					game.food_system.raw_food = 0
+					expected = GROW_NEXT
+			_assert_equal(game.player_orders._primary_next_step()["text"], expected, "lower priority branch is ready before medical")
+			if unfinished:
+				_assert_true(game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, Vector2i(21, 12)), "priority case has Med blueprint")
+			else:
+				var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(21, 12))
+				bed.manually_disabled = true
+			resident.needs.health = 99.0
+			_assert_step(game, FINISH_MED_NEXT if unfinished else ENABLE_MED_NEXT, "select", FINISH_MED_HELP if unfinished else ENABLE_MED_HELP)
+			resident.needs.mood = 9.0
+			_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
+			var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(22, 12))
+			rec.manually_disabled = true
+			game.power_grid.recalculate(game.buildings)
+			_assert_offline_rec(game, true)
+			rec.manually_disabled = false
+			game.power_grid.recalculate(game.buildings)
+			_assert_offline_rec(game, false)
+			resident.needs.food = 19.0
+			game.food_system.meals = 0
+			var kitchen := game.get_building_at(Vector2i(20, 12))
+			kitchen.manually_disabled = true
+			game.power_grid.recalculate(game.buildings)
+			_assert_step(game, POWER_NEXT, "select", "Power the Nutrient Station so Cook can run.")
+			_dispose(game)
+
+
+func _test_medical_brownout() -> void:
+	var game := _healthy_game()
+	game.residents[0].needs.health = 99.0
+	var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12))
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(21, 12))
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(game.power_grid.demand > game.power_grid.supply, "medical suppression case has insufficient grid power")
+	_assert_true(game.power_grid.is_building_shed(kitchen.building_id), "real brownout sheds kitchen")
+	_assert_equal(bed.get_base_power_demand(), 0, "Med Bed uses zero power")
+	_assert_dig(game, "free Med Bed still suppresses medical Next during brownout")
 	_dispose(game)
 
 
