@@ -36,6 +36,8 @@ const AIR_CELL := Vector2i(18, 16)
 const DAY7 := ["Next: YOU designate needs · THEY hold Day 7", "Keep designating dig/build/stockpile. Defaults keep food, power, and air running.", "select"]
 # Exactly 30.0s observe-only under Day-7 tip after the O2 tick (#62 endpoint).
 const GROW_MEAL_OBSERVE := 30.0
+# Exactly 20.0s hold after player-like dig+zone under Day-7 tip.
+const DESIGNATE_HOLD := 20.0
 
 var _air: VaultBuilding
 var _air_placements := 0
@@ -108,10 +110,20 @@ var _haul_raw_proof := {"pickup": -1.0, "deposit": -1.0}
 var _grow_raw_jobs: Dictionary = {}
 var _meal_credit_count := 0
 var _meal_credit_timings: Array[String] = []
+# Day-7 designate dig+zone pressure (after Grow-meal observe).
+var _designate_dig_cell := Vector2i(-1, -1)
+var _designate_zone_cell := Vector2i(-1, -1)
+var _designate_hold_active := false
+var _designate_issued_elapsed := -1.0
+var _designate_dig_progress_elapsed := -1.0
+var _designate_dig_complete_elapsed := -1.0
+var _designate_haul_deposit_elapsed := -1.0
+var _designate_pre_salvage := -1
+var _designate_tip_left := ""
 
 
 func _run() -> void:
-	_run_case("Untouched Next-driven Dig + two opening bunks + Charge + crisis third bunk + powered Grow + Kitchen + Air to Day-7 tip and one O2 tick with natural seal by 80, then 30s Grow-derived meal observe", _walk)
+	_run_case("Untouched Next-driven Dig + two opening bunks + Charge + crisis third bunk + powered Grow + Kitchen + Air to Day-7 tip and one O2 tick with natural seal by 80, then 30s Grow-derived meal observe, then Day-7 dig+zone designate hold 20s", _walk)
 	print("FRESH WING AIR FINISH: %s — %d assertions, %d failures" % ["FAIL" if _failure_count else "PASS", _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -201,8 +213,17 @@ func _walk() -> void:
 			if not _observe_grow_derived_meal(game, originals, tool_before):
 				_dispose(game)
 				return
+			if _failure_count:
+				_diagnostics(game)
+				_dispose(game)
+				return
+			print("fresh-wing grow-derived-meal proof PASS: harvest@%.1fs count=%d; HAUL_RAW pickup@%.1fs deposit@%.1fs; Kitchen meal credits=%d timings=%s; meal stock deltas=%s; starting-raw alone cannot explain credit ≥5; not Day-7 victory / not Rec@9/9" % [_grow_harvest_elapsed, _grow_harvest_count, float(_haul_raw_proof.pickup), float(_haul_raw_proof.deposit), _meal_credit_count, str(_meal_credit_timings), str(_meal_stock_deltas)])
+			# Dig only after meal observe completes — player-like dig+zone under Day-7 tip.
+			if not _hold_day7_designate(game, originals):
+				_dispose(game)
+				return
 			if not _failure_count:
-				print("fresh-wing grow-derived-meal proof PASS: harvest@%.1fs count=%d; HAUL_RAW pickup@%.1fs deposit@%.1fs; Kitchen meal credits=%d timings=%s; meal stock deltas=%s; starting-raw alone cannot explain credit ≥5; not Day-7 victory / not Rec@9/9" % [_grow_harvest_elapsed, _grow_harvest_count, float(_haul_raw_proof.pickup), float(_haul_raw_proof.deposit), _meal_credit_count, str(_meal_credit_timings), str(_meal_stock_deltas)])
+				print("fresh-wing day7-designate PASS: issued@%.1fs dig=%s zone=%s; dig progress@%.1fs complete@%.1fs; haul deposit@%.1fs; hold end=%.1fs; tip_left=%s; SEALED; PWR 9/9; not Day-7 victory; Rec/bunk/medical allow-listed without acting" % [_designate_issued_elapsed, _designate_dig_cell, _designate_zone_cell, _designate_dig_progress_elapsed, _designate_dig_complete_elapsed, _designate_haul_deposit_elapsed, game.day_cycle.elapsed_seconds, _designate_tip_left if not _designate_tip_left.is_empty() else "Day-7 retained"])
 			else:
 				_diagnostics(game)
 			_dispose(game)
@@ -557,9 +578,11 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	if game.food_system.salvage + _uncredited_rubble(game) + paid != 48 + 3 * _excavated.size():
 		return _stop(game, "salvage conservation violation (bunk/Charge/Grow/Kitchen/Air deliveries + rubble/build/hatch cargo counted once)")
 	if _grow != null and _grow.delivered == 12:
-		_assert_equal(_grow_residual(game) + (_third_bunk.delivered if _third_bunk != null else 0) + _third_bunk_transit(game) + (_kitchen.delivered if _kitchen != null else 0) + _kitchen_transit(game) + (_air.delivered if _air != null else 0) + _air_transit(game), 38, "Grow-supplied residual: stock + rubble + hatch delivered/transit + third bunk delivered/transit + Kitchen delivered/transit + Air delivered/transit = 38")
+		# Opening digs are 12; Day-7 designate may add post-Air rubble (+3 each).
+		var extra_dig := 3 * maxi(0, _excavated.size() - 12)
+		_assert_equal(_grow_residual(game) + (_third_bunk.delivered if _third_bunk != null else 0) + _third_bunk_transit(game) + (_kitchen.delivered if _kitchen != null else 0) + _kitchen_transit(game) + (_air.delivered if _air != null else 0) + _air_transit(game), 38 + extra_dig, "Grow-supplied residual: stock + rubble + hatch delivered/transit + third bunk delivered/transit + Kitchen delivered/transit + Air delivered/transit = 38 (+3 per post-Air dig)")
 		if _third_bunk != null and _third_bunk.delivered == 8 and _kitchen != null and _kitchen.delivered == 10:
-			_assert_equal(_grow_residual(game) + (_air.delivered if _air != null else 0) + _air_transit(game), 20, "third bunk/Kitchen paid: residual + Air delivered/transit = 20")
+			_assert_equal(_grow_residual(game) + (_air.delivered if _air != null else 0) + _air_transit(game), 20 + extra_dig, "third bunk/Kitchen paid: residual + Air delivered/transit = 20 (+3 per post-Air dig)")
 	return _failure_count == 0
 
 
@@ -750,6 +773,11 @@ func _observe_inventory(game: VaultGame) -> void:
 				_latch_haul_raw("deposit", game)
 	_last_raw = raw
 	_last_meals = meals
+	if _designate_hold_active and game.food_system.salvage - _last_salvage == 3 and _designate_haul_deposit_elapsed < 0.0 and game.map_grid.stockpile_cells.has(_designate_zone_cell):
+		for resident in game.residents:
+			var job: Dictionary = game.job_system._find_job(resident.current_job_id)
+			if resident.current_job_type == JobSystem.JobType.HAUL_RUBBLE and resident.job_phase == "deposit" and resident.carrying == 3 and resident.get_cell(game.map_grid) == _designate_zone_cell and job.get("target", Vector2i(-1, -1)) == _designate_dig_cell and resident.alive and not resident.drafted and not resident.is_forced_job and resident.get_work_priority("haul") > 0:
+				_designate_haul_deposit_elapsed = game.day_cycle.elapsed_seconds
 	if game.food_system.salvage > _last_salvage:
 		var increase := game.food_system.salvage - _last_salvage
 		var evidenced := false
@@ -829,6 +857,133 @@ func _observe_grow_derived_meal(game: VaultGame, originals: Array[VaultResident]
 	return _failure_count == 0
 
 
+func _is_day7_designate_allowlisted(step: Dictionary) -> bool:
+	# Documented allow-list: Rec / bunk-finish / bunk-place / Med appear without acting.
+	var text := str(step.get("text", ""))
+	return text in [
+		"Next: YOU place a Rec Console · THEY recover mood",
+		"Next: YOU leave Haul + Craft on · THEY finish the Rec Console",
+		"Next: YOU enable a Rec Console · THEY recover mood",
+		"Next: YOU place bunks · THEY craft",
+		"Next: YOU leave Haul + Craft on · THEY finish the bunks",
+		"Next: YOU place 1 bunk · THEY craft from Craft",
+		"Next: YOU place 2 bunks · THEY craft from Craft",
+		"Next: YOU place a Med Bed · THEY treat",
+		"Next: YOU leave Haul + Craft on · THEY finish the Med Bed",
+		"Next: YOU enable a Med Bed · THEY treat",
+	]
+
+
+func _pick_day7_dig_zone(game: VaultGame, originals: Array[VaultResident]) -> void:
+	# Mirror post-seal intent: reachable empty floor beside connected rock, nearest dig-capable crew.
+	# Fresh-wing chain — not staged opening; choose after Grow-meal observe.
+	var best_distance := INF
+	_designate_dig_cell = Vector2i(-1, -1)
+	_designate_zone_cell = Vector2i(-1, -1)
+	for floor_cell in game.map_grid.get_floor_cells():
+		if floor_cell == BreachSystem.HATCH_CELL or game.get_building_at(floor_cell) != null or not game.map_grid.can_paint_stockpile(floor_cell):
+			continue
+		var occupied := false
+		for resident in originals:
+			occupied = occupied or resident.get_cell(game.map_grid) == floor_cell
+		if occupied:
+			continue
+		for rock_cell in game.map_grid.get_neighbors(floor_cell):
+			if game.map_grid.get_tile(rock_cell) != MapGrid.Tile.ROCK or not game.map_grid.can_queue_dig(rock_cell):
+				continue
+			if _excavated.has(rock_cell) or _designated.has(rock_cell):
+				continue
+			for resident in originals:
+				var path := game.map_grid.find_path(resident.get_cell(game.map_grid), floor_cell)
+				if resident.get_work_priority("dig") > 0 and not path.is_empty() and path.size() < best_distance:
+					best_distance = path.size()
+					_designate_dig_cell = rock_cell
+					_designate_zone_cell = floor_cell
+
+
+func _hold_day7_designate(game: VaultGame, originals: Array[VaultResident]) -> bool:
+	var tip_now: Dictionary = game.player_orders._primary_next_step()
+	_assert_equal([tip_now.text, tip_now.help, tip_now.tool], DAY7, "Day-7 designate tip present before dig+zone")
+	_assert_true(game.breach_system.is_sealed(), "hatch SEALED before designate hold")
+	_assert_equal(game.power_grid.supply, 9, "PWR supply 9 before designate")
+	_assert_equal(game.power_grid.served, 9, "PWR served 9 before designate")
+	_assert_equal(game.power_grid.demand, 9, "PWR demand 9 before designate")
+	_assert_equal(_open_count, 0, "zero OPEN before designate")
+	_assert_false(game.day_cycle.completed, "not Day-7 victory before designate")
+	_assert_equal(game.map_grid.dig_marks.size(), 0, "no pending digs before Day-7 designate")
+	_assert_equal(game.map_grid.stockpile_cells.size(), 0, "no painted zones before Day-7 designate")
+	_pick_day7_dig_zone(game, originals)
+	_assert_true(_designate_dig_cell != Vector2i(-1, -1) and _designate_zone_cell != Vector2i(-1, -1), "reachable rock/floor pair for Day-7 dig and zone")
+	if _failure_count:
+		_diagnostics(game)
+		return false
+	_designate_pre_salvage = game.food_system.salvage
+	_designate_hold_active = true
+	_designated[_designate_dig_cell] = true
+	game.set_tool("dig")
+	var dig_issued := game.issue_order(_designate_dig_cell)
+	game.set_tool("zone")
+	var zone_issued := game.issue_order(_designate_zone_cell)
+	game.set_tool("select")
+	_assert_true(dig_issued and game.map_grid.dig_marks.has(_designate_dig_cell), "player-like dig order accepted under Day-7 tip")
+	_assert_true(zone_issued and game.map_grid.stockpile_cells.has(_designate_zone_cell), "player-like zone order accepted under Day-7 tip")
+	_designate_issued_elapsed = game.day_cycle.elapsed_seconds
+	if _failure_count:
+		_designate_hold_active = false
+		_diagnostics(game)
+		return false
+	var hold_start: float = game.day_cycle.elapsed_seconds
+	var hold_ticks := int(round(DESIGNATE_HOLD / VaultGame.SIMULATION_TICK))
+	_assert_equal(hold_ticks, 200, "exactly 20.0s = 200 ticks at 0.1s")
+	for _index in hold_ticks:
+		if not _check_state(game, originals):
+			_designate_hold_active = false
+			return false
+		if not _check_intermediate_drain(game, originals):
+			_designate_hold_active = false
+			return false
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		# Latch dig progress/complete on the designated rock.
+		if _designate_dig_progress_elapsed < 0.0 and float(game.map_grid.dig_progress.get(_designate_dig_cell, 0.0)) > 0.0:
+			_designate_dig_progress_elapsed = game.day_cycle.elapsed_seconds
+		if _designate_dig_complete_elapsed < 0.0 and game.map_grid.get_tile(_designate_dig_cell) == MapGrid.Tile.FLOOR:
+			_designate_dig_complete_elapsed = game.day_cycle.elapsed_seconds
+			if _designate_dig_progress_elapsed < 0.0:
+				_designate_dig_progress_elapsed = _designate_dig_complete_elapsed
+		var step: Dictionary = game.player_orders._primary_next_step()
+		var tip := [step.text, step.help, step.tool]
+		if tip != DAY7 and _designate_tip_left.is_empty():
+			_designate_tip_left = str(tip)
+			# Do not act on Rec/bunk-finish/medical — continue; fail only if dig/haul miss.
+	_designate_hold_active = false
+	_assert_approximately(game.day_cycle.elapsed_seconds, hold_start + DESIGNATE_HOLD, 0.00001, "exactly 20.0s Day-7 designate hold")
+	_assert_true(game.breach_system.is_sealed(), "hatch SEALED after designate hold")
+	_assert_equal(game.power_grid.supply, 9, "PWR supply 9 after designate")
+	_assert_equal(game.power_grid.served, 9, "PWR served 9 after designate")
+	_assert_equal(game.power_grid.demand, 9, "PWR demand 9 after designate")
+	_assert_equal(_open_count, 0, "zero OPEN after designate")
+	_assert_false(game.day_cycle.completed, "not Day-7 victory after designate hold")
+	_assert_false(game.ended, "game remains running after designate hold")
+	var end_tip: Dictionary = game.player_orders._primary_next_step()
+	var end_tuple := [end_tip.text, end_tip.help, end_tip.tool]
+	var dig_hauled := _designate_dig_progress_elapsed >= 0.0 or _designate_dig_complete_elapsed >= 0.0
+	dig_hauled = dig_hauled and _designate_haul_deposit_elapsed >= 0.0
+	if end_tuple != DAY7:
+		if not dig_hauled:
+			if _designate_dig_progress_elapsed < 0.0 and _designate_dig_complete_elapsed < 0.0:
+				return _stop(game, "Day-7 tip left during designate hold before dig progress (%s); dig/haul miss" % _designate_tip_left)
+			return _stop(game, "Day-7 tip left during designate hold before haul deposit (%s); dig/haul miss" % _designate_tip_left)
+		_assert_true(_is_day7_designate_allowlisted(end_tip), "after dig/haul success, tip must stay Day-7 or allow-listed Rec/bunk/medical without acting; got %s" % str(end_tuple))
+	else:
+		_assert_equal(end_tuple, DAY7, "Day-7 designate tip retained through hold")
+	_assert_equal(game.active_tool, "select", "select restored after designate orders")
+	_assert_true(_designate_dig_progress_elapsed >= 0.0 or _designate_dig_complete_elapsed >= 0.0, "≥1 dig progress or complete on designated rock (progress@%.1f complete@%.1f)" % [_designate_dig_progress_elapsed, _designate_dig_complete_elapsed])
+	_assert_true(_designate_haul_deposit_elapsed >= 0.0, "≥1 ordinary undrafted salvage/zone haul deposit from designated dig")
+	_assert_true(_designate_dig_complete_elapsed >= 0.0, "designated dig completed rock→floor for haul evidence")
+	_assert_false(game.map_grid.dig_marks.has(_designate_dig_cell), "completed designate dig mark cleared")
+	return _failure_count == 0
+
+
 func _latch_meal(stage: String, game: VaultGame) -> void:
 	if float(_meal_proof[stage]) < 0.0:
 		_meal_proof[stage] = game.day_cycle.elapsed_seconds
@@ -872,6 +1027,7 @@ func _stop(game: VaultGame, reason: String) -> bool:
 func _diagnostics(game: VaultGame) -> void:
 	printerr("fresh-wing stocked-meal proof: elapsed=%.1fs timings=%s raw=%d meals=%d pending Kitchen=%d Kitchen cargo jobs=%s meal stock deltas=%s" % [game.day_cycle.elapsed_seconds, str(_meal_proof), game.food_system.raw_food, game.food_system.meals, game.job_system.get_pending_meals_at(KITCHEN_CELL), str(_kitchen_meal_jobs), str(_meal_stock_deltas)])
 	printerr("fresh-wing grow-derived-meal: harvest@%.1fs count=%d; HAUL_RAW=%s; meal credits=%d timings=%s; pending raw@Grow=%d" % [_grow_harvest_elapsed, _grow_harvest_count, str(_haul_raw_proof), _meal_credit_count, str(_meal_credit_timings), game.job_system.get_pending_raw_food_at(GROW_CELL)])
+	printerr("fresh-wing day7-designate: issued@%.1fs dig=%s zone=%s; progress@%.1fs complete@%.1fs haul@%.1fs; tip_left=%s; salvage pre=%d now=%d" % [_designate_issued_elapsed, _designate_dig_cell, _designate_zone_cell, _designate_dig_progress_elapsed, _designate_dig_complete_elapsed, _designate_haul_deposit_elapsed, _designate_tip_left, _designate_pre_salvage, game.food_system.salvage])
 	printerr("Fresh wing FAIL: tick=%d elapsed=%.1fs salvage=%d rubble=%d dug=%d/12 bunks=%d min food=%.3f min rest=%.3f" % [_tick, game.day_cycle.elapsed_seconds, game.food_system.salvage, _uncredited_rubble(game), _excavated.size(), game.get_completed_building_count(VaultBuilding.Kind.BED), _min_food, _min_rest])
 	printerr("Charge tip=%.1f complete=%.1f Grow tip=%.1f WARNING Resume=%s warnings=%d opens=%d breach=%s power=%d" % [_charge_tip_elapsed, _charge_complete_elapsed, _grow_tip_elapsed, _warning_resumed, _warning_count, _open_count, str(game.breach_system.serialize()), game.power_grid.supply])
 	printerr("Grow tip=%.1f complete=%.1f Nutrient tip=%.1f" % [_grow_tip_elapsed, _grow_complete_elapsed, _nutrient_tip_elapsed])
