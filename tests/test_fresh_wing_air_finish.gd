@@ -38,6 +38,11 @@ const DAY7 := ["Next: YOU designate needs · THEY hold Day 7", "Keep designating
 const GROW_MEAL_OBSERVE := 30.0
 # Exactly 20.0s hold after player-like dig+zone under Day-7 tip.
 const DESIGNATE_HOLD := 20.0
+# Exactly 50.0s from post-designate start for Rec dig+place+finish (shed).
+const REC_HOLD := 50.0
+const REC_PLACE := ["Next: YOU place a Rec Console · THEY recover mood", "Place a Rec Console so crew can recover mood.", "rec"]
+const FINISH_REC := ["Next: YOU leave Haul + Craft on · THEY finish the Rec Console", "Keep Haul + Craft above OFF so crew supply and finish the Rec Console blueprint.", "select"]
+const CHARGE_FOR_REC := ["Next: YOU place a Charge Node · THEY power the Rec Console", "The grid lacks available power for the Rec Console. Place a Charge Node to add 7 power.", "generator"]
 
 var _air: VaultBuilding
 var _air_placements := 0
@@ -120,10 +125,27 @@ var _designate_dig_complete_elapsed := -1.0
 var _designate_haul_deposit_elapsed := -1.0
 var _designate_pre_salvage := -1
 var _designate_tip_left := ""
+# Rec place+finish (unpowered/shed) after designate.
+var _rec: VaultBuilding
+var _rec_placements := 0
+var _rec_supplied := false
+var _rec_craft_claimed := false
+var _rec_crafted := false
+var _rec_tip_elapsed := -1.0
+var _rec_dig_issued_elapsed := -1.0
+var _rec_dig_complete_elapsed := -1.0
+var _rec_placed_elapsed := -1.0
+var _rec_first_delivery_elapsed := -1.0
+var _rec_delivered8_elapsed := -1.0
+var _rec_complete_elapsed := -1.0
+var _rec_charge_tip_elapsed := -1.0
+var _rec_dig_cell := Vector2i(-1, -1)
+var _rec_cell := Vector2i(-1, -1)
+var _rec_hold_active := false
 
 
 func _run() -> void:
-	_run_case("Untouched Next-driven Dig + two opening bunks + Charge + crisis third bunk + powered Grow + Kitchen + Air to Day-7 tip and one O2 tick with natural seal by 80, then 30s Grow-derived meal observe, then Day-7 dig+zone designate hold 20s", _walk)
+	_run_case("Untouched Next-driven Dig + two opening bunks + Charge + crisis third bunk + powered Grow + Kitchen + Air to Day-7 tip and one O2 tick with natural seal by 80, then 30s Grow-derived meal observe, then Day-7 dig+zone designate hold 20s, then Rec place+finish shed to Charge-for-Rec", _walk)
 	print("FRESH WING AIR FINISH: %s — %d assertions, %d failures" % ["FAIL" if _failure_count else "PASS", _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -222,8 +244,16 @@ func _walk() -> void:
 			if not _hold_day7_designate(game, originals):
 				_dispose(game)
 				return
+			if _failure_count:
+				_diagnostics(game)
+				_dispose(game)
+				return
+			print("fresh-wing day7-designate PASS: issued@%.1fs dig=%s zone=%s; dig progress@%.1fs complete@%.1fs; haul deposit@%.1fs; hold end=%.1fs; tip_left=%s; SEALED; PWR 9/9; not Day-7 victory; Rec/bunk/medical allow-listed without acting" % [_designate_issued_elapsed, _designate_dig_cell, _designate_zone_cell, _designate_dig_progress_elapsed, _designate_dig_complete_elapsed, _designate_haul_deposit_elapsed, game.day_cycle.elapsed_seconds, _designate_tip_left if not _designate_tip_left.is_empty() else "Day-7 retained"])
+			if not _hold_rec_place(game, originals):
+				_dispose(game)
+				return
 			if not _failure_count:
-				print("fresh-wing day7-designate PASS: issued@%.1fs dig=%s zone=%s; dig progress@%.1fs complete@%.1fs; haul deposit@%.1fs; hold end=%.1fs; tip_left=%s; SEALED; PWR 9/9; not Day-7 victory; Rec/bunk/medical allow-listed without acting" % [_designate_issued_elapsed, _designate_dig_cell, _designate_zone_cell, _designate_dig_progress_elapsed, _designate_dig_complete_elapsed, _designate_haul_deposit_elapsed, game.day_cycle.elapsed_seconds, _designate_tip_left if not _designate_tip_left.is_empty() else "Day-7 retained"])
+				print("fresh-wing rec-place PASS: Rec tip@%.1fs dig issued@%.1fs dig complete@%.1fs placed@%.1fs cell=%s first delivery@%.1fs delivered8@%.1fs complete@%.1fs Charge-for-Rec@%.1fs hold end=%.1fs; PWR supply=%d demand=%d served=%d shed=%d; Rec powered=%s; SEALED; not Day-7 victory; not powered mood recovery / not Rec@9/9; Charge not placed" % [_rec_tip_elapsed, _rec_dig_issued_elapsed, _rec_dig_complete_elapsed, _rec_placed_elapsed, _rec_cell, _rec_first_delivery_elapsed, _rec_delivered8_elapsed, _rec_complete_elapsed, _rec_charge_tip_elapsed, game.day_cycle.elapsed_seconds, game.power_grid.supply, game.power_grid.demand, game.power_grid.served, game.power_grid.shed_demand, _rec.powered if _rec != null else false])
 			else:
 				_diagnostics(game)
 			_dispose(game)
@@ -473,11 +503,19 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	if _seal_elapsed >= 0.0 and not game.breach_system.is_sealed():
 		return _stop(game, "post-seal path must stay SEALED")
 	if game.power_grid.brownout_active:
-		return _stop(game, "power shedding forbidden")
+		# Rec-only OPTIONAL shed is expected after Rec completes on 9-supply grid.
+		var rec_only_shed := _rec != null and _rec.complete and not _rec.powered and not _rec.manually_disabled and game.power_grid.is_building_shed(_rec.building_id) and game.power_grid.shed_demand == 1 and game.power_grid.shed_count == 1
+		if not rec_only_shed:
+			return _stop(game, "power shedding forbidden (non-Rec or multi-shed)")
 	if _kitchen != null and _kitchen.complete and (not _kitchen.powered or _kitchen.manually_disabled):
 		return _stop(game, "completed Kitchen must stay powered/enabled")
 	if _air != null and _air.complete:
-		if not _air.powered or _air.manually_disabled or game.power_grid.supply != 9 or game.power_grid.demand != 9 or game.power_grid.served != 9:
+		if not _air.powered or _air.manually_disabled:
+			return _stop(game, "completed Air must stay powered/enabled")
+		if _rec != null and _rec.complete:
+			if game.power_grid.supply != 9 or game.power_grid.demand != 10 or game.power_grid.served != 9:
+				return _stop(game, "after Rec complete expect PWR supply=9 demand=10 served=9 (Rec shed)")
+		elif game.power_grid.supply != 9 or game.power_grid.demand != 9 or game.power_grid.served != 9:
 			return _stop(game, "completed Air must stay powered/enabled with PWR supply=demand=served=9")
 	if _grow != null and _grow.complete and (not _grow.powered or _grow.manually_disabled):
 		return _stop(game, "completed Grow must stay powered/enabled")
@@ -498,8 +536,8 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	for starter in _starters:
 		if not game.buildings.has(starter) or not starter.complete or starter.manually_disabled or (starter.kind == VaultBuilding.Kind.LAMP and not starter.powered):
 			return _stop(game, "starter Core/Lumen/Bay not retained/enabled or Lumen unpowered")
-	var expected_buildings := _starters.size() + _bunks.size() + (1 if _charge != null else 0) + (1 if _grow != null else 0) + (1 if _kitchen != null else 0) + (1 if _air != null else 0)
-	if game.buildings.size() != expected_buildings or _bunks.size() > 3 or _charge_placements > 1 or _grow_placements > 1 or _kitchen_placements > 1 or _air_placements > 1:
+	var expected_buildings := _starters.size() + _bunks.size() + (1 if _charge != null else 0) + (1 if _grow != null else 0) + (1 if _kitchen != null else 0) + (1 if _air != null else 0) + (1 if _rec != null else 0)
+	if game.buildings.size() != expected_buildings or _bunks.size() > 3 or _charge_placements > 1 or _grow_placements > 1 or _kitchen_placements > 1 or _air_placements > 1 or _rec_placements > 1:
 		return _stop(game, "unexpected/duplicate construction")
 	if _third_bunk != null and (_grow == null or _third_bunk_elapsed < _grow_tip_elapsed or _bunks.size() != 3 or not game.buildings.has(_third_bunk)):
 		return _stop(game, "third bunk without prior Grow or missing third blueprint")
@@ -512,6 +550,7 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	var grows := 0
 	var kitchens := 0
 	var airs := 0
+	var recs := 0
 	for building in game.buildings:
 		if building.kind == VaultBuilding.Kind.KITCHEN:
 			kitchens += 1
@@ -519,12 +558,16 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 			airs += 1
 		if building.kind == VaultBuilding.Kind.GROW_TRAY:
 			grows += 1
+		if building.kind == VaultBuilding.Kind.RECREATION_CONSOLE:
+			recs += 1
 	if grows != _grow_placements or (_grow != null and not game.buildings.has(_grow)):
 		return _stop(game, "missing/duplicate Grow")
 	if kitchens != _kitchen_placements or (_kitchen != null and not game.buildings.has(_kitchen)):
 		return _stop(game, "missing/duplicate Kitchen")
 	if airs != _air_placements or (_air != null and not game.buildings.has(_air)):
 		return _stop(game, "missing/duplicate Air")
+	if recs != _rec_placements or (_rec != null and not game.buildings.has(_rec)):
+		return _stop(game, "missing/duplicate Rec")
 	var paid := game.breach_system.patch_delivered
 	for bunk in _bunks:
 		paid += bunk.delivered
@@ -536,13 +579,15 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 		paid += _kitchen.delivered
 	if _air != null:
 		paid += _air.delivered
+	if _rec != null:
+		paid += _rec.delivered
 	for resident in game.residents:
 		if resident.is_forced_job:
 			return _stop(game, "forced work forbidden")
 		if resident.current_job_type in [JobSystem.JobType.SUPPLY_BUILD, JobSystem.JobType.BUILD]:
 			var job: Dictionary = game.job_system._find_job(resident.current_job_id)
 			var building := game.get_building_by_id(int(job.get("building_id", -1)))
-			if building not in _bunks and building != _charge and building != _grow and building != _kitchen and building != _air:
+			if building not in _bunks and building != _charge and building != _grow and building != _kitchen and building != _air and building != _rec:
 				return _stop(game, "supply/Craft targets unexpected building")
 			var work := "haul" if resident.current_job_type == JobSystem.JobType.SUPPLY_BUILD else "craft"
 			if resident.is_forced_job or resident.get_work_priority(work) <= 0:
@@ -557,6 +602,10 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 					_charge_supplied = true
 				if building == _grow and resident.carrying == 12 and int(job.get("in_transit", 0)) == 12:
 					_grow_supplied = true
+				if building == _rec and resident.carrying > 0 and int(job.get("in_transit", 0)) == resident.carrying:
+					_rec_supplied = true
+					if _rec_first_delivery_elapsed < 0.0 and _rec.delivered > 0:
+						_rec_first_delivery_elapsed = game.day_cycle.elapsed_seconds
 			elif building == _air and _air.delivered == 14:
 				_air_craft_claimed = true
 			elif building == _kitchen and _kitchen.delivered == 10:
@@ -565,6 +614,8 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 				_grow_craft_claimed = true
 			elif building == _charge and _charge.delivered == 18:
 				_charge_craft_claimed = true
+			elif building == _rec and _rec.delivered == 8:
+				_rec_craft_claimed = true
 		elif resident.current_job_type in [JobSystem.JobType.SUPPLY_BREACH, JobSystem.JobType.PATCH_BREACH]:
 			var work := "haul" if resident.current_job_type == JobSystem.JobType.SUPPLY_BREACH else "craft"
 			if resident.get_work_priority(work) <= 0:
@@ -580,9 +631,10 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	if _grow != null and _grow.delivered == 12:
 		# Opening digs are 12; Day-7 designate may add post-Air rubble (+3 each).
 		var extra_dig := 3 * maxi(0, _excavated.size() - 12)
-		_assert_equal(_grow_residual(game) + (_third_bunk.delivered if _third_bunk != null else 0) + _third_bunk_transit(game) + (_kitchen.delivered if _kitchen != null else 0) + _kitchen_transit(game) + (_air.delivered if _air != null else 0) + _air_transit(game), 38 + extra_dig, "Grow-supplied residual: stock + rubble + hatch delivered/transit + third bunk delivered/transit + Kitchen delivered/transit + Air delivered/transit = 38 (+3 per post-Air dig)")
+		var rec_paid := (_rec.delivered if _rec != null else 0) + _rec_transit(game)
+		_assert_equal(_grow_residual(game) + (_third_bunk.delivered if _third_bunk != null else 0) + _third_bunk_transit(game) + (_kitchen.delivered if _kitchen != null else 0) + _kitchen_transit(game) + (_air.delivered if _air != null else 0) + _air_transit(game) + rec_paid, 38 + extra_dig, "Grow-supplied residual + Rec paid = 38 (+3 per post-Air dig)")
 		if _third_bunk != null and _third_bunk.delivered == 8 and _kitchen != null and _kitchen.delivered == 10:
-			_assert_equal(_grow_residual(game) + (_air.delivered if _air != null else 0) + _air_transit(game), 20 + extra_dig, "third bunk/Kitchen paid: residual + Air delivered/transit = 20 (+3 per post-Air dig)")
+			_assert_equal(_grow_residual(game) + (_air.delivered if _air != null else 0) + _air_transit(game) + rec_paid, 20 + extra_dig, "third bunk/Kitchen paid + Rec: residual + Air + Rec = 20 (+3 per post-Air dig)")
 	return _failure_count == 0
 
 
@@ -857,6 +909,196 @@ func _observe_grow_derived_meal(game: VaultGame, originals: Array[VaultResident]
 	return _failure_count == 0
 
 
+func _rec_transit(game: VaultGame) -> int:
+	var amount := 0
+	if _rec != null:
+		for job: Dictionary in game.job_system.jobs:
+			if int(job.type) == JobSystem.JobType.SUPPLY_BUILD and not bool(job.done) and int(job.get("building_id", -1)) == _rec.building_id:
+				amount += int(job.get("in_transit", 0))
+	return amount
+
+
+func _pick_rec_dig_cell(game: VaultGame, originals: Array[VaultResident]) -> Vector2i:
+	var best := Vector2i(-1, -1)
+	var best_distance := INF
+	for floor_cell in game.map_grid.get_floor_cells():
+		if floor_cell == BreachSystem.HATCH_CELL or game.get_building_at(floor_cell) != null:
+			continue
+		for rock_cell in game.map_grid.get_neighbors(floor_cell):
+			if game.map_grid.get_tile(rock_cell) != MapGrid.Tile.ROCK or not game.map_grid.can_queue_dig(rock_cell):
+				continue
+			if _excavated.has(rock_cell) or _designated.has(rock_cell) or game.map_grid.dig_marks.has(rock_cell):
+				continue
+			for resident in originals:
+				var path := game.map_grid.find_path(resident.get_cell(game.map_grid), floor_cell)
+				if resident.get_work_priority("dig") > 0 and not path.is_empty() and path.size() < best_distance:
+					best_distance = path.size()
+					best = rock_cell
+	return best
+
+
+func _pick_rec_cell(game: VaultGame, originals: Array[VaultResident]) -> Vector2i:
+	var blocked: Dictionary = {}
+	for building in game.buildings:
+		blocked[building.cell] = true
+	blocked[BreachSystem.HATCH_CELL] = true
+	var best := Vector2i(-1, -1)
+	var best_score := -INF
+	for floor_cell in game.map_grid.get_floor_cells():
+		if blocked.has(floor_cell) or game.get_building_at(floor_cell) != null:
+			continue
+		if not game.map_grid.is_walkable(floor_cell):
+			continue
+		var reachable := false
+		var near := INF
+		for resident in originals:
+			var path := game.map_grid.find_path(resident.get_cell(game.map_grid), floor_cell)
+			if not path.is_empty():
+				reachable = true
+				near = minf(near, float(path.size()))
+		if not reachable:
+			continue
+		var lit := 1.0 if game.lighting_system.is_cell_lit(floor_cell) else 0.0
+		var score := lit * 1000.0 - near
+		if score > best_score:
+			best_score = score
+			best = floor_cell
+	return best
+
+
+func _tip_tuple(step: Dictionary) -> Array:
+	return [step.text, step.help, step.tool]
+
+
+func _hold_rec_place(game: VaultGame, originals: Array[VaultResident]) -> bool:
+	var hold_start: float = game.day_cycle.elapsed_seconds
+	var hold_ticks := int(round(REC_HOLD / VaultGame.SIMULATION_TICK))
+	_assert_equal(hold_ticks, 500, "exactly 50.0s = 500 ticks at 0.1s")
+	_assert_true(game.breach_system.is_sealed(), "SEALED before Rec hold")
+	_assert_equal(_open_count, 0, "zero OPEN before Rec hold")
+	_assert_false(game.day_cycle.completed, "not Day-7 victory before Rec hold")
+	_rec_hold_active = true
+	var dig_issued := false
+	var rec_placed := false
+	for _index in hold_ticks:
+		if not _check_state(game, originals):
+			_rec_hold_active = false
+			return false
+		if not _check_intermediate_drain(game, originals):
+			_rec_hold_active = false
+			return false
+		var step: Dictionary = game.player_orders._primary_next_step()
+		var tip := _tip_tuple(step)
+		# Never place Charge — refuse even if tip asks.
+		if tip == CHARGE_FOR_REC or str(step.text).begins_with("Next: YOU place a Charge Node"):
+			if _rec != null and _rec.complete and _rec_charge_tip_elapsed < 0.0:
+				_rec_charge_tip_elapsed = game.day_cycle.elapsed_seconds
+			# Do not act on Charge.
+		elif tip == REC_PLACE:
+			if _rec_tip_elapsed < 0.0:
+				_rec_tip_elapsed = game.day_cycle.elapsed_seconds
+			# Dig until salvage+rubble can finish Rec cost 8, then place.
+			var available := game.food_system.salvage + _uncredited_rubble(game)
+			if not dig_issued and available < 8:
+				_rec_dig_cell = _pick_rec_dig_cell(game, originals)
+				_assert_true(_rec_dig_cell != Vector2i(-1, -1), "reachable rock for Rec salvage dig")
+				if _failure_count:
+					_rec_hold_active = false
+					_diagnostics(game)
+					return false
+				_designated[_rec_dig_cell] = true
+				game.set_tool("dig")
+				var ok := game.issue_order(_rec_dig_cell)
+				game.set_tool("select")
+				_assert_true(ok and game.map_grid.dig_marks.has(_rec_dig_cell), "player-like Rec salvage dig accepted")
+				_rec_dig_issued_elapsed = game.day_cycle.elapsed_seconds
+				dig_issued = true
+				if _failure_count:
+					_rec_hold_active = false
+					_diagnostics(game)
+					return false
+			elif not rec_placed and available >= 8:
+				_rec_cell = _pick_rec_cell(game, originals)
+				_assert_true(_rec_cell != Vector2i(-1, -1), "reachable floor for Rec Console")
+				if _failure_count:
+					_rec_hold_active = false
+					_diagnostics(game)
+					return false
+				_assert_true(game.place_blueprint(VaultBuilding.Kind.RECREATION_CONSOLE, _rec_cell), "place Rec Console blueprint")
+				_rec = game.get_building_at(_rec_cell)
+				_rec_placements = 1
+				_rec_placed_elapsed = game.day_cycle.elapsed_seconds
+				rec_placed = true
+				_assert_true(_rec != null and not _rec.complete and _rec.get_cost() == 8, "incomplete Rec blueprint costing 8")
+				if _failure_count:
+					_rec_hold_active = false
+					_diagnostics(game)
+					return false
+		elif tip == FINISH_REC:
+			# Wait — no dig/Charge acts while finishing.
+			if _rec_tip_elapsed < 0.0:
+				_rec_tip_elapsed = game.day_cycle.elapsed_seconds
+		elif tip == DAY7:
+			# Allow brief Day-7 until Rec returns; do not dig-act as Day-7 here.
+			pass
+		elif _is_day7_designate_allowlisted(step) and tip != REC_PLACE:
+			# Bunk/medical allow-list without acting (Rec place handled above).
+			pass
+		else:
+			# Unexpected tip — keep simulating; success asserts will catch miss.
+			pass
+		# Track dig complete / deliveries / craft before stepping.
+		if dig_issued and _rec_dig_complete_elapsed < 0.0 and game.map_grid.get_tile(_rec_dig_cell) == MapGrid.Tile.FLOOR:
+			_rec_dig_complete_elapsed = game.day_cycle.elapsed_seconds
+		if _rec != null:
+			if _rec_first_delivery_elapsed < 0.0 and _rec.delivered > 0:
+				_rec_first_delivery_elapsed = game.day_cycle.elapsed_seconds
+			if _rec_delivered8_elapsed < 0.0 and _rec.delivered >= 8:
+				_rec_delivered8_elapsed = game.day_cycle.elapsed_seconds
+			var work_before := _rec.construction_left
+			game.step_simulation(VaultGame.SIMULATION_TICK)
+			if _rec.construction_left < work_before and _rec.delivered == 8:
+				_rec_crafted = true
+			if _rec.complete and _rec_complete_elapsed < 0.0:
+				_rec_complete_elapsed = game.day_cycle.elapsed_seconds
+		else:
+			game.step_simulation(VaultGame.SIMULATION_TICK)
+		# After step, detect Charge-for-Rec.
+		var after: Dictionary = game.player_orders._primary_next_step()
+		if _tip_tuple(after) == CHARGE_FOR_REC and _rec_charge_tip_elapsed < 0.0 and _rec != null and _rec.complete:
+			_rec_charge_tip_elapsed = game.day_cycle.elapsed_seconds
+	_rec_hold_active = false
+	_assert_approximately(game.day_cycle.elapsed_seconds, hold_start + REC_HOLD, 0.00001, "exactly 50.0s Rec hold")
+	_assert_true(_rec_tip_elapsed >= 0.0, "Rec place tip seen during hold")
+	_assert_true(_rec != null and _rec_placements == 1, "exactly one Rec placed")
+	_assert_true(_rec.complete and _rec.delivered == 8 and _rec.construction_left <= 0.0, "Rec complete with delivered==8")
+	_assert_false(_rec.manually_disabled, "Rec not manually disabled")
+	_assert_true(_rec_supplied or _rec.delivered == 8, "ordinary Rec supply evidenced")
+	_assert_true(_rec_crafted or _rec_craft_claimed, "ordinary Rec Craft evidenced")
+	_assert_false(_rec.powered, "Rec unpowered/shed under 9-supply grid")
+	_assert_true(game.power_grid.is_building_shed(_rec.building_id), "Rec identified as shed")
+	_assert_equal(game.power_grid.supply, 9, "life-support supply remains 9")
+	_assert_equal(game.power_grid.demand, 10, "demand includes Rec 10")
+	_assert_equal(game.power_grid.served, 9, "served remains 9 with Rec shed")
+	_assert_equal(game.power_grid.shed_demand, 1, "exactly 1 shed demand (Rec)")
+	_assert_true(_kitchen.powered and _grow.powered and _air.powered, "life support retained powered")
+	_assert_true(_rec_charge_tip_elapsed >= 0.0, "Charge-for-Rec tip observed after Rec complete (shed diagnosis)")
+	var end_tip := _tip_tuple(game.player_orders._primary_next_step())
+	# Mood may rise above break after Rec completes, returning Day-7; Charge tip must have been seen.
+	_assert_true(end_tip == CHARGE_FOR_REC or end_tip == DAY7 or _is_day7_designate_allowlisted(game.player_orders._primary_next_step()), "end tip Charge-for-Rec, Day-7, or allow-listed without acting; got %s" % str(end_tip))
+	_assert_true(end_tip != ["Next: YOU place a Charge Node · THEY supply/build", "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.", "generator"], "must not be generic progression Charge tip")
+	_assert_true(game.breach_system.is_sealed(), "SEALED after Rec hold")
+	_assert_equal(_open_count, 0, "zero OPEN after Rec hold")
+	_assert_false(game.day_cycle.completed, "not Day-7 victory after Rec hold")
+	_assert_false(game.ended, "game remains running")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true), 1, "no second Charge placed (only Core+existing Charge counts non-core separately)")
+	# Existing non-core Charge from wing remains 1; do not place another.
+	_assert_equal(_charge_placements, 1, "exactly one Charge from wing opening; Rec path placed none")
+	if _failure_count:
+		_diagnostics(game)
+	return _failure_count == 0
+
+
 func _is_day7_designate_allowlisted(step: Dictionary) -> bool:
 	# Documented allow-list: Rec / bunk-finish / bunk-place / Med appear without acting.
 	var text := str(step.get("text", ""))
@@ -1028,6 +1270,7 @@ func _diagnostics(game: VaultGame) -> void:
 	printerr("fresh-wing stocked-meal proof: elapsed=%.1fs timings=%s raw=%d meals=%d pending Kitchen=%d Kitchen cargo jobs=%s meal stock deltas=%s" % [game.day_cycle.elapsed_seconds, str(_meal_proof), game.food_system.raw_food, game.food_system.meals, game.job_system.get_pending_meals_at(KITCHEN_CELL), str(_kitchen_meal_jobs), str(_meal_stock_deltas)])
 	printerr("fresh-wing grow-derived-meal: harvest@%.1fs count=%d; HAUL_RAW=%s; meal credits=%d timings=%s; pending raw@Grow=%d" % [_grow_harvest_elapsed, _grow_harvest_count, str(_haul_raw_proof), _meal_credit_count, str(_meal_credit_timings), game.job_system.get_pending_raw_food_at(GROW_CELL)])
 	printerr("fresh-wing day7-designate: issued@%.1fs dig=%s zone=%s; progress@%.1fs complete@%.1fs haul@%.1fs; tip_left=%s; salvage pre=%d now=%d" % [_designate_issued_elapsed, _designate_dig_cell, _designate_zone_cell, _designate_dig_progress_elapsed, _designate_dig_complete_elapsed, _designate_haul_deposit_elapsed, _designate_tip_left, _designate_pre_salvage, game.food_system.salvage])
+	printerr("fresh-wing rec-place: tip@%.1fs dig@%.1fs/%s complete@%.1fs placed@%.1fs/%s first@%.1fs d8@%.1fs done@%.1fs charge_tip@%.1fs; delivered=%d complete=%s powered=%s; salvage=%d rubble=%d; tip=%s; PWR %d/%d served=%d shed=%d" % [_rec_tip_elapsed, _rec_dig_issued_elapsed, _rec_dig_cell, _rec_dig_complete_elapsed, _rec_placed_elapsed, _rec_cell, _rec_first_delivery_elapsed, _rec_delivered8_elapsed, _rec_complete_elapsed, _rec_charge_tip_elapsed, _rec.delivered if _rec != null else -1, _rec.complete if _rec != null else false, _rec.powered if _rec != null else false, game.food_system.salvage, _uncredited_rubble(game), str(game.player_orders._primary_next_step()), game.power_grid.supply, game.power_grid.demand, game.power_grid.served, game.power_grid.shed_demand])
 	printerr("Fresh wing FAIL: tick=%d elapsed=%.1fs salvage=%d rubble=%d dug=%d/12 bunks=%d min food=%.3f min rest=%.3f" % [_tick, game.day_cycle.elapsed_seconds, game.food_system.salvage, _uncredited_rubble(game), _excavated.size(), game.get_completed_building_count(VaultBuilding.Kind.BED), _min_food, _min_rest])
 	printerr("Charge tip=%.1f complete=%.1f Grow tip=%.1f WARNING Resume=%s warnings=%d opens=%d breach=%s power=%d" % [_charge_tip_elapsed, _charge_complete_elapsed, _grow_tip_elapsed, _warning_resumed, _warning_count, _open_count, str(game.breach_system.serialize()), game.power_grid.supply])
 	printerr("Grow tip=%.1f complete=%.1f Nutrient tip=%.1f" % [_grow_tip_elapsed, _grow_complete_elapsed, _nutrient_tip_elapsed])
