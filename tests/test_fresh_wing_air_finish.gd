@@ -125,6 +125,10 @@ var _designate_dig_complete_elapsed := -1.0
 var _designate_haul_deposit_elapsed := -1.0
 var _designate_pre_salvage := -1
 var _designate_tip_left := ""
+var _designate_tip_left_elapsed := -1.0
+# Explicit raw/meal ledger counters (whole walk).
+var _cook_withdrawals := 0
+var _grow_raw_deposited := 0
 # Rec place+finish (unpowered/shed) after designate.
 var _rec: VaultBuilding
 var _rec_placements := 0
@@ -239,7 +243,7 @@ func _walk() -> void:
 				_diagnostics(game)
 				_dispose(game)
 				return
-			print("fresh-wing grow-derived-meal proof PASS: harvest@%.1fs count=%d; HAUL_RAW pickup@%.1fs deposit@%.1fs; Kitchen meal credits=%d timings=%s; meal stock deltas=%s; starting-raw alone cannot explain credit ≥5; not Day-7 victory / not Rec@9/9" % [_grow_harvest_elapsed, _grow_harvest_count, float(_haul_raw_proof.pickup), float(_haul_raw_proof.deposit), _meal_credit_count, str(_meal_credit_timings), str(_meal_stock_deltas)])
+			print("fresh-wing grow-derived-meal proof PASS: harvest@%.1fs count=%d; HAUL_RAW pickup@%.1fs deposit@%.1fs; Kitchen meal credits=%d cook withdrawals=%d Grow raw deposited=%d timings=%s; meal stock deltas=%s; starting-raw alone cannot explain credit ≥5; not Day-7 victory / not Rec@9/9" % [_grow_harvest_elapsed, _grow_harvest_count, float(_haul_raw_proof.pickup), float(_haul_raw_proof.deposit), _meal_credit_count, _cook_withdrawals, _grow_raw_deposited, str(_meal_credit_timings), str(_meal_stock_deltas)])
 			# Dig only after meal observe completes — player-like dig+zone under Day-7 tip.
 			if not _hold_day7_designate(game, originals):
 				_dispose(game)
@@ -248,7 +252,7 @@ func _walk() -> void:
 				_diagnostics(game)
 				_dispose(game)
 				return
-			print("fresh-wing day7-designate PASS: issued@%.1fs dig=%s zone=%s; dig progress@%.1fs complete@%.1fs; haul deposit@%.1fs; hold end=%.1fs; tip_left=%s; SEALED; PWR 9/9; not Day-7 victory; Rec/bunk/medical allow-listed without acting" % [_designate_issued_elapsed, _designate_dig_cell, _designate_zone_cell, _designate_dig_progress_elapsed, _designate_dig_complete_elapsed, _designate_haul_deposit_elapsed, game.day_cycle.elapsed_seconds, _designate_tip_left if not _designate_tip_left.is_empty() else "Day-7 retained"])
+			print("fresh-wing day7-designate PASS: issued@%.1fs dig=%s zone=%s; dig progress@%.1fs complete@%.1fs; haul deposit@%.1fs; hold end=%.1fs; tip_left=%s@%.1fs; SEALED; PWR 9/9; not Day-7 victory; Rec/bunk/medical allow-listed without acting" % [_designate_issued_elapsed, _designate_dig_cell, _designate_zone_cell, _designate_dig_progress_elapsed, _designate_dig_complete_elapsed, _designate_haul_deposit_elapsed, game.day_cycle.elapsed_seconds, _designate_tip_left if not _designate_tip_left.is_empty() else "Day-7 retained", _designate_tip_left_elapsed])
 			if not _hold_rec_place(game, originals):
 				_dispose(game)
 				return
@@ -804,9 +808,13 @@ func _observe_inventory(game: VaultGame) -> void:
 	var raw: int = game.food_system.raw_food
 	var meals: int = game.food_system.meals
 	if _last_raw - raw == FoodSystem.COOK_INPUT:
+		var cook_seen := false
 		for resident in game.residents:
 			if _is_kitchen_cook(game, resident) and resident.state == "Preparing meals" and resident.work_accumulator >= 4.0:
 				_latch_meal("raw_withdraw", game)
+				cook_seen = true
+		if cook_seen:
+			_cook_withdrawals += 1
 	if meals != _last_meals:
 		_meal_stock_deltas.append("%.1fs %d->%d" % [game.day_cycle.elapsed_seconds, _last_meals, meals])
 	if meals > _last_meals and float(_meal_proof.raw_withdraw) >= 0.0:
@@ -823,6 +831,7 @@ func _observe_inventory(game: VaultGame) -> void:
 			var job: Dictionary = game.job_system._find_job(resident.current_job_id)
 			if _is_grow_raw_carrier(resident, job) and _grow_raw_jobs.has(int(job.id)) and raw - _last_raw == int(job.in_transit):
 				_latch_haul_raw("deposit", game)
+				_grow_raw_deposited += raw - _last_raw
 	_last_raw = raw
 	_last_meals = meals
 	if _designate_hold_active and game.food_system.salvage - _last_salvage == 3 and _designate_haul_deposit_elapsed < 0.0 and game.map_grid.stockpile_cells.has(_designate_zone_cell):
@@ -900,7 +909,11 @@ func _observe_grow_derived_meal(game: VaultGame, originals: Array[VaultResident]
 	_assert_true(float(_haul_raw_proof.pickup) >= 0.0 and float(_haul_raw_proof.deposit) >= 0.0, "grow-derived meal: ordinary HAUL_RAW pickup/deposit from Grow cargo latched")
 	_assert_true(float(_haul_raw_proof.pickup) <= float(_haul_raw_proof.deposit), "grow-derived meal: HAUL_RAW pickup before deposit")
 	_assert_true(_meal_credit_count >= 5, "grow-derived meal: ≥5 Kitchen HAUL_MEAL stock credits (got %d; timings=%s)" % [_meal_credit_count, str(_meal_credit_timings)])
+	_assert_equal(FoodSystem.COOK_INPUT, 1, "grow-derived meal proof assumes COOK_INPUT == 1")
+	_assert_equal(FoodSystem.COOK_OUTPUT, 1, "grow-derived meal proof assumes COOK_OUTPUT == 1")
 	_assert_true(_meal_credit_count > FoodSystem.STARTING_RAW_FOOD, "grow-derived meal: credit count %d > starting raw %d so 5th cannot be starting-raw alone" % [_meal_credit_count, FoodSystem.STARTING_RAW_FOOD])
+	_assert_true(_cook_withdrawals >= _meal_credit_count, "grow-derived meal ledger: Kitchen cook raw withdrawals %d >= meal credits %d" % [_cook_withdrawals, _meal_credit_count])
+	_assert_true(_grow_raw_deposited >= _meal_credit_count - FoodSystem.STARTING_RAW_FOOD, "grow-derived meal ledger: Grow raw deposited %d >= credits %d - starting raw %d" % [_grow_raw_deposited, _meal_credit_count, FoodSystem.STARTING_RAW_FOOD])
 	_assert_true(_grow.complete and _grow.powered and not _grow.manually_disabled, "Grow still powered after observe")
 	_assert_true(_kitchen.complete and _kitchen.powered, "Kitchen still powered after observe")
 	_assert_true(_air.complete and _air.powered, "Air still powered after observe")
@@ -990,7 +1003,7 @@ func _hold_rec_place(game: VaultGame, originals: Array[VaultResident]) -> bool:
 		var step: Dictionary = game.player_orders._primary_next_step()
 		var tip := _tip_tuple(step)
 		# Never place Charge — refuse even if tip asks.
-		if tip == CHARGE_FOR_REC or str(step.text).begins_with("Next: YOU place a Charge Node"):
+		if tip == CHARGE_FOR_REC:
 			if _rec != null and _rec.complete and _rec_charge_tip_elapsed < 0.0:
 				_rec_charge_tip_elapsed = game.day_cycle.elapsed_seconds
 			# Do not act on Charge.
@@ -1070,10 +1083,12 @@ func _hold_rec_place(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	_rec_hold_active = false
 	_assert_approximately(game.day_cycle.elapsed_seconds, hold_start + REC_HOLD, 0.00001, "exactly 50.0s Rec hold")
 	_assert_true(_rec_tip_elapsed >= 0.0, "Rec place tip seen during hold")
+	if _rec == null or _rec_placements != 1:
+		return _stop(game, "Rec missing after place window (placements=%d)" % _rec_placements)
 	_assert_true(_rec != null and _rec_placements == 1, "exactly one Rec placed")
 	_assert_true(_rec.complete and _rec.delivered == 8 and _rec.construction_left <= 0.0, "Rec complete with delivered==8")
 	_assert_false(_rec.manually_disabled, "Rec not manually disabled")
-	_assert_true(_rec_supplied or _rec.delivered == 8, "ordinary Rec supply evidenced")
+	_assert_true(_rec_supplied, "ordinary undrafted Haul supply to Rec observed")
 	_assert_true(_rec_crafted or _rec_craft_claimed, "ordinary Rec Craft evidenced")
 	_assert_false(_rec.powered, "Rec unpowered/shed under 9-supply grid")
 	_assert_true(game.power_grid.is_building_shed(_rec.building_id), "Rec identified as shed")
@@ -1085,7 +1100,7 @@ func _hold_rec_place(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	_assert_true(_rec_charge_tip_elapsed >= 0.0, "Charge-for-Rec tip observed after Rec complete (shed diagnosis)")
 	var end_tip := _tip_tuple(game.player_orders._primary_next_step())
 	# Mood may rise above break after Rec completes, returning Day-7; Charge tip must have been seen.
-	_assert_true(end_tip == CHARGE_FOR_REC or end_tip == DAY7 or _is_day7_designate_allowlisted(game.player_orders._primary_next_step()), "end tip Charge-for-Rec, Day-7, or allow-listed without acting; got %s" % str(end_tip))
+	_assert_true(end_tip == CHARGE_FOR_REC or end_tip == DAY7, "end tip Charge-for-Rec or Day-7 only; got %s" % str(end_tip))
 	_assert_true(end_tip != ["Next: YOU place a Charge Node · THEY supply/build", "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.", "generator"], "must not be generic progression Charge tip")
 	_assert_true(game.breach_system.is_sealed(), "SEALED after Rec hold")
 	_assert_equal(_open_count, 0, "zero OPEN after Rec hold")
@@ -1196,6 +1211,10 @@ func _hold_day7_designate(game: VaultGame, originals: Array[VaultResident]) -> b
 		var tip := [step.text, step.help, step.tool]
 		if tip != DAY7 and _designate_tip_left.is_empty():
 			_designate_tip_left = str(tip)
+			_designate_tip_left_elapsed = game.day_cycle.elapsed_seconds
+			if _designate_haul_deposit_elapsed < 0.0 or _designate_tip_left_elapsed < _designate_haul_deposit_elapsed:
+				_designate_hold_active = false
+				return _stop(game, "Day-7 tip left at %.1fs before designate haul deposit (%.1fs): %s" % [_designate_tip_left_elapsed, _designate_haul_deposit_elapsed, _designate_tip_left])
 			# Do not act on Rec/bunk-finish/medical — continue; fail only if dig/haul miss.
 	_designate_hold_active = false
 	_assert_approximately(game.day_cycle.elapsed_seconds, hold_start + DESIGNATE_HOLD, 0.00001, "exactly 20.0s Day-7 designate hold")
