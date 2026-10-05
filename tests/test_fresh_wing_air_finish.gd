@@ -82,6 +82,13 @@ var _min_food := 100.0
 var _min_rest := 100.0
 var _last_salvage := 48
 var _rubble_deliveries := 0
+var _last_raw := 4
+var _last_meals := 12
+# First observations persist even if cargo clears or another resident eats.
+var _meal_proof := {"cook_claim": -1.0, "cook_work": -1.0, "raw_withdraw": -1.0,
+	"meal_cargo": -1.0, "haul_pickup": -1.0, "haul_deposit": -1.0}
+var _kitchen_meal_jobs: Dictionary = {}
+var _meal_stock_deltas: Array[String] = []
 
 
 func _run() -> void:
@@ -126,6 +133,8 @@ func _walk() -> void:
 		_targets.append(cell)
 		_assert_equal(game.map_grid.get_tile(cell), MapGrid.Tile.ROCK, "target starts rock: %s" % cell)
 	game.map_grid.rubble_created.connect(_observe_excavation.bind(game))
+	_last_raw = game.food_system.raw_food
+	_last_meals = game.food_system.meals # Starting 12 never counts as a deposit.
 	game.food_system.inventory_changed.connect(_observe_inventory.bind(game))
 	if _failure_count:
 		_dispose(game)
@@ -163,6 +172,7 @@ func _walk() -> void:
 			_assert_approximately(oxygen_after - oxygen_before, 0.048, 0.0001, "sealed powered Air raises O2 by 0.048 in one tick")
 			_check_day7_success(game)
 			if not _failure_count:
+				print("fresh-wing stocked-meal proof PASS: latch timings (seconds)=%s; meal stock deltas=%s; starting-raw (4) Kitchen cook->haul; not Grow provenance or sustainable food supply" % [str(_meal_proof), str(_meal_stock_deltas)])
 				print("Fresh wing Air finish PASS: Air tip=%.1fs Air complete=%.1fs Day-7 tip=%.1fs; O2 %.6f->%.6f delta=%.6f; WARNING Resume=%s count=%d; Air cell=%s powered=%s delivered=%d; PWR %d/%d demand=%d no shedding; SEALED at %.1fs zero OPEN; ten buildings; salvage form: stock(%d)+rubble(%d)+hatch delivered(%d)+transit(%d)+third bunk delivered(%d)+transit(%d)+Kitchen delivered(%d)+transit(%d)+Air delivered(%d)+transit(%d)=38; min food=%.2f min rest=%.2f" % [_air_tip_elapsed, _air_complete_elapsed, _day7_tip_elapsed, oxygen_before, oxygen_after, oxygen_after - oxygen_before, _warning_resumed, _warning_count, AIR_CELL, _air.powered, _air.delivered, game.power_grid.supply, game.power_grid.served, game.power_grid.demand, _seal_elapsed, game.food_system.salvage, _uncredited_rubble(game), game.breach_system.patch_delivered, game.job_system.get_breach_supply_in_transit(), _third_bunk.delivered, _third_bunk_transit(game), _kitchen.delivered, _kitchen_transit(game), _air.delivered, _air_transit(game), _min_food, _min_rest])
 			else:
 				_diagnostics(game)
@@ -367,6 +377,7 @@ func _uncredited_rubble(game: VaultGame) -> int:
 
 
 func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
+	_observe_stocked_meal(game)
 	if _open_count > 0 or game.breach_system.phase == BreachSystem.Phase.OPEN or game.breach_system.serialize().open_emitted:
 		return _stop(game, "OPEN event/phase/history forbidden")
 	if game.breach_system.is_sealed() and _seal_elapsed < 0.0:
@@ -649,6 +660,24 @@ func _observe_excavation(cell: Vector2i, amount: int, game: VaultGame) -> void:
 
 
 func _observe_inventory(game: VaultGame) -> void:
+	_observe_stocked_meal(game)
+	var raw: int = game.food_system.raw_food
+	var meals: int = game.food_system.meals
+	if _last_raw - raw == FoodSystem.COOK_INPUT:
+		for resident in game.residents:
+			if _is_kitchen_cook(game, resident) and resident.state == "Preparing meals" and resident.work_accumulator >= 4.0:
+				_latch_meal("raw_withdraw", game)
+	if meals != _last_meals:
+		_meal_stock_deltas.append("%.1fs %d->%d" % [game.day_cycle.elapsed_seconds, _last_meals, meals])
+	if meals > _last_meals and float(_meal_proof.raw_withdraw) >= 0.0:
+		for resident in game.residents:
+			var job: Dictionary = game.job_system._find_job(resident.current_job_id)
+			if _is_kitchen_meal_carrier(resident, job) and _kitchen_meal_jobs.has(int(job.id)) and meals - _last_meals == int(job.in_transit):
+				# add_meals emits before clearing in_transit/carrying; a later
+				# eat in this same tick cannot erase this positive stock credit.
+				_latch_meal("haul_deposit", game)
+	_last_raw = raw
+	_last_meals = meals
 	if game.food_system.salvage > _last_salvage:
 		var increase := game.food_system.salvage - _last_salvage
 		var evidenced := false
@@ -666,6 +695,40 @@ func _observe_inventory(game: VaultGame) -> void:
 	_last_salvage = game.food_system.salvage
 
 
+func _latch_meal(stage: String, game: VaultGame) -> void:
+	if float(_meal_proof[stage]) < 0.0:
+		_meal_proof[stage] = game.day_cycle.elapsed_seconds
+
+
+func _is_kitchen_cook(game: VaultGame, resident: VaultResident) -> bool:
+	if _kitchen == null or not _kitchen.complete or not _kitchen.powered or _kitchen.manually_disabled:
+		return false
+	var job: Dictionary = game.job_system._find_job(resident.current_job_id)
+	return resident.alive and not resident.drafted and not resident.is_forced_job and resident.get_work_priority("cook") > 0 and resident.current_job_type == JobSystem.JobType.COOK and int(job.get("building_id", -1)) == _kitchen.building_id and job.get("target") == KITCHEN_CELL and not bool(job.get("done", false)) and int(job.get("reserved_by", -1)) == resident.resident_id
+
+
+func _is_kitchen_meal_carrier(resident: VaultResident, job: Dictionary) -> bool:
+	return resident.alive and not resident.drafted and not resident.is_forced_job and resident.get_work_priority("haul") > 0 and resident.current_job_type == JobSystem.JobType.HAUL_MEAL and int(job.get("type", -1)) == JobSystem.JobType.HAUL_MEAL and job.get("target") == KITCHEN_CELL and not bool(job.get("done", false)) and int(job.get("reserved_by", -1)) == resident.resident_id and resident.job_phase == "deposit" and resident.carrying_kind == "meal" and resident.carrying > 0 and resident.carrying == int(job.get("in_transit", 0))
+
+
+func _observe_stocked_meal(game: VaultGame) -> void:
+	for resident in game.residents:
+		if _is_kitchen_cook(game, resident):
+			_latch_meal("cook_claim", game)
+			if resident.state == "Preparing meals" and resident.work_accumulator > 0.0:
+				_latch_meal("cook_work", game)
+	if float(_meal_proof.raw_withdraw) < 0.0:
+		return
+	for job: Dictionary in game.job_system.jobs:
+		if int(job.type) == JobSystem.JobType.HAUL_MEAL and job.target == KITCHEN_CELL and not bool(job.get("done", false)) and int(job.get("amount", 0)) + int(job.get("in_transit", 0)) >= FoodSystem.COOK_OUTPUT:
+			_kitchen_meal_jobs[int(job.id)] = true
+			_latch_meal("meal_cargo", game)
+	for resident in game.residents:
+		var job: Dictionary = game.job_system._find_job(resident.current_job_id)
+		if _is_kitchen_meal_carrier(resident, job) and _kitchen_meal_jobs.has(int(job.id)):
+			_latch_meal("haul_pickup", game)
+
+
 func _stop(game: VaultGame, reason: String) -> bool:
 	_assert_true(false, reason)
 	_diagnostics(game)
@@ -673,6 +736,7 @@ func _stop(game: VaultGame, reason: String) -> bool:
 
 
 func _diagnostics(game: VaultGame) -> void:
+	printerr("fresh-wing stocked-meal proof: elapsed=%.1fs timings=%s raw=%d meals=%d pending Kitchen=%d Kitchen cargo jobs=%s meal stock deltas=%s" % [game.day_cycle.elapsed_seconds, str(_meal_proof), game.food_system.raw_food, game.food_system.meals, game.job_system.get_pending_meals_at(KITCHEN_CELL), str(_kitchen_meal_jobs), str(_meal_stock_deltas)])
 	printerr("Fresh wing FAIL: tick=%d elapsed=%.1fs salvage=%d rubble=%d dug=%d/12 bunks=%d min food=%.3f min rest=%.3f" % [_tick, game.day_cycle.elapsed_seconds, game.food_system.salvage, _uncredited_rubble(game), _excavated.size(), game.get_completed_building_count(VaultBuilding.Kind.BED), _min_food, _min_rest])
 	printerr("Charge tip=%.1f complete=%.1f Grow tip=%.1f WARNING Resume=%s warnings=%d opens=%d breach=%s power=%d" % [_charge_tip_elapsed, _charge_complete_elapsed, _grow_tip_elapsed, _warning_resumed, _warning_count, _open_count, str(game.breach_system.serialize()), game.power_grid.supply])
 	printerr("Grow tip=%.1f complete=%.1f Nutrient tip=%.1f" % [_grow_tip_elapsed, _grow_complete_elapsed, _nutrient_tip_elapsed])
@@ -717,6 +781,9 @@ func _check_intermediate_drain(game: VaultGame, originals: Array[VaultResident])
 
 
 func _check_day7_success(game: VaultGame) -> void:
+	for stage in _meal_proof:
+		_assert_true(float(_meal_proof[stage]) >= 0.0, "fresh-wing stocked-meal proof: observed %s at constructed Kitchen" % stage)
+	_assert_true(float(_meal_proof.cook_claim) <= float(_meal_proof.cook_work) and float(_meal_proof.cook_work) <= float(_meal_proof.raw_withdraw) and float(_meal_proof.raw_withdraw) <= float(_meal_proof.meal_cargo) and float(_meal_proof.meal_cargo) <= float(_meal_proof.haul_pickup) and float(_meal_proof.haul_pickup) <= float(_meal_proof.haul_deposit), "fresh-wing stocked-meal proof: ordinary Cook work -> recipe raw withdrawal -> Kitchen cargo -> ordinary Haul pickup/deposit ordered")
 	_assert_true(_air != null and _air.complete and _air.delivered == 14 and _air.construction_left <= 0.0, "Air genuinely supplied and complete")
 	_assert_true(_air_supplied and _air_craft_claimed and _air_crafted, "observed real Air supply 14 and ordinary Craft claim/work")
 	_assert_equal(_air_placements, 1, "exactly one Air placement")
