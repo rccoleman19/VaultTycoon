@@ -5,6 +5,8 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GODOT_BIN="${1:-${GODOT_BIN:-/tmp/godot-4.7.2/Godot_v4.7.2-stable_linux.x86_64}}"
 TEST_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vault-tycoon-headless.XXXXXX")"
 COLD_ROOT=""
+# Headroom for long headless suites (survival-next ~48s solo; flaked at 60s under load).
+GODOT_CHECK_TIMEOUT="120s"
 
 cleanup() {
 	rm -rf -- "$TEST_DATA_DIR"
@@ -23,7 +25,7 @@ run_godot_check() {
 	local label="$1"
 	shift
 	local log_file="$TEST_DATA_DIR/${label}.log"
-	if ! XDG_DATA_HOME="$TEST_DATA_DIR" timeout 60s "$GODOT_BIN" --headless --path "$PROJECT_ROOT" "$@" 2>&1 | tee "$log_file"; then
+	if ! XDG_DATA_HOME="$TEST_DATA_DIR" timeout "$GODOT_CHECK_TIMEOUT" "$GODOT_BIN" --headless --path "$PROJECT_ROOT" "$@" 2>&1 | tee "$log_file"; then
 		echo "Godot ${label} check failed." >&2
 		return 1
 	fi
@@ -68,7 +70,7 @@ if [[ ! -f "$COLD_ROOT/.godot/global_script_class_cache.cfg" ]]; then
 	exit 1
 fi
 COLD_LOG="$TEST_DATA_DIR/cold_boot.log"
-if ! XDG_DATA_HOME="$TEST_DATA_DIR/cold_userdata" timeout 60s "$GODOT_BIN" --headless --path "$COLD_ROOT" --quit-after 2 2>&1 | tee "$COLD_LOG"; then
+if ! XDG_DATA_HOME="$TEST_DATA_DIR/cold_userdata" timeout "$GODOT_CHECK_TIMEOUT" "$GODOT_BIN" --headless --path "$COLD_ROOT" --quit-after 2 2>&1 | tee "$COLD_LOG"; then
 	echo "Cold-boot Godot launch failed." >&2
 	exit 1
 fi
