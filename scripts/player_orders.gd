@@ -1217,11 +1217,36 @@ func _primary_next_step() -> Dictionary:
 			"tool": "select",
 		}
 	if game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) < 1:
-		return {
-			"text": "Next: YOU place Air Recycler · THEY craft it",
-			"help": "Designate AIR $14 and keep it powered (3). Craft auto-builds the blueprint.",
-			"tool": "air",
-		}
+		var completed_air := 0
+		var unfinished_air := 0
+		var disabled_air := 0
+		for recycler: VaultBuilding in game.buildings:
+			if recycler.kind != VaultBuilding.Kind.AIR_RECYCLER:
+				continue
+			if recycler.complete:
+				completed_air += 1
+				if recycler.manually_disabled:
+					disabled_air += 1
+			else:
+				unfinished_air += 1
+		if completed_air == 0:
+			if unfinished_air > 0:
+				return {
+					"text": "Next: YOU leave Haul + Craft on · THEY finish the Air Recycler",
+					"help": "Keep Haul + Craft above OFF so crew supply and finish the Air Recycler blueprint.",
+					"tool": "select",
+				}
+			return {
+				"text": "Next: YOU place Air Recycler · THEY craft it",
+				"help": "Designate AIR $14 and keep it powered (3). Craft auto-builds the blueprint.",
+				"tool": "air",
+			}
+		if disabled_air == completed_air:
+			return {
+				"text": "Next: YOU enable an Air Recycler · THEY recycle air",
+				"help": "Select a completed Air Recycler and click ENABLE so it can recycle air.",
+				"tool": "select",
+			}
 	var hatch_ready := (
 		game.breach_system.is_sealed()
 		or (

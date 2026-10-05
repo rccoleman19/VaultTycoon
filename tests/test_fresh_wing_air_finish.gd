@@ -2,6 +2,8 @@ extends "res://tests/test_runner.gd"
 
 const TICK_CAP := 1600
 const SEAL_DEADLINE := BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS
+const FINISH_AIR := ["Next: YOU leave Haul + Craft on · THEY finish the Air Recycler", "Keep Haul + Craft above OFF so crew supply and finish the Air Recycler blueprint.", "select"]
+const ENABLE_AIR := ["Next: YOU enable an Air Recycler · THEY recycle air", "Select a completed Air Recycler and click ENABLE so it can recycle air.", "select"]
 const AIR := ["Next: YOU place Air Recycler · THEY craft it", "Designate AIR $14 and keep it powered (3). Craft auto-builds the blueprint.", "air"]
 const CHARGE := ["Next: YOU place a Charge Node · THEY supply/build", "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.", "generator"]
 const FINISH_CHARGE := ["Next: YOU leave Haul + Craft on · THEY finish the Charge Node", "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.", "select"]
@@ -29,10 +31,13 @@ const THIRD_BUNK_CELL := Vector2i(19, 18)
 const KITCHEN_CELL := Vector2i(18, 17)
 # Empty chamber floor northwest of Bay, within starter Lumen coverage.
 const AIR_CELL := Vector2i(18, 16)
+# This walk keeps food powered. Completing/enabling Air can instead return
+# to the earlier food gate if Grow loses power; Day-7 is not universal.
 const DAY7 := ["Next: YOU designate needs · THEY hold Day 7", "Keep designating dig/build/stockpile. Defaults keep food, power, and air running.", "select"]
 
 var _air: VaultBuilding
 var _air_placements := 0
+var _air_finish_observed := false
 var _air_supplied := false
 var _air_craft_claimed := false
 var _air_crafted := false
@@ -231,11 +236,20 @@ func _walk() -> void:
 
 
 func _act(game: VaultGame, tuple: Array) -> bool:
-	if _air != null and tuple != AIR and tuple != FINISH:
+	if _air != null and tuple not in [AIR, FINISH_AIR, ENABLE_AIR, FINISH]:
 		return _stop(game, "post-Air Rec/medical/unexpected Next blocks walk: %s" % str(tuple))
+	if tuple == FINISH_AIR:
+		if _air == null or _air.complete or not game.buildings.has(_air):
+			return _stop(game, "Air finish requires retained unfinished Air")
+		_air_finish_observed = true
+		return _enable_supply_and_craft(game)
+	if tuple == ENABLE_AIR:
+		if _air == null or not _air.complete or not _air.manually_disabled or not game.buildings.has(_air):
+			return _stop(game, "Air enable requires retained completed disabled Air")
+		return game.toggle_building_enabled(_air.building_id)
 	if tuple == AIR:
 		if _air != null:
-			return _enable_supply_and_craft(game) # Exact repeated tip never duplicates Air.
+			return _stop(game, "repeated Air place tip with retained blueprint or completed Air")
 		_air_tip_elapsed = game.day_cycle.elapsed_seconds
 		_check_air_checkpoint(game)
 		_assert_true(MapGrid.CHAMBER.has_point(AIR_CELL) and game.map_grid.get_tile(AIR_CELL) == MapGrid.Tile.FLOOR, "Air on disclosed chamber floor")
@@ -256,6 +270,8 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 		_air_placements += 1
 		_assert_true(_air != null and not _air.complete and _air.get_cost() == 14, "one real incomplete Air costing 14")
 		_assert_equal(game.buildings.size(), 10, "ten buildings at Air placement")
+		var after := game.player_orders._primary_next_step()
+		_assert_equal([after.text, after.help, after.tool], FINISH_AIR, "Air placement immediately gives exact finish tuple")
 		return _failure_count == 0
 	if tuple == FINISH_NUTRIENT:
 		if _kitchen == null or _kitchen.complete:
@@ -816,6 +832,7 @@ func _check_day7_success(game: VaultGame) -> void:
 	_assert_true(_air != null and _air.complete and _air.delivered == 14 and _air.construction_left <= 0.0, "Air genuinely supplied and complete")
 	_assert_true(_air_supplied and _air_craft_claimed and _air_crafted, "observed real Air supply 14 and ordinary Craft claim/work")
 	_assert_equal(_air_placements, 1, "exactly one Air placement")
+	_assert_true(_air_finish_observed, "exact Air finish handled during organic construction")
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.AIR_RECYCLER), 1, "one completed Air")
 	_assert_true(_air.powered and not _air.manually_disabled, "Air powered/enabled")
 	_assert_true(_air_tip_elapsed >= _kitchen_complete_elapsed and _air_complete_elapsed >= _air_tip_elapsed and _day7_tip_elapsed >= _air_complete_elapsed, "Kitchen/Air tip/Air complete/Day-7 ordered")
