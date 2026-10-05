@@ -2,6 +2,7 @@ extends "res://tests/test_runner.gd"
 
 const TICK_CAP := 799
 const CHARGE := ["Next: YOU place a Charge Node · THEY supply/build", "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.", "generator"]
+const FINISH_CHARGE := ["Next: YOU leave Haul + Craft on · THEY finish the Charge Node", "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.", "select"]
 const GROW := ["Next: YOU place Grow Tray · THEY haul output", "Designate GROW and keep it powered. Haul defaults move raw food to stock.", "grow"]
 const DIG_NEXT := [
 	["Next: YOU mark rock [E] · THEY dig on Dig defaults", "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional.", "dig"],
@@ -143,6 +144,10 @@ func _walk() -> void:
 
 
 func _act(game: VaultGame, tuple: Array) -> bool:
+	if tuple == FINISH_CHARGE:
+		if _charge == null or _charge.complete or not game.buildings.has(_charge):
+			return _stop(game, "Charge finish without retained unfinished blueprint")
+		return _enable_supply_and_craft(game)
 	if tuple == CHARGE:
 		if _charge == null:
 			_charge_tip_elapsed = game.day_cycle.elapsed_seconds
@@ -155,10 +160,12 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			_charge_placements += 1
 			_assert_true(_charge != null and not _charge.complete and not _charge.is_emergency_core, "one real incomplete non-Core Charge blueprint")
 			_assert_true(game.day_cycle.elapsed_seconds < 60.0, "Charge placed strictly before 60s")
+			var after: Dictionary = game.player_orders._primary_next_step()
+			_assert_equal([after.text, after.help, after.tool], FINISH_CHARGE, "Charge placement immediately gives exact finish tuple")
 			return _failure_count == 0
 		if _charge.complete:
 			return _stop(game, "Charge tip asks to place after Charge already complete")
-		return _enable_supply_and_craft(game) # Same Charge tip repeats; never place twice.
+		return _stop(game, "repeated Charge place tip with retained unfinished blueprint")
 	if tuple in DIG_NEXT:
 		for cell in _targets:
 			if game.map_grid.get_tile(cell) == MapGrid.Tile.FLOOR or game.map_grid.dig_marks.has(cell):

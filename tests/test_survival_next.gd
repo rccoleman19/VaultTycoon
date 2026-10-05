@@ -5,6 +5,8 @@ const KITCHEN_NEXT := "Next: YOU place a Nutrient Station · THEY cook"
 const FINISH_NUTRIENT_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station"
 const FINISH_NUTRIENT_HELP := "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint."
 const POWER_NEXT := "Next: YOU power the Nutrient Station · THEY cook"
+const FINISH_CHARGE_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the Charge Node"
+const FINISH_CHARGE_HELP := "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint."
 const CHARGE_NEXT := "Next: YOU place a Charge Node · THEY power the kitchen"
 const CHARGE_HELP := "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power."
 const REC_NEXT := "Next: YOU place a Rec Console · THEY recover mood"
@@ -50,6 +52,8 @@ func _init() -> void:
 func _run() -> void:
 	_test_interrupts_and_priority()
 	_test_kitchen_guards()
+	_test_charge_finish_restore()
+	_test_charge_finish_priority()
 	_test_enabled_kitchen_shed()
 	_test_disabled_kitchens()
 	_test_mixed_kitchen_power()
@@ -1552,4 +1556,130 @@ func _test_living_residents_only() -> void:
 	resident.needs.health = 0.0
 	game.food_system.meals = 0
 	_assert_dig(game, "dead residents do not trigger survival interrupts")
+	_dispose(game)
+
+
+func _test_charge_finish_restore() -> void:
+	for context in ["kitchen", "rec", "grow", "progression"]:
+		for existing_charge in [false, true]:
+			if context == "progression" and existing_charge:
+				continue
+			var game := _healthy_game()
+			var consumer: VaultBuilding
+			var place_next := PROGRESSION_CHARGE_NEXT
+			var place_help := PROGRESSION_CHARGE_HELP
+			var resumed_next := DIG_NEXT
+			var resumed_help := "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional."
+			var resumed_tool := "dig"
+			if existing_charge:
+				_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(26, 12))
+			match context:
+				"kitchen":
+					game.residents[0].needs.food = 19.0
+					game.food_system.meals = 0
+					consumer = _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+					place_next = CHARGE_NEXT
+					place_help = CHARGE_HELP
+					resumed_next = COOK_NEXT
+					resumed_help = COOK_HELP
+					resumed_tool = "select"
+				"rec":
+					game.residents[0].needs.mood = 9.0
+					consumer = _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12))
+					_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(21, 12))
+					place_next = REC_CHARGE_NEXT
+					place_help = REC_CHARGE_HELP
+				"grow":
+					game.residents[0].needs.food = 19.0
+					game.food_system.meals = 0
+					game.food_system.raw_food = 0
+					_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+					consumer = _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12))
+					for building: VaultBuilding in game.buildings:
+						if building.kind == VaultBuilding.Kind.LAMP:
+							building.manually_disabled = true
+					place_next = GROW_CHARGE_NEXT
+					place_help = GROW_CHARGE_HELP
+					resumed_next = COOK_NEXT
+					resumed_help = WAITING_COOK_HELP
+					resumed_tool = "select"
+				"progression":
+					_dispose(game)
+					game = _progression_bunk_game()
+					_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(20, 12))
+					_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(21, 12))
+					resumed_next = "Next: YOU place Grow Tray · THEY haul output"
+					resumed_help = "Designate GROW and keep it powered. Haul defaults move raw food to stock."
+					resumed_tool = "grow"
+			if existing_charge:
+				# Consume nine power for Kitchen/Rec, six for Grow so Kitchen stays powered.
+				for index in (2 if context == "grow" else 3):
+					_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(22 + index, 12))
+			game.power_grid.recalculate(game.buildings)
+			if consumer != null:
+				_assert_true(game.power_grid.is_building_shed(consumer.building_id), "%s consumer genuinely shed, existing Charge=%s" % [context, existing_charge])
+			if context == "grow":
+				_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.KITCHEN), 1, "Grow shortage keeps Kitchen powered")
+			_assert_step(game, place_next, "generator", place_help)
+			# An unfinished Emergency Core must never stand in for a Charge blueprint.
+			var core: VaultBuilding
+			for building: VaultBuilding in game.buildings:
+				if building.is_emergency_core:
+					core = building
+			core.complete = false
+			_assert_step(game, place_next, "generator", place_help)
+			core.complete = true
+			var cell := Vector2i(25, 12)
+			_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, cell), "%s Charge blueprint placed" % context)
+			var charge := game.get_building_at(cell)
+			_assert_equal(charge.delivered, 0, "Charge starts unsupplied")
+			_assert_step(game, FINISH_CHARGE_NEXT, "select", FINISH_CHARGE_HELP)
+			game.active_tool = "dig"
+			game.player_orders.refresh()
+			_assert_equal(game.active_tool, "dig", "Charge finish refresh preserves active tool")
+			_assert_equal(game.player_orders.objective_label.text, FINISH_CHARGE_NEXT, "refresh shows Charge finish")
+			if consumer != null:
+				consumer.manually_disabled = true
+				game.power_grid.recalculate(game.buildings)
+				match context:
+					"kitchen":
+						_assert_step(game, POWER_NEXT, "select", "Power the Nutrient Station so Cook can run.")
+					"rec":
+						_assert_step(game, ENABLE_REC_NEXT, "select", ENABLE_REC_HELP)
+					"grow":
+						_assert_step(game, ENABLE_GROW_NEXT, "select", ENABLE_GROW_HELP)
+				consumer.manually_disabled = false
+				game.power_grid.recalculate(game.buildings)
+			_assert_equal(charge.add_delivery(charge.get_cost()), 18, "Charge receives full salvage cost")
+			_assert_false(charge.complete, "supplied Charge remains unfinished")
+			_assert_step(game, FINISH_CHARGE_NEXT, "select", FINISH_CHARGE_HELP)
+			game.active_tool = "cancel"
+			_assert_true(game.issue_order(cell), "cancel last unfinished Charge")
+			_assert_step(game, place_next, "generator", place_help)
+			_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, cell), "replace canceled Charge")
+			charge = game.get_building_at(cell)
+			_assert_equal(charge.add_delivery(charge.get_cost()), 18, "replacement Charge supplied")
+			_assert_true(charge.apply_build_work(charge.get_build_time()), "construction completes Charge")
+			game.power_grid.recalculate(game.buildings)
+			_assert_step(game, resumed_next, resumed_tool, resumed_help)
+			_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true), 2 if existing_charge else 1, "completed non-Core count")
+			_dispose(game)
+
+
+func _test_charge_finish_priority() -> void:
+	var game := _healthy_game()
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, Vector2i(25, 12)), "priority fixture retains unfinished Charge")
+	_assert_dig(game, "dig progression precedes Charge finish")
+	game.residents[0].needs.food = 19.0
+	game.food_system.meals = 0
+	_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
+	game.residents[0].needs.food = 100.0
+	game.residents[0].needs.mood = 9.0
+	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
+	game.residents[0].needs.mood = 100.0
+	game.residents[0].needs.health = 99.0
+	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	game.residents[0].needs.health = 100.0
+	game.residents[0].needs.rest = 28.0
+	_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
 	_dispose(game)
