@@ -1,0 +1,510 @@
+extends "res://tests/test_runner.gd"
+
+const TICK_CAP := 799
+const CHARGE := ["Next: YOU place a Charge Node · THEY supply/build", "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.", "generator"]
+const GROW := ["Next: YOU place Grow Tray · THEY haul output", "Designate GROW and keep it powered. Haul defaults move raw food to stock.", "grow"]
+const NUTRIENT := ["Next: YOU place Nutrient Station · THEY cook/haul", "Designate NUTRI, power it, leave Cook + Haul above OFF.", "kitchen"]
+const DIG_NEXT := [
+	["Next: YOU mark rock [E] · THEY dig on Dig defaults", "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional.", "dig"],
+	["Next: YOU keep marking digs [E] · THEY dig/haul alone", "Keep designating connected rock. They dig then haul rubble without draft. PRIORITIES [P] only to specialize.", "dig"],
+]
+const PLACE_CRISIS := ["Next: YOU place bunks · THEY craft", "Place bunks so tired undrafted crew have a bed.", "bed"]
+const PLACE_TWO := ["Next: YOU place 2 bunks · THEY craft from Craft", "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.", "bed"]
+const FINISH := ["Next: YOU leave Haul + Craft on · THEY finish the bunks", "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints.", "select"]
+# Disclosed deterministic empty chamber floor, matching the sibling walks.
+# This fixture is untouched begin_shift; no staged dig/bunks or meal/Air claim.
+const BUNK_CELLS := [Vector2i(20, 16), Vector2i(21, 17)]
+
+# Empty walkable chamber floor beside Bay; not bunks, hatch, or starters.
+const CHARGE_CELL := Vector2i(20, 17)
+# Empty chamber floor beside starter Bay (19,17), within Lumen (22,14).
+const GROW_CELL := Vector2i(19, 16)
+const THIRD_BUNK_CELL := Vector2i(19, 18)
+# This walk proves neither meal+Air, hatch sealing, nor Day-7 survival.
+
+var _third_bunk: VaultBuilding
+var _third_bunk_elapsed := -1.0
+var _grow: VaultBuilding
+var _grow_complete_elapsed := -1.0
+var _nutrient_tip_elapsed := -1.0
+var _grow_placements := 0
+var _grow_supplied := false
+var _grow_craft_claimed := false
+var _grow_crafted := false
+var _charge: VaultBuilding
+var _charge_tip_elapsed := -1.0
+var _charge_complete_elapsed := -1.0
+var _grow_tip_elapsed := -1.0
+var _warning_resumed := false
+var _warning_count := 0
+var _open_count := 0
+var _charge_placements := 0
+var _charge_supplied := false
+var _charge_craft_claimed := false
+var _charge_crafted := false
+var _refunds := 0
+var _targets: Array[Vector2i] = []
+var _designated: Dictionary = {}
+var _excavated: Dictionary = {}
+var _crafted: Dictionary = {}
+var _bunks: Array[VaultBuilding] = []
+var _starters: Array[VaultBuilding] = []
+var _history: Array[String] = []
+var _last_tuple: Array = []
+var _tick := 0
+var _min_food := 100.0
+var _min_rest := 100.0
+var _last_salvage := 48
+var _rubble_deliveries := 0
+
+
+func _run() -> void:
+	_run_case("Untouched Next-driven Dig + two opening bunks + Charge + crisis third bunk + powered Grow to Nutrient", _walk)
+	print("FRESH WING GROW FINISH: %s — %d assertions, %d failures" % ["FAIL" if _failure_count else "PASS", _assertion_count, _failure_count])
+	quit(1 if _failure_count else 0)
+
+
+func _walk() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	var originals: Array[VaultResident] = game.residents.duplicate()
+	_starters.assign(game.buildings)
+	_assert_equal(game.food_system.salvage, 48, "untouched starting salvage")
+	_assert_equal(game.food_system.meals, 12, "untouched starting meals")
+	_assert_equal(game.food_system.raw_food, 4, "untouched starting raw food")
+	_assert_equal(game.day_cycle.elapsed_seconds, 0.0, "untouched starting clock")
+	_assert_equal(originals.size(), 4, "four originals")
+	_assert_equal(_starters.size(), 3, "only starter Core/Lumen/Bay")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GENERATOR), 1, "starter Core")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.LAMP), 1, "starter Lumen")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.STOCKPILE), 1, "starter Bay")
+	_assert_equal(game.power_grid.supply, 2, "starter grid supply")
+	_assert_true(CHARGE_CELL not in BUNK_CELLS and CHARGE_CELL != BreachSystem.HATCH_CELL, "Charge cell excludes bunks/hatch")
+	_assert_true(game.map_grid.is_walkable(CHARGE_CELL) and game.get_building_at(CHARGE_CELL) == null, "disclosed Charge cell starts empty walkable floor")
+	_assert_true(MapGrid.CHAMBER.has_point(GROW_CELL) and game.map_grid.get_tile(GROW_CELL) == MapGrid.Tile.FLOOR, "Grow starts on chamber floor")
+	_assert_true(game.map_grid.is_walkable(GROW_CELL) and game.get_building_at(GROW_CELL) == null, "Grow starts empty and walkable")
+	_assert_true(GROW_CELL not in BUNK_CELLS and GROW_CELL != CHARGE_CELL and GROW_CELL != BreachSystem.HATCH_CELL, "Grow excludes bunks/Charge/hatch")
+	var bay := game.get_building_at(Vector2i(19, 17))
+	_assert_true(bay != null and bay.kind == VaultBuilding.Kind.STOCKPILE and bay in _starters and GROW_CELL.distance_to(bay.cell) == 1.0, "Grow beside starter Bay (19,17)")
+	var lumen := game.get_building_at(Vector2i(22, 14))
+	_assert_true(lumen != null and lumen.kind == VaultBuilding.Kind.LAMP and lumen in _starters, "starter Lumen at (22,14)")
+	_assert_true(game.lighting_system.is_cell_lit(GROW_CELL), "Grow in starter Lumen coverage")
+	for starter in _starters:
+		_assert_true(GROW_CELL != starter.cell, "Grow distinct from starter: %s" % starter.cell)
+	game.breach_system.warning_started.connect(func() -> void: _warning_count += 1)
+	game.breach_system.breach_opened.connect(func() -> void: _open_count += 1)
+	for cell in BUNK_CELLS:
+		_assert_true(game.map_grid.get_tile(cell) == MapGrid.Tile.FLOOR and game.get_building_at(cell) == null, "disclosed bunk cell starts empty floor: %s" % cell)
+	for x in range(MapGrid.CHAMBER.position.x, MapGrid.CHAMBER.end.x):
+		var cell := Vector2i(x, MapGrid.CHAMBER.position.y - 1)
+		_targets.append(cell)
+		_assert_equal(game.map_grid.get_tile(cell), MapGrid.Tile.ROCK, "target starts rock: %s" % cell)
+	game.map_grid.rubble_created.connect(_observe_excavation.bind(game))
+	game.food_system.inventory_changed.connect(_observe_inventory.bind(game))
+	if _failure_count:
+		_dispose(game)
+		return
+	for index in TICK_CAP:
+		_tick = index + 1
+		if not _check_state(game, originals):
+			break
+		if game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged:
+			if not _resume_warning(game):
+				break
+		var step: Dictionary = game.player_orders._primary_next_step()
+		var tuple := [step.text, step.help, step.tool]
+		if tuple != _last_tuple:
+			_history.append("tick=%d elapsed=%.1f: %s" % [_tick, game.day_cycle.elapsed_seconds, str(tuple)])
+			_last_tuple = tuple
+		if not _check_state(game, originals):
+			break
+		var tool_before: String = game.active_tool
+		if tuple == NUTRIENT:
+			_nutrient_tip_elapsed = game.day_cycle.elapsed_seconds
+			_check_nutrient_success(game)
+			_assert_equal(game.active_tool, tool_before, "Nutrient observation preserves active tool")
+			if not _failure_count:
+				print("Fresh wing Grow finish PASS: Grow tip=%.1fs Grow complete=%.1fs Nutrient tip=%.1fs; WARNING Resume=%s; third bunk cell=%s placed=%.1fs delivered=%d work_left=%.3f complete=%s; salvage form: stock(%d)+uncredited rubble(%d)+hatch delivered(%d)+hatch transit(%d)+third-bunk delivered(%d)+third-bunk transit(%d)=38; residual excluding third bunk=%d; Grow delivered=%d demand=%d grid supply=%d served=%d min food=%.2f min rest=%.2f; eight buildings, zero Kitchen, no OPEN" % [_grow_tip_elapsed, _grow_complete_elapsed, _nutrient_tip_elapsed, "yes" if _warning_resumed else "no", THIRD_BUNK_CELL, _third_bunk_elapsed, _third_bunk.delivered, _third_bunk.construction_left, _third_bunk.complete, game.food_system.salvage, _uncredited_rubble(game), game.breach_system.patch_delivered, game.job_system.get_breach_supply_in_transit(), _third_bunk.delivered, _third_bunk_transit(game), _grow_residual(game), _grow.delivered, _grow.get_power_demand(), game.power_grid.supply, game.power_grid.served, _min_food, _min_rest])
+			else:
+				_diagnostics(game)
+			_dispose(game)
+			return
+		var acted := _act(game, tuple)
+		_assert_equal(game.active_tool, tool_before, "recommended act preserves active tool")
+		if not acted or _failure_count:
+			break
+		# Needs advance before jobs eat/sleep: test the intermediate drain too.
+		var safe := true
+		for resident in originals:
+			var food := maxf(0.0, resident.needs.food - 60.0 * VaultGame.SIMULATION_TICK / DayCycle.SECONDS_PER_DAY)
+			var rest: float = resident.needs.rest if resident.sleeping else maxf(0.0, resident.needs.rest - 34.0 * VaultGame.SIMULATION_TICK / DayCycle.SECONDS_PER_DAY)
+			_min_food = minf(_min_food, food)
+			_min_rest = minf(_min_rest, rest)
+			if food < 20.0 or rest < 15.0:
+				safe = _stop(game, "impending need drain resident=%d food=%.3f rest=%.3f" % [resident.resident_id, food, rest])
+				break
+		if not safe:
+			break
+		var work_before: Dictionary = {}
+		for bunk in _bunks:
+			work_before[bunk.building_id] = bunk.construction_left
+		var charge_work_before: float = _charge.construction_left if _charge != null else 0.0
+		var grow_work_before: float = _grow.construction_left if _grow != null else 0.0
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		if _grow != null:
+			if _grow.construction_left < grow_work_before and _grow.delivered == 12:
+				_grow_crafted = true
+			if _grow.complete and _grow_complete_elapsed < 0.0:
+				_grow_complete_elapsed = game.day_cycle.elapsed_seconds
+		if _charge != null:
+			if _charge.construction_left < charge_work_before and _charge.delivered == 18:
+				_charge_crafted = true
+			if _charge.complete and _charge_complete_elapsed < 0.0:
+				_charge_complete_elapsed = game.day_cycle.elapsed_seconds
+		for bunk in _bunks:
+			if bunk.construction_left < float(work_before[bunk.building_id]) and bunk.delivered == bunk.get_cost():
+				_crafted[bunk.building_id] = true
+		if not _check_state(game, originals):
+			break
+	if not _failure_count:
+		_stop(game, "799-tick cap without powered Grow/Nutrient milestone")
+	_dispose(game)
+
+
+func _act(game: VaultGame, tuple: Array) -> bool:
+	if tuple == GROW:
+		if _grow == null:
+			_grow_tip_elapsed = game.day_cycle.elapsed_seconds
+			_check_grow_checkpoint(game)
+			_assert_true(_grow_tip_elapsed < 60.0, "Grow tip/placement strictly before 60s")
+			if _failure_count:
+				return false
+			if not game.place_blueprint(VaultBuilding.Kind.GROW_TRAY, GROW_CELL):
+				return _stop(game, "real Grow placement rejected: %s" % game.status_message)
+			_grow = game.get_building_at(GROW_CELL)
+			_grow_placements += 1
+			_assert_true(_grow != null and not _grow.complete and _grow.get_cost() == 12, "one real incomplete Grow blueprint costing 12")
+			return _failure_count == 0
+		return _enable_supply_and_craft(game) # Repeated tip: wait, never duplicate.
+	if tuple == CHARGE:
+		if _charge == null:
+			_charge_tip_elapsed = game.day_cycle.elapsed_seconds
+			_check_charge_checkpoint(game)
+			if _failure_count:
+				return false
+			if not game.place_blueprint(VaultBuilding.Kind.GENERATOR, CHARGE_CELL):
+				return _stop(game, "real Charge placement rejected: %s" % game.status_message)
+			_charge = game.get_building_at(CHARGE_CELL)
+			_charge_placements += 1
+			_assert_true(_charge != null and not _charge.complete and not _charge.is_emergency_core, "one real incomplete non-Core Charge blueprint")
+			_assert_true(game.day_cycle.elapsed_seconds < 60.0, "Charge placed strictly before 60s")
+			return _failure_count == 0
+		if _charge.complete:
+			return _stop(game, "Charge tip asks to place after Charge already complete")
+		return _enable_supply_and_craft(game) # Same Charge tip repeats; never place twice.
+	if tuple in DIG_NEXT:
+		for cell in _targets:
+			if game.map_grid.get_tile(cell) == MapGrid.Tile.FLOOR or game.map_grid.dig_marks.has(cell):
+				continue
+			if not game.map_grid.queue_dig(cell):
+				return _stop(game, "real dig designation rejected at %s" % cell)
+			_designated[cell] = true
+			game.job_system.queue_dig(cell)
+			return true
+		return true # All twelve already marked; time only for unfinished work.
+	if tuple == PLACE_CRISIS or tuple == PLACE_TWO:
+		if _grow != null:
+			if _third_bunk != null or _bunks.size() == 3:
+				return _stop(game, "fourth bunk request forbidden")
+			if tuple != PLACE_CRISIS or _bunks.size() != 2:
+				return _stop(game, "third bunk requires exact post-Grow crisis place tuple and two opening bunks")
+			_assert_true(game.buildings.has(_grow) and _grow_placements == 1, "Grow blueprint exists before third bunk placement")
+			_assert_true(MapGrid.CHAMBER.has_point(THIRD_BUNK_CELL) and game.map_grid.get_tile(THIRD_BUNK_CELL) == MapGrid.Tile.FLOOR, "third bunk on chamber floor")
+			_assert_true(game.map_grid.is_walkable(THIRD_BUNK_CELL) and game.get_building_at(THIRD_BUNK_CELL) == null, "third bunk empty walkable floor with no fixture overlap")
+			_assert_true(game.lighting_system.is_cell_lit(THIRD_BUNK_CELL), "third bunk lit at placement")
+			var bay := game.get_building_at(Vector2i(19, 17))
+			_assert_true(bay != null and bay in _starters and bay.kind == VaultBuilding.Kind.STOCKPILE and THIRD_BUNK_CELL.distance_to(bay.cell) == 1.0, "third bunk adjacent to starter Bay")
+			_assert_true(THIRD_BUNK_CELL != BreachSystem.HATCH_CELL and THIRD_BUNK_CELL not in BUNK_CELLS and THIRD_BUNK_CELL != CHARGE_CELL and THIRD_BUNK_CELL != GROW_CELL, "third bunk excludes hatch and other designated fixtures")
+			if _failure_count:
+				return false
+			if not game.place_blueprint(VaultBuilding.Kind.BED, THIRD_BUNK_CELL):
+				return _stop(game, "real third bunk placement rejected: %s" % game.status_message)
+			_third_bunk = game.get_building_at(THIRD_BUNK_CELL)
+			_third_bunk_elapsed = game.day_cycle.elapsed_seconds
+			_bunks.append(_third_bunk)
+			_assert_true(_third_bunk != null and not _third_bunk.complete and _third_bunk.get_cost() == 8, "exactly one real incomplete third bunk costing 8")
+			return _failure_count == 0
+		# Opening place-2 and mid-dig crises still place only the original pair.
+		if _bunks.size() != 0:
+			return _stop(game, "additional bunk request before Grow placement forbidden")
+		for cell in BUNK_CELLS:
+			if game.get_building_at(cell) != null or not game.place_blueprint(VaultBuilding.Kind.BED, cell):
+				return _stop(game, "real opening bunk placement rejected at %s: %s" % [cell, game.status_message])
+			_bunks.append(game.get_building_at(cell))
+		return true
+	if tuple == FINISH:
+		var incomplete := false
+		for bunk in _bunks:
+			incomplete = incomplete or not bunk.complete
+		if not incomplete:
+			return _stop(game, "finish recommendation without incomplete bunks")
+		return _enable_supply_and_craft(game)
+
+	return _stop(game, "unexpected full Next tuple: %s" % str(tuple))
+
+
+func _uncredited_rubble(game: VaultGame) -> int:
+	var amount := 0
+	var carriers: Dictionary = {}
+	for resident in game.residents:
+		if resident.current_job_type == JobSystem.JobType.HAUL_RUBBLE and resident.carrying > 0:
+			amount += resident.carrying
+			carriers[resident.current_job_id] = true
+	for job: Dictionary in game.job_system.jobs:
+		# HAUL_RUBBLE.amount remains populated during carry. Exclude that job
+		# when its carrier was counted above; supply-build cargo is separate.
+		if int(job.type) == JobSystem.JobType.HAUL_RUBBLE and not bool(job.done) and not carriers.has(int(job.id)):
+			amount += int(job.amount)
+	return amount
+
+
+func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
+	if game.day_cycle.elapsed_seconds >= 80.0 or _open_count > 0 or game.breach_system.phase == BreachSystem.Phase.OPEN or game.breach_system.serialize().open_emitted:
+		return _stop(game, "OPEN event/phase or elapsed >=80s")
+	var expected_warning := game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged and not _warning_resumed and _warning_count == 1
+	if game.ended or game.tutorial_open or game.player_orders.is_help_open() or game.player_orders.is_work_priorities_open() or game.player_orders.is_briefing_open():
+		return _stop(game, "unexpected modal/ended")
+	if expected_warning:
+		if not game.user_paused or not game.is_simulation_paused() or not game.player_orders.breach_warning_panel.visible:
+			return _stop(game, "real WARNING must pause with visible modal")
+	elif game.is_simulation_paused() or game.player_orders.breach_warning_panel.visible:
+		return _stop(game, "unexpected/second pause or warning modal")
+
+	for resident in originals:
+		_min_food = minf(_min_food, resident.needs.food)
+		_min_rest = minf(_min_rest, resident.needs.rest)
+		if not resident.alive or resident.drafted or resident.needs.food < 20.0 or resident.needs.rest < 15.0:
+			return _stop(game, "original died/drafted or food<20/rest<15: %d" % resident.resident_id)
+	for starter in _starters:
+		if not game.buildings.has(starter) or not starter.complete or starter.manually_disabled or (starter.kind == VaultBuilding.Kind.LAMP and not starter.powered):
+			return _stop(game, "starter Core/Lumen/Bay not retained/enabled or Lumen unpowered")
+	var expected_buildings := _starters.size() + _bunks.size() + (1 if _charge != null else 0) + (1 if _grow != null else 0)
+	if game.buildings.size() != expected_buildings or _bunks.size() > 3 or _charge_placements > 1 or _grow_placements > 1:
+		return _stop(game, "unexpected/duplicate construction")
+	if _third_bunk != null and (_grow == null or _third_bunk_elapsed < _grow_tip_elapsed or _bunks.size() != 3 or not game.buildings.has(_third_bunk)):
+		return _stop(game, "third bunk without prior Grow or missing third blueprint")
+	var charges := 0
+	for building in game.buildings:
+		if building.kind == VaultBuilding.Kind.GENERATOR and not building.is_emergency_core:
+			charges += 1
+	if charges != _charge_placements or (_charge != null and not game.buildings.has(_charge)):
+		return _stop(game, "missing/duplicate non-Core Charge")
+	var grows := 0
+	for building in game.buildings:
+		if building.kind == VaultBuilding.Kind.KITCHEN:
+			return _stop(game, "Kitchen complete/blueprint is forbidden")
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			grows += 1
+	if grows != _grow_placements or (_grow != null and not game.buildings.has(_grow)):
+		return _stop(game, "missing/duplicate Grow")
+	var paid := game.breach_system.patch_delivered
+	for bunk in _bunks:
+		paid += bunk.delivered
+	if _charge != null:
+		paid += _charge.delivered
+	if _grow != null:
+		paid += _grow.delivered
+	for resident in game.residents:
+		if resident.is_forced_job:
+			return _stop(game, "forced work forbidden")
+		if resident.current_job_type in [JobSystem.JobType.SUPPLY_BUILD, JobSystem.JobType.BUILD]:
+			var job: Dictionary = game.job_system._find_job(resident.current_job_id)
+			var building := game.get_building_by_id(int(job.get("building_id", -1)))
+			if building not in _bunks and building != _charge and building != _grow:
+				return _stop(game, "supply/Craft targets unexpected building")
+			var work := "haul" if resident.current_job_type == JobSystem.JobType.SUPPLY_BUILD else "craft"
+			if resident.is_forced_job or resident.get_work_priority(work) <= 0:
+				return _stop(game, "supply/Craft must be ordinary enabled undrafted work")
+			if resident.current_job_type == JobSystem.JobType.SUPPLY_BUILD:
+				paid += resident.carrying
+				if building == _charge and resident.carrying == 18 and int(job.get("in_transit", 0)) == 18:
+					_charge_supplied = true
+				if building == _grow and resident.carrying == 12 and int(job.get("in_transit", 0)) == 12:
+					_grow_supplied = true
+			elif building == _grow and _grow.delivered == 12:
+				_grow_craft_claimed = true
+			elif building == _charge and _charge.delivered == 18:
+				_charge_craft_claimed = true
+		elif resident.current_job_type == JobSystem.JobType.SUPPLY_BREACH:
+			paid += resident.carrying
+	if game.food_system.salvage + _uncredited_rubble(game) + paid != 48 + 3 * _excavated.size():
+		return _stop(game, "salvage conservation violation (bunk/Charge/Grow deliveries + rubble/build/hatch cargo counted once)")
+	if _grow != null and _grow.delivered == 12:
+		_assert_equal(_grow_residual(game) + (_third_bunk.delivered if _third_bunk != null else 0) + _third_bunk_transit(game), 38, "stock + uncredited rubble + hatch delivered/transit + third-bunk delivered/transit = 38 with Grow fully supplied")
+		if _third_bunk != null and _third_bunk.delivered == 8:
+			_assert_equal(_grow_residual(game), 30, "third bunk fully delivered: residual excluding it = 30")
+	return _failure_count == 0
+
+
+func _third_bunk_transit(game: VaultGame) -> int:
+	var amount := 0
+	if _third_bunk != null:
+		for job: Dictionary in game.job_system.jobs:
+			if int(job.type) == JobSystem.JobType.SUPPLY_BUILD and not bool(job.done) and int(job.get("building_id", -1)) == _third_bunk.building_id:
+				amount += int(job.get("in_transit", 0))
+	return amount
+
+
+func _grow_residual(game: VaultGame) -> int:
+	return game.food_system.salvage + _uncredited_rubble(game) + game.breach_system.patch_delivered + game.job_system.get_breach_supply_in_transit()
+
+
+func _check_charge_checkpoint(game: VaultGame) -> void:
+	_assert_equal(_designated.size(), 12, "all twelve designated via real APIs")
+	_assert_equal(_excavated.size(), 12, "all twelve emitted real dig rubble")
+	for cell in _targets:
+		_assert_equal(game.map_grid.get_tile(cell), MapGrid.Tile.FLOOR, "target genuinely excavated: %s" % cell)
+	_assert_equal(game.map_grid.get_floor_cells().size(), 132, "exact twelve-floor expansion")
+	_assert_equal(_bunks.size(), 2, "exactly two placed bunks")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 2, "two complete bunks")
+	for bunk in _bunks:
+		_assert_true(bunk.complete and bunk.delivered == 8 and bunk.construction_left <= 0.0 and _crafted.has(bunk.building_id), "bunk genuinely supplied and crafted")
+	_assert_true(_rubble_deliveries > 0, "observed real rubble stock delivery")
+	_assert_equal(game.food_system.salvage + _uncredited_rubble(game), 68, "48 + twelve dig yields - two paid bunks")
+	if _uncredited_rubble(game) == 0:
+		_assert_equal(game.food_system.salvage, 68, "all rubble credited stock")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true), 0, "stop before Charge placement")
+	_assert_equal(game.buildings.size(), 5, "only starters plus two bunks")
+	_assert_true(game.day_cycle.elapsed_seconds < 60.0, "strictly before warning")
+
+
+func _check_grow_checkpoint(game: VaultGame) -> void:
+	_assert_true(_charge_tip_elapsed >= 0.0 and _charge_tip_elapsed < 60.0, "Charge checkpoint before 60s")
+	_assert_true(_charge_complete_elapsed >= _charge_tip_elapsed and _charge_complete_elapsed <= _grow_tip_elapsed and _grow_tip_elapsed < 80.0, "Charge then Grow strictly before 80s")
+	_assert_equal(_charge_placements, 1, "exactly one Charge placement")
+	_assert_true(_charge != null and _charge.complete and _charge.delivered == 18 and _charge.construction_left <= 0.0, "Charge fully supplied and complete")
+	_assert_true(_charge_supplied, "observed real undrafted Haul carrying all 18 Charge salvage")
+	_assert_true(_charge_craft_claimed, "observed ordinary enabled undrafted Craft claim supplied Charge")
+	_assert_true(_charge_crafted, "observed real supplied Charge work reduction to completion")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true), 1, "one completed non-Core Charge")
+	_assert_equal(game.power_grid.supply, 9, "grid supply corroborates 2 to 9")
+	_assert_equal(game.buildings.size(), 6, "only starters, two bunks, one Charge; no Grow")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 2, "two bunks remain complete")
+	_assert_equal(game.food_system.salvage + _uncredited_rubble(game) + game.breach_system.patch_delivered + game.job_system.get_breach_supply_in_transit(), 50, "68 minus 18 Charge, including any hatch salvage")
+	_assert_equal(_open_count, 0, "no OPEN event")
+	_assert_equal(_warning_count, 1 if _warning_resumed else 0, "at most one real warning Resume; never manufacture warning")
+
+
+func _check_nutrient_success(game: VaultGame) -> void:
+	_assert_true(_grow_tip_elapsed >= _charge_complete_elapsed and _grow_tip_elapsed < 60.0, "Charge then Grow placed before WARNING")
+	_assert_true(_grow_complete_elapsed >= _grow_tip_elapsed and _grow_complete_elapsed <= _nutrient_tip_elapsed and _nutrient_tip_elapsed < 80.0, "Grow complete then exact Nutrient before 80s")
+	_assert_equal(_grow_placements, 1, "exactly one Grow placement")
+	_assert_true(_grow != null and _grow.complete and _grow.delivered == 12 and _grow.construction_left <= 0.0, "Grow fully supplied and crafted complete")
+	_assert_true(_grow.powered and not _grow.manually_disabled, "Grow independently powered and enabled")
+	_assert_equal(_grow.get_power_demand(), 3, "Grow demand 3")
+	_assert_true(_grow_supplied, "observed ordinary undrafted Haul carrying all 12 Grow salvage")
+	_assert_true(_grow_craft_claimed, "observed ordinary enabled undrafted Craft claim supplied Grow")
+	_assert_true(_grow_crafted, "observed real supplied Grow work reduction to completion")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY), 1, "one completed Grow")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.KITCHEN), 0, "zero completed Kitchen")
+	var kitchens := 0
+	for building in game.buildings:
+		if building.kind == VaultBuilding.Kind.KITCHEN:
+			kitchens += 1
+	_assert_equal(kitchens, 0, "zero Kitchen blueprints or complete buildings")
+	_assert_equal(game.buildings.size(), 8, "Core/Lumen/Bay/three bunks/Charge/Grow only")
+	_assert_equal(_bunks.size(), 3, "exactly three bunks")
+	_assert_true(_third_bunk != null and _third_bunk.cell == THIRD_BUNK_CELL and _third_bunk_elapsed >= _grow_tip_elapsed, "authorized post-Grow third bunk retained")
+	for bunk in _bunks.slice(0, 2):
+		_assert_true(bunk.complete and bunk.delivered == 8, "original complete bunk retained")
+	_assert_true(_charge.complete and _charge.delivered == 18, "complete Charge retained")
+	_assert_equal(game.power_grid.supply, 9, "grid supply 9")
+	_assert_equal(game.power_grid.served, 4, "Lumen 1 plus Grow 3 served")
+	_assert_equal(_grow_residual(game) + _third_bunk.delivered + _third_bunk_transit(game), 38, "stock + uncredited rubble + hatch delivered/transit + third-bunk delivered/transit = 38")
+	if _third_bunk.delivered == 8:
+		_assert_equal(_grow_residual(game), 30, "fully delivered third bunk leaves residual 30")
+	_assert_true(_warning_resumed, "completed run requires genuine WARNING Resume")
+	_assert_equal(_warning_count, 1, "exactly one genuine WARNING event")
+	_assert_equal(_open_count, 0, "no OPEN history")
+
+
+func _enable_supply_and_craft(game: VaultGame) -> bool:
+	for resident in game.residents:
+		if resident.alive and not resident.drafted:
+			for work in ["haul", "craft"]:
+				if resident.get_work_priority(work) == VaultResident.PRIORITY_DISABLED:
+					if not resident.set_work_priority(work, VaultResident.DEFAULT_WORK_PRIORITY):
+						return _stop(game, "recommended work enable rejected")
+	return true
+
+
+func _resume_warning(game: VaultGame) -> bool:
+	_assert_false(_warning_resumed, "Resume at most once")
+	_assert_equal(_warning_count, 1, "one real warning event")
+	_assert_true(game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged, "real unacknowledged WARNING")
+	_assert_true(game.user_paused and game.is_simulation_paused() and game.player_orders.breach_warning_panel.visible, "real modal/pause before Resume")
+	_assert_approximately(game.day_cycle.elapsed_seconds, BreachSystem.WARNING_AT_SECONDS, 0.00001, "real WARNING at 60s")
+	if _failure_count:
+		return false
+	# Sole exception to Next acts; WARNING's tool switch happens separately.
+	game.acknowledge_breach_warning(true)
+	_warning_resumed = true
+	_assert_true(game.breach_system.warning_acknowledged, "Resume acknowledged")
+	_assert_false(game.user_paused or game.is_simulation_paused() or game.player_orders.breach_warning_panel.visible, "Resume unpaused and modal hidden")
+	return _failure_count == 0
+
+
+func _observe_excavation(cell: Vector2i, amount: int, game: VaultGame) -> void:
+	_assert_true(_designated.has(cell) and not _excavated.has(cell) and amount == 3, "organic excavation of unique designated target")
+	var working := false
+	for resident in game.residents:
+		var job: Dictionary = game.job_system._find_job(resident.current_job_id)
+		if resident.current_job_type == JobSystem.JobType.DIG and job.get("target") == cell and resident.alive and not resident.drafted and not resident.is_forced_job:
+			working = true
+	_assert_true(working, "dig signal occurs during real undrafted Dig job")
+	_excavated[cell] = true
+
+
+func _observe_inventory(game: VaultGame) -> void:
+	if game.food_system.salvage > _last_salvage:
+		var increase := game.food_system.salvage - _last_salvage
+		var evidenced := false
+		for resident in game.residents:
+			if resident.current_job_type == JobSystem.JobType.HAUL_RUBBLE and resident.job_phase == "deposit" and resident.carrying == 3 and increase == 3:
+				evidenced = true
+				_rubble_deliveries += 1
+			elif resident.current_job_type in [JobSystem.JobType.SUPPLY_BUILD, JobSystem.JobType.SUPPLY_BREACH]:
+				# release_resident emits inventory_changed before clearing cargo.
+				var job: Dictionary = game.job_system._find_job(resident.current_job_id)
+				if resident.carrying == increase and int(job.get("in_transit", 0)) == increase and increase > 0:
+					evidenced = true
+					_refunds += 1
+		_assert_true(evidenced, "stock increase is evidenced real rubble delivery or supply refund")
+	_last_salvage = game.food_system.salvage
+
+
+func _stop(game: VaultGame, reason: String) -> bool:
+	_assert_true(false, reason)
+	_diagnostics(game)
+	return false
+
+
+func _diagnostics(game: VaultGame) -> void:
+	printerr("Fresh wing FAIL: tick=%d elapsed=%.1fs salvage=%d rubble=%d dug=%d/12 bunks=%d min food=%.3f min rest=%.3f" % [_tick, game.day_cycle.elapsed_seconds, game.food_system.salvage, _uncredited_rubble(game), _excavated.size(), game.get_completed_building_count(VaultBuilding.Kind.BED), _min_food, _min_rest])
+	printerr("Charge tip=%.1f complete=%.1f Grow tip=%.1f WARNING Resume=%s warnings=%d opens=%d breach=%s power=%d" % [_charge_tip_elapsed, _charge_complete_elapsed, _grow_tip_elapsed, _warning_resumed, _warning_count, _open_count, str(game.breach_system.serialize()), game.power_grid.supply])
+	printerr("Grow tip=%.1f complete=%.1f Nutrient tip=%.1f" % [_grow_tip_elapsed, _grow_complete_elapsed, _nutrient_tip_elapsed])
+	printerr("WARNING Resume=%s; salvage form: stock + uncredited rubble + hatch delivered/transit + third-bunk delivered/transit = 38 once Grow fully supplied; third transit=%d" % ["yes" if _warning_resumed else "no", _third_bunk_transit(game)])
+	if _third_bunk != null:
+		printerr("third bunk delivered=%d work_left=%.3f complete=%s placed=%.1fs" % [_third_bunk.delivered, _third_bunk.construction_left, _third_bunk.complete, _third_bunk_elapsed])
+	else:
+		printerr("third bunk absent delivered=0 work_left=n/a complete=no")
+	if _grow != null:
+		printerr("Grow %s complete=%s powered=%s delivered=%d work_left=%.3f supplied=%s crafted=%s" % [_grow.cell, _grow.complete, _grow.powered, _grow.delivered, _grow.construction_left, _grow_supplied, _grow_crafted])
+	if _charge != null:
+		printerr("Charge %s complete=%s delivered=%d work_left=%.3f supplied=%s crafted=%s" % [_charge.cell, _charge.complete, _charge.delivered, _charge.construction_left, _charge_supplied, _charge_crafted])
+	for hint in _history:
+		printerr(hint)
+	for bunk in _bunks:
+		printerr("bunk %s complete=%s delivered=%d work_left=%.3f" % [bunk.cell, bunk.complete, bunk.delivered, bunk.construction_left])
+	for resident in game.residents:
+		printerr("resident=%d state=%s job=%d phase=%s carrying=%d food=%.3f rest=%.3f" % [resident.resident_id, resident.state, resident.current_job_type, resident.job_phase, resident.carrying, resident.needs.food, resident.needs.rest])
