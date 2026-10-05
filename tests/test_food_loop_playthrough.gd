@@ -6,6 +6,7 @@ const GROW_NEXT := "Next: YOU place Grow Tray · THEY haul output"
 const KITCHEN_NEXT := "Next: YOU place Nutrient Station · THEY cook/haul"
 const AIR_NEXT := "Next: YOU place Air Recycler · THEY craft it"
 const POWER_NEXT := "Next: YOU power food chain · THEY cook/haul alone"
+const FINISH_NUTRIENT_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station"
 const FINISH_GROW_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the Grow Tray"
 const ENABLE_GROW_NEXT := "Next: YOU enable a Grow Tray · THEY grow"
 const ENABLE_KITCHEN_NEXT := "Next: YOU power the Nutrient Station · THEY cook"
@@ -24,6 +25,7 @@ const PLACEMENT_HINTS := {
 }
 const SELECT_HINTS := {
 	POWER_NEXT: "Enable Grow + Nutrient power. Keep Cook/Haul above OFF so defaults keep working.",
+	FINISH_NUTRIENT_NEXT: "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint.",
 	FINISH_GROW_NEXT: "Keep Haul + Craft above OFF so crew supply and finish the Grow Tray blueprint.",
 	ENABLE_GROW_NEXT: "Enable a completed Grow Tray so it can grow raw food. Haul delivers its output for Cook.",
 	ENABLE_KITCHEN_NEXT: "Power the Nutrient Station so Cook can run.",
@@ -197,7 +199,7 @@ func _act_on_next(game: VaultGame, step: Dictionary) -> bool:
 			return _enable_work(game, "cook")
 		ENABLE_HAUL_NEXT:
 			return _enable_work(game, "haul")
-		FINISH_GROW_NEXT:
+		FINISH_GROW_NEXT, FINISH_NUTRIENT_NEXT:
 			return _enable_work(game, "haul") and _enable_work(game, "craft")
 		HATCH_NEXT:
 			return true # No response is requested until the hatch actually warns.

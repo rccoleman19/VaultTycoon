@@ -5,6 +5,7 @@ const SEAL_DEADLINE := BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECO
 const AIR := ["Next: YOU place Air Recycler · THEY craft it", "Designate AIR $14 and keep it powered (3). Craft auto-builds the blueprint.", "air"]
 const CHARGE := ["Next: YOU place a Charge Node · THEY supply/build", "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.", "generator"]
 const GROW := ["Next: YOU place Grow Tray · THEY haul output", "Designate GROW and keep it powered. Haul defaults move raw food to stock.", "grow"]
+const FINISH_NUTRIENT := ["Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station", "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint.", "select"]
 const NUTRIENT := ["Next: YOU place Nutrient Station · THEY cook/haul", "Designate NUTRI, power it, leave Cook + Haul above OFF.", "kitchen"]
 const DIG_NEXT := [
 	["Next: YOU mark rock [E] · THEY dig on Dig defaults", "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional.", "dig"],
@@ -38,6 +39,7 @@ var _day7_tip_elapsed := -1.0
 
 var _kitchen: VaultBuilding
 var _kitchen_placements := 0
+var _nutrient_finish_observed := false
 var _kitchen_supplied := false
 var _kitchen_craft_claimed := false
 var _kitchen_crafted := false
@@ -252,6 +254,11 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 		_assert_true(_air != null and not _air.complete and _air.get_cost() == 14, "one real incomplete Air costing 14")
 		_assert_equal(game.buildings.size(), 10, "ten buildings at Air placement")
 		return _failure_count == 0
+	if tuple == FINISH_NUTRIENT:
+		if _kitchen == null or _kitchen.complete:
+			return _stop(game, "Nutrient finish requires the retained unfinished Kitchen")
+		_nutrient_finish_observed = true
+		return _enable_supply_and_craft(game)
 	if tuple == NUTRIENT:
 		if _kitchen != null:
 			return _enable_supply_and_craft(game) # Repeated Nutrient tip never duplicates Kitchen.
@@ -277,6 +284,8 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 		_kitchen_placements += 1
 		_assert_true(_kitchen != null and not _kitchen.complete and _kitchen.get_cost() == 10, "one real incomplete Kitchen costing 10")
 		_assert_equal(game.buildings.size(), 9, "nine buildings at Kitchen placement")
+		var after := game.player_orders._primary_next_step()
+		_assert_equal([after.text, after.help, after.tool], FINISH_NUTRIENT, "Kitchen placement immediately gives exact Nutrient finish tuple")
 		return _failure_count == 0
 	if tuple == GROW:
 		if _grow == null:
@@ -512,6 +521,7 @@ func _kitchen_transit(game: VaultGame) -> int:
 
 func _check_air_checkpoint(game: VaultGame) -> void:
 	_assert_true(_nutrient_tip_elapsed >= _grow_complete_elapsed and _kitchen_complete_elapsed >= _nutrient_tip_elapsed and _air_tip_elapsed >= _kitchen_complete_elapsed, "Grow/Nutrient/Kitchen/Air milestones ordered")
+	_assert_true(_nutrient_finish_observed, "driver observed and handled exact Nutrient finish tuple")
 	_assert_equal(_kitchen_placements, 1, "exactly one Kitchen placement")
 	_assert_true(_kitchen != null and _kitchen.complete and _kitchen.delivered == 10 and _kitchen.construction_left <= 0.0, "Kitchen genuinely supplied and completed")
 	_assert_true(_kitchen_supplied and _kitchen_craft_claimed and _kitchen_crafted, "observed real Kitchen supply 10 and ordinary Craft claim/work")
