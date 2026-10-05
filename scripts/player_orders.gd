@@ -976,6 +976,12 @@ func _primary_next_step() -> Dictionary:
 			"tool": "bed",
 		}
 	if critical_resident and game.food_system.meals < game.get_alive_count() and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) >= 1:
+		if not _has_eligible_worker("haul") and (game.job_system.get_pending_meals() > 0 or (not game.food_system.can_cook() and game.job_system.get_pending_raw_food() > 0)):
+			return {
+				"text": "Next: YOU enable Haul · THEY deliver food",
+				"tool": "select",
+				"help": "Open PRIORITIES [P] and enable Haul on a living, undrafted resident. Food is waiting for delivery.",
+			}
 		if not _has_eligible_worker("cook"):
 			return {
 				"text": "Next: YOU enable Cook · THEY cook",

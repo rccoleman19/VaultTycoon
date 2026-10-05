@@ -13,6 +13,8 @@ const ENABLE_COOK_HELP := "Enable Cook on a living, undrafted resident so the po
 const COOK_NEXT := "Next: YOU leave Cook on · THEY cook"
 const COOK_HELP := "Meals are short. The powered Nutrient Station can cook."
 const WAITING_COOK_HELP := "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food."
+const ENABLE_HAUL_NEXT := "Next: YOU enable Haul · THEY deliver food"
+const ENABLE_HAUL_HELP := "Open PRIORITIES [P] and enable Haul on a living, undrafted resident. Food is waiting for delivery."
 
 
 func _init() -> void:
@@ -32,6 +34,12 @@ func _run() -> void:
 	_test_disabled_cooks()
 	_test_cook_waiting_for_raw_food()
 	_test_interrupts_before_cook()
+	_test_pending_meals_need_haul()
+	_test_pending_raw_food_need_haul()
+	_test_pending_raw_food_with_stock()
+	_test_ineligible_haulers()
+	_test_interrupts_before_haul()
+	_test_no_pending_food_with_haul_off()
 	_test_existing_charge_node_insufficient()
 	_test_medical_availability()
 	_test_bunk_shortage()
@@ -289,6 +297,113 @@ func _test_interrupts_before_cook() -> void:
 	_assert_true(not resident.drafted, "tired resident is undrafted")
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 0, "no completed bunk is available")
 	_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+	_dispose(game)
+
+
+func _test_pending_meals_need_haul() -> void:
+	var game := _powered_critical_game()
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+	game.job_system.queue_meals(Vector2i(20, 12), 2)
+	_assert_equal(game.job_system.get_pending_meals(), 2, "meals are pending delivery")
+	_assert_step(game, ENABLE_HAUL_NEXT, "select", ENABLE_HAUL_HELP)
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "Haul recommendation refresh preserves active dig tool")
+	_assert_equal(game.player_orders.objective_label.text, ENABLE_HAUL_NEXT, "refresh displays the Haul recommendation")
+	game.residents[0].set_work_priority("cook", VaultResident.PRIORITY_HIGHEST)
+	_assert_step(game, ENABLE_HAUL_NEXT, "select", ENABLE_HAUL_HELP)
+	game.residents[0].set_work_priority("haul", VaultResident.PRIORITY_HIGHEST)
+	_assert_step(game, COOK_NEXT, "select", COOK_HELP)
+	game.residents[0].set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+	_assert_step(game, ENABLE_COOK_NEXT, "select", ENABLE_COOK_HELP)
+	_dispose(game)
+
+
+func _test_pending_raw_food_need_haul() -> void:
+	var game := _powered_critical_game()
+	game.food_system.raw_food = 0
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+	game.job_system.queue_raw_food(Vector2i(21, 12), 2)
+	_assert_equal(game.job_system.get_pending_meals(), 0, "only raw food is pending")
+	_assert_equal(game.job_system.get_pending_raw_food(), 2, "raw food is pending delivery")
+	_assert_false(game.food_system.can_cook(), "zero raw stock cannot cook")
+	_assert_step(game, ENABLE_HAUL_NEXT, "select", ENABLE_HAUL_HELP)
+	game.residents[0].set_work_priority("cook", VaultResident.PRIORITY_HIGHEST)
+	_assert_step(game, ENABLE_HAUL_NEXT, "select", ENABLE_HAUL_HELP)
+	game.residents[0].set_work_priority("haul", VaultResident.PRIORITY_HIGHEST)
+	_assert_step(game, COOK_NEXT, "select", WAITING_COOK_HELP)
+	_dispose(game)
+
+
+func _test_pending_raw_food_with_stock() -> void:
+	var game := _powered_critical_game()
+	game.food_system.raw_food = 1
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+	game.job_system.queue_raw_food(Vector2i(21, 12), 2)
+	_assert_equal(game.job_system.get_pending_meals(), 0, "stocked raw-food case has no pending meals")
+	_assert_equal(game.job_system.get_pending_raw_food(), 2, "stocked raw-food case still has pending raw")
+	_assert_true(game.food_system.can_cook(), "exactly one raw food can cook despite pending raw")
+	_assert_step(game, ENABLE_COOK_NEXT, "select", ENABLE_COOK_HELP)
+	game.residents[0].set_work_priority("cook", VaultResident.PRIORITY_HIGHEST)
+	_assert_step(game, COOK_NEXT, "select", COOK_HELP)
+	_dispose(game)
+
+
+func _test_ineligible_haulers() -> void:
+	var game := _powered_critical_game()
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+	game.job_system.queue_meals(Vector2i(20, 12), 2)
+	var hauler: VaultResident = game.residents[1]
+	hauler.set_work_priority("haul", VaultResident.PRIORITY_HIGHEST)
+	hauler.drafted = true
+	_assert_step(game, ENABLE_HAUL_NEXT, "select", ENABLE_HAUL_HELP)
+	hauler.drafted = false
+	hauler.alive = false
+	_assert_step(game, ENABLE_HAUL_NEXT, "select", ENABLE_HAUL_HELP)
+	_dispose(game)
+
+
+func _test_interrupts_before_haul() -> void:
+	var game := _powered_critical_game()
+	for crew: VaultResident in game.residents:
+		crew.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+	game.job_system.queue_meals(Vector2i(20, 12), 2)
+	_assert_step(game, ENABLE_HAUL_NEXT, "select", ENABLE_HAUL_HELP)
+	var resident: VaultResident = game.residents[0]
+	resident.needs.rest = 100.0
+	resident.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 0, "Haul interrupt case has no rec console")
+	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
+	resident.needs.mood = 100.0
+	resident.needs.health = 99.0
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.MEDICAL_BED), 0, "Haul interrupt case has no med bed")
+	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	resident.needs.health = 100.0
+	resident.needs.rest = 28.0
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 0, "Haul interrupt case has no bunk")
+	_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+	_dispose(game)
+
+
+func _test_no_pending_food_with_haul_off() -> void:
+	var game := _powered_critical_game()
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+	_assert_equal(game.job_system.get_pending_meals(), 0, "no meals are pending with Haul off")
+	_assert_equal(game.job_system.get_pending_raw_food(), 0, "no raw food is pending with Haul off")
+	_assert_step(game, ENABLE_COOK_NEXT, "select", ENABLE_COOK_HELP)
+	game.residents[0].set_work_priority("cook", VaultResident.PRIORITY_HIGHEST)
+	_assert_step(game, COOK_NEXT, "select", COOK_HELP)
+	game.food_system.raw_food = 0
+	_assert_step(game, COOK_NEXT, "select", WAITING_COOK_HELP)
 	_dispose(game)
 
 
