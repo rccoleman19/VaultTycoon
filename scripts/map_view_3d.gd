@@ -15,6 +15,7 @@ const HEX_MESH_YAW_DEGREES := 0.0
 const COLONIST_RADIUS := 2.4
 const COLONIST_HEIGHT := 13.0
 const BUNK_MATTRESS_TOP := 3.90
+const MEDICAL_MATTRESS_TOP := 4.40
 
 var map_grid: MapGrid
 var lighting_system: LightingSystem
@@ -430,6 +431,15 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 					proxy.rotation = Vector3(PI / 2, 0, 0)
 					proxy.position = Vector3(bed_center.x, FLOOR_HEIGHT + BUNK_MATTRESS_TOP + COLONIST_RADIUS, bed_center.y)
 				break
+		elif resident.alive and resident.medical_bed_id >= 0 and resident.state == "Rest-Medical":
+			for building: VaultBuilding in buildings:
+				if building.building_id != resident.medical_bed_id or not building.complete or building.kind != VaultBuilding.Kind.MEDICAL_BED:
+					continue
+				var bed_center := MapGrid.offset_cell_to_world(building.cell)
+				if pos.distance_to(bed_center) <= 1.0:
+					proxy.rotation = Vector3(PI / 2, 0, 0)
+					proxy.position = Vector3(bed_center.x, FLOOR_HEIGHT + MEDICAL_MATTRESS_TOP + COLONIST_RADIUS, bed_center.y)
+				break
 		if not resident.alive:
 			proxy.material_override = _mat_colonist_dead
 		elif resident.selected:
@@ -590,7 +600,7 @@ func _make_building_proxy(kind: int) -> Node3D:
 		VaultBuilding.Kind.MEDICAL_BED:
 			_fixture_box(root, "Pedestal", Vector3(4.8, 2.6, 8.0), Vector3(0, 1.3, 0), steel)
 			_fixture_box(root, "Deck", Vector3(8.6, 0.8, 14.0), Vector3(0, 3.0, 0), Color("a4b5b5"))
-			_fixture_box(root, "Mattress", Vector3(7.2, 1.0, 12.6), Vector3(0, 3.9, 0), Color("dce5e1"))
+			_fixture_box(root, "Mattress", Vector3(7.2, 1.0, 12.6), Vector3(0, MEDICAL_MATTRESS_TOP - 0.5, 0), Color("dce5e1"))
 			_fixture_box(root, "Pillow", Vector3(5.4, 0.6, 2.4), Vector3(0, 4.7, -4.7), Color("eef0e7"))
 			_fixture_box(root, "RailLeft", Vector3(0.55, 1.8, 6.0), Vector3(-4.05, 4.3, 0.8), Color("bbc9ca"))
 			_fixture_box(root, "RailRight", Vector3(0.55, 1.8, 6.0), Vector3(4.05, 4.3, 0.8), Color("bbc9ca"))

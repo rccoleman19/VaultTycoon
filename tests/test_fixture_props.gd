@@ -4,6 +4,8 @@ extends "res://tests/test_runner.gd"
 func _run() -> void:
 	_test_fixture_palettes()
 	_test_remaining_fixture_palettes()
+	_test_medical_capsule_pose()
+	_test_sleeping_capsule_pose()
 	await _test_assembly_cleanup()
 	print("Fixture props tests: %d assertions, %d failures" % [_assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
@@ -139,6 +141,78 @@ func _assert_remaining_design(assembly: Node3D, kind: int) -> void:
 		VaultBuilding.Kind.MEDICAL_BED:
 			_assert_true(assembly.has_node("RailLeft") and assembly.has_node("RailRight") and assembly.has_node("HeadEquipment"), "clinical couch has rails and head equipment")
 			_assert_false(assembly.has_node("Headboard"), "clinical couch does not copy Bunk headboard")
+			var mattress := assembly.get_node("Mattress") as MeshInstance3D
+			_assert_approximately(MapView3D.MEDICAL_MATTRESS_TOP, 4.40, 0.0001, "medical mattress contact constant is 4.40")
+			_assert_approximately(mattress.position.y + (mattress.mesh as BoxMesh).size.y / 2.0, MapView3D.MEDICAL_MATTRESS_TOP, 0.0001, "medical mattress geometry matches contact constant")
+
+
+func _test_medical_capsule_pose() -> void:
+	var game := _spawn_game()
+	var view := game.get_node("MapView3D") as MapView3D
+	var resident: VaultResident = game.residents[0]
+	var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(23, 15))
+	var bed_center := MapGrid.offset_cell_to_world(bed.cell)
+	resident.medical_bed_id = bed.building_id
+	resident.bed_id = -1
+	resident.sleeping = false
+	resident.state = "Rest-Medical"
+	resident.position = bed_center + Vector2(0.5, 0)
+	view.sync_actors(game.residents, game.buildings, false)
+	var original_proxy := view._resident_proxies.get(resident.resident_id) as MeshInstance3D
+	_assert_true(original_proxy != null, "medical resident has a capsule proxy")
+	if original_proxy == null:
+		_dispose(game)
+		return
+	var original_mesh := original_proxy.mesh as CapsuleMesh
+	var assert_pose := func(lying: bool, label: String) -> void:
+		view.sync_actors(game.residents, game.buildings, false)
+		var proxy := view._resident_proxies.get(resident.resident_id) as MeshInstance3D
+		var expected_xz := bed_center if lying else resident.position
+		var expected_y := 7.35 if lying else MapView3D.COLONIST_HEIGHT * 0.5
+		_assert_true(proxy == original_proxy, "%s retains the same proxy" % label)
+		_assert_true(proxy.position.is_equal_approx(Vector3(expected_xz.x, expected_y, expected_xz.y)), "%s center position" % label)
+		_assert_true(proxy.rotation.is_equal_approx(Vector3(PI / 2, 0, 0) if lying else Vector3.ZERO), "%s rotation" % label)
+		_assert_equal(proxy.scale, Vector3.ONE, "%s capsule scale" % label)
+		_assert_true(proxy.mesh == original_mesh, "%s retains capsule mesh" % label)
+		_assert_approximately(original_mesh.radius, 2.4, 0.0001, "%s capsule radius" % label)
+		_assert_approximately(original_mesh.height, 13.0, 0.0001, "%s capsule height" % label)
+	_assert_false(resident.sleeping, "medical rest does not require sleeping")
+	assert_pose.call(true, "medical rest with sleeping false and bed_id cleared")
+
+	resident.state = "Seeking Medical Bed"
+	assert_pose.call(false, "seeking medical bed stays upright")
+	resident.state = "Rest-Medical"
+	resident.position = bed_center + Vector2(1.0, 0)
+	assert_pose.call(true, "medical rest at distance gate boundary")
+	resident.position = bed_center + Vector2(1.01, 0)
+	assert_pose.call(false, "medical rest beyond distance gate")
+	resident.position = bed_center
+	assert_pose.call(true, "medical rest at bed center")
+
+	bed.complete = false
+	assert_pose.call(false, "incomplete medical bed")
+	bed.complete = true
+	assert_pose.call(true, "completed medical bed restored")
+	bed.kind = VaultBuilding.Kind.BED
+	assert_pose.call(false, "bunk id cannot supply medical pose")
+	bed.kind = VaultBuilding.Kind.MEDICAL_BED
+	resident.medical_bed_id = game.next_building_id + 100
+	assert_pose.call(false, "missing medical building id")
+	resident.medical_bed_id = bed.building_id
+	assert_pose.call(true, "matching medical building restored")
+
+	resident.alive = false
+	assert_pose.call(false, "dead resident has no medical rest pose")
+	_assert_true(original_proxy.material_override == view._mat_colonist_dead, "dead resident retains existing dead material")
+	resident.alive = true
+	assert_pose.call(true, "living medical resident restored")
+	resident.medical_bed_id = -1
+	assert_pose.call(false, "clearing medical assignment releases pose")
+	resident.medical_bed_id = bed.building_id
+	assert_pose.call(true, "medical assignment restored")
+	resident.state = "Idle"
+	assert_pose.call(false, "leaving Rest-Medical releases pose")
+	_dispose(game)
 
 
 func _assert_palette(assembly: Node3D, complete: bool, active: bool, label: String) -> void:
