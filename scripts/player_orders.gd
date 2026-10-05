@@ -1209,6 +1209,32 @@ func _primary_next_step() -> Dictionary:
 				"help": "Designate NUTRI, power it, leave Cook + Haul above OFF.",
 				"tool": "kitchen",
 			}
+		var food_capacity_short := false
+		if cook_ok and haul_ok:
+			food_capacity_short = true
+			for kind in [VaultBuilding.Kind.GROW_TRAY, VaultBuilding.Kind.KITCHEN]:
+				if game.get_powered_building_count(kind) >= 1:
+					continue
+				var enabled_shed := false
+				for building: VaultBuilding in game.buildings:
+					if building.kind == kind and building.complete and not building.manually_disabled and game.power_grid.is_building_shed(building.building_id):
+						enabled_shed = true
+						break
+				if not enabled_shed:
+					food_capacity_short = false
+					break
+		if food_capacity_short:
+			if _unfinished_charge_count() > 0:
+				return {
+					"text": "Next: YOU leave Haul + Craft on · THEY finish the Charge Node",
+					"help": "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
+					"tool": "select",
+				}
+			return {
+				"text": "Next: YOU place a Charge Node · THEY add power",
+				"help": "The grid lacks power for the food chain. Place a Charge Node to add 7 power.",
+				"tool": "generator",
+			}
 		return {
 			"text": "Next: YOU power food chain · THEY cook/haul alone",
 			"help": "Enable Grow + Nutrient power. Keep Cook/Haul above OFF so defaults keep working.",
