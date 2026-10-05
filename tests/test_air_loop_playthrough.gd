@@ -2,6 +2,8 @@ extends "res://tests/test_runner.gd"
 
 const TICK_CAP := 550
 const RATE_TOLERANCE := 0.00001
+const FINISH_AIR := ["Next: YOU leave Haul + Craft on · THEY finish the Air Recycler", "Keep Haul + Craft above OFF so crew supply and finish the Air Recycler blueprint.", "select"]
+const ENABLE_AIR := ["Next: YOU enable an Air Recycler · THEY recycle air", "Select a completed Air Recycler and click ENABLE so it can recycle air.", "select"]
 const AIR_NEXT := "Next: YOU place Air Recycler · THEY craft it"
 const AIR_HINT := ["air", "Designate AIR $14 and keep it powered (3). Craft auto-builds the blueprint."]
 const OBSERVATION_HINTS := {
@@ -130,11 +132,24 @@ func _free_floor_cell(game: VaultGame) -> Vector2i:
 
 
 func _act_on_next(game: VaultGame, step: Dictionary) -> bool:
+	var tuple := [step.text, step.help, step.tool]
+	if tuple == FINISH_AIR:
+		if _air == null or _air.complete or not game.buildings.has(_air):
+			return _fail_playthrough(game, "Air finish requires retained unfinished Air")
+		for resident in game.residents:
+			for work in ["haul", "craft"]:
+				if resident.alive and not resident.drafted and resident.get_work_priority(work) == VaultResident.PRIORITY_DISABLED:
+					resident.set_work_priority(work, VaultResident.DEFAULT_WORK_PRIORITY)
+		return true
+	if tuple == ENABLE_AIR:
+		if _air == null or not _air.complete or not _air.manually_disabled:
+			return _fail_playthrough(game, "Air enable requires completed disabled Air")
+		return game.toggle_building_enabled(_air.building_id)
 	if step.text == AIR_NEXT and [step.tool, step.help] == AIR_HINT:
 		_recommended = true
 		if _air != null:
 			if not _air.complete:
-				return true # Idempotent: wait for the existing blueprint.
+				return _fail_playthrough(game, "repeated Air place tip with retained unfinished Air")
 			return _fail_playthrough(game, "Next asks for another Air after completion; diagnose power/enable, never duplicate Air")
 		for building in game.buildings:
 			if building.kind == VaultBuilding.Kind.AIR_RECYCLER:
@@ -148,9 +163,7 @@ func _act_on_next(game: VaultGame, step: Dictionary) -> bool:
 		return true
 	if OBSERVATION_HINTS.get(step.text, []) == [step.tool, step.help] and _powered_tick >= 0:
 		return true # Hatch-watch / reserve salvage requests time only before warning.
-	# Current Next has no Air enable/power select tuple. Fail unknown hints;
-	# never toggle a load or fabricate an enable action from placement wording.
-	return _fail_playthrough(game, "unexpected Next recommendation (only Air placement and powered observation allowed)")
+	return _fail_playthrough(game, "unexpected Next recommendation (only exact Air placement/finish/enable and powered observation allowed)")
 
 
 func _check_air_rates(game: VaultGame) -> bool:

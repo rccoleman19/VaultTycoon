@@ -4,6 +4,8 @@ const TICK_CAP := 550
 const CHARGE_NEXT := "Next: YOU place a Charge Node · THEY supply/build"
 const GROW_NEXT := "Next: YOU place Grow Tray · THEY haul output"
 const KITCHEN_NEXT := "Next: YOU place Nutrient Station · THEY cook/haul"
+const FINISH_AIR_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the Air Recycler"
+const ENABLE_AIR_NEXT := "Next: YOU enable an Air Recycler · THEY recycle air"
 const AIR_NEXT := "Next: YOU place Air Recycler · THEY craft it"
 const POWER_NEXT := "Next: YOU power food chain · THEY cook/haul alone"
 const FINISH_CHARGE_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the Charge Node"
@@ -25,6 +27,8 @@ const PLACEMENT_HINTS := {
 	"Next: YOU place bunks · THEY craft": ["bed", "Place bunks so tired undrafted crew have a bed."],
 }
 const SELECT_HINTS := {
+	FINISH_AIR_NEXT: "Keep Haul + Craft above OFF so crew supply and finish the Air Recycler blueprint.",
+	ENABLE_AIR_NEXT: "Select a completed Air Recycler and click ENABLE so it can recycle air.",
 	POWER_NEXT: "Enable Grow + Nutrient power. Keep Cook/Haul above OFF so defaults keep working.",
 	FINISH_CHARGE_NEXT: "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
 	FINISH_NUTRIENT_NEXT: "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint.",
@@ -170,8 +174,12 @@ func _act_on_next(game: VaultGame, step: Dictionary) -> bool:
 	if PLACEMENT_HINTS.has(text) and PLACEMENT_HINTS[text] == [tool, help]:
 		# The repo names the tool map BUILD_KIND_BY_TOOL (not TOOL_TO_KIND).
 		var kind := int(game.BUILD_KIND_BY_TOOL[tool])
+		if kind == VaultBuilding.Kind.AIR_RECYCLER and game.get_completed_building_count(kind) > 0:
+			return _fail_playthrough(game, "Air place tip after completion")
 		for building in game.buildings:
 			if building.kind == kind and not building.complete:
+				if kind == VaultBuilding.Kind.AIR_RECYCLER:
+					return _fail_playthrough(game, "repeated Air place tip with retained unfinished Air")
 				return true # Idempotent: time only until the crew finish it.
 		# Choose the nearest empty floor to the Bay, keeping deliveries short.
 		var bay := game.job_system._stockpile_cell()
@@ -191,6 +199,16 @@ func _act_on_next(game: VaultGame, step: Dictionary) -> bool:
 	if tool != "select" or SELECT_HINTS.get(text, "") != help:
 		return _fail_playthrough(game, "unexpected Next recommendation")
 	match text:
+		FINISH_AIR_NEXT:
+			var retained := false
+			for building in game.buildings:
+				if building.kind == VaultBuilding.Kind.AIR_RECYCLER and not building.complete:
+					retained = true
+			if not retained:
+				return _fail_playthrough(game, "Air finish requires retained unfinished Air")
+			return _enable_work(game, "haul") and _enable_work(game, "craft")
+		ENABLE_AIR_NEXT:
+			return _enable_buildings(game, [VaultBuilding.Kind.AIR_RECYCLER])
 		POWER_NEXT:
 			return _enable_buildings(game, [VaultBuilding.Kind.GROW_TRAY, VaultBuilding.Kind.KITCHEN])
 		ENABLE_GROW_NEXT:
