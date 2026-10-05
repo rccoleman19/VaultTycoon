@@ -6,6 +6,8 @@ func _run() -> void:
 	_test_remaining_fixture_palettes()
 	_test_medical_capsule_pose()
 	_test_sleeping_capsule_pose()
+	await _test_build_ghost()
+	await _test_build_ghost_validity()
 	await _test_assembly_cleanup()
 	print("Fixture props tests: %d assertions, %d failures" % [_assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
@@ -252,3 +254,144 @@ func _test_assembly_cleanup() -> void:
 		for part: Node in parts:
 			_assert_false(is_instance_valid(part), "all assembly parts are freed")
 	_dispose(game)
+
+
+func _test_build_ghost() -> void:
+	var game := _spawn_game()
+	var view := game.get_node("MapView3D") as MapView3D
+	var grid := game.map_grid
+	var ghost_root := view.get_node("BuildGhostRoot") as Node3D
+	var snapshot := game.create_snapshot()
+	var proxies := view._building_proxies.duplicate()
+	var fixture_count := view.fixture_root.get_child_count()
+	var previous: Node3D
+	var expected_kinds := {
+		"bed": VaultBuilding.Kind.BED, "lamp": VaultBuilding.Kind.LAMP,
+		"generator": VaultBuilding.Kind.GENERATOR, "grow": VaultBuilding.Kind.GROW_TRAY,
+		"kitchen": VaultBuilding.Kind.KITCHEN, "stockpile": VaultBuilding.Kind.STOCKPILE,
+		"air": VaultBuilding.Kind.AIR_RECYCLER, "rec": VaultBuilding.Kind.RECREATION_CONSOLE,
+		"medical": VaultBuilding.Kind.MEDICAL_BED,
+	}
+	for tool: String in expected_kinds:
+		grid.preview_tool = tool
+		grid.hover_cell = Vector2i(18, 12)
+		view.rebuild_map()
+		if previous != null:
+			_assert_false(is_instance_valid(previous), "kind change frees the previous ghost")
+		_assert_equal(ghost_root.get_child_count(), 1, "%s retains one assembly" % tool)
+		var ghost := ghost_root.get_child(0) as Node3D
+		_assert_true(ghost.visible, "%s ghost is visible on empty floor" % tool)
+		var reference := view._make_building_proxy(expected_kinds[tool])
+		_assert_equal(ghost.get_child_count(), reference.get_child_count(), "%s matches kind part count" % tool)
+		for i in reference.get_child_count():
+			var part := ghost.get_child(i) as MeshInstance3D
+			var expected_part := reference.get_child(i) as MeshInstance3D
+			_assert_equal(part.mesh.get_class(), expected_part.mesh.get_class(), "%s matches part mesh type" % tool)
+			_assert_equal(part.mesh.get_aabb(), expected_part.mesh.get_aabb(), "%s matches part geometry" % tool)
+			_assert_equal(part.position, expected_part.position, "%s matches part position" % tool)
+			var mat := part.material_override as StandardMaterial3D
+			var color: Color = expected_part.get_meta("original_albedo")
+			color.a = 0.55
+			_assert_true(mat.albedo_color.is_equal_approx(color), "%s uses translucent original palette" % tool)
+			_assert_equal(mat.transparency, BaseMaterial3D.TRANSPARENCY_ALPHA, "%s uses alpha transparency" % tool)
+			_assert_false(mat.emission_enabled, "%s ghost has no emission" % tool)
+			_assert_equal(mat.emission, Color.BLACK, "%s clears emission color" % tool)
+			_assert_approximately(mat.emission_energy_multiplier, 0.0, 0.0001, "%s clears emission energy" % tool)
+			_assert_true(mat != expected_part.material_override, "%s owns ghost material" % tool)
+		reference.free()
+		_assert_equal(ghost.scale, Vector3.ONE, "%s ghost uses completed scale" % tool)
+		_assert_equal(ghost.rotation, Vector3.ZERO, "%s ghost uses completed orientation" % tool)
+		grid.hover_cell = Vector2i(19, 12)
+		# Exercise the signature early-return: ghost sync must still move it.
+		view._last_map_signature = view._map_signature()
+		var terrain := view.hex_root.get_children()
+		view.rebuild_map()
+		_assert_true(ghost_root.get_child(0) == ghost, "%s cell move reuses assembly" % tool)
+		_assert_equal(view.hex_root.get_children(), terrain, "ghost sync runs before terrain early-return")
+		var center := grid.cell_to_world(grid.hover_cell)
+		_assert_equal(ghost.position, Vector3(center.x, MapView3D.FLOOR_HEIGHT, center.y), "%s ghost follows floor center" % tool)
+		previous = ghost
+		await process_frame
+	_assert_equal(game.create_snapshot(), snapshot, "hover sync leaves simulation snapshot and building ID unchanged")
+	_assert_equal(view._building_proxies, proxies, "ghost never registers a live fixture proxy")
+	_assert_equal(view.fixture_root.get_child_count(), fixture_count, "ghost leaves FixtureRoot untouched")
+	_dispose(game)
+	_assert_false(is_instance_valid(previous), "view teardown frees ghost independently")
+
+
+func _test_build_ghost_validity() -> void:
+	var game := _spawn_game()
+	var view := game.get_node("MapView3D") as MapView3D
+	var grid := game.map_grid
+	var cell := Vector2i(18, 12)
+	grid.preview_tool = "lamp"
+	grid.hover_cell = cell
+	view.rebuild_map()
+	await process_frame
+	var ghost_root := view.get_node("BuildGhostRoot") as Node3D
+	var ghost := ghost_root.get_child(0) as Node3D
+	_assert_hover_material(view, cell, view._mat_hover_ok, "empty build cell is green")
+	var neighbor := Vector2i(19, 12)
+	var footprint := view._make_hex_instance(neighbor)
+	_assert_true(footprint.material_override == view._mat_hover_ok, "valid Lumen preview retains range footprint")
+	footprint.free()
+	var valid_signature := view._map_signature()
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, cell), "place stationary-hover blueprint")
+	var building := game.get_building_at(cell)
+	_assert_true(grid.is_preview_valid("lamp", cell), "grid placement preview remains unchanged on occupied floor")
+	_assert_true(view._map_signature() != valid_signature, "occupancy changes signature without hover movement")
+	view.rebuild_map()
+	await process_frame
+	_assert_false(ghost.visible, "occupied blueprint hides ghost")
+	_assert_hover_material(view, cell, view._mat_hover_bad, "occupied hover turns red")
+	footprint = view._make_hex_instance(neighbor)
+	_assert_true(footprint.material_override != view._mat_hover_ok, "occupied Lumen preview removes range footprint")
+	footprint.free()
+	building.complete = true
+	view.sync_actors([], game.buildings, false)
+	var live_proxy: Node3D = view._building_proxies[game.buildings[0].building_id]
+	view.rebuild_map()
+	_assert_false(ghost.visible, "completed occupied fixture hides ghost")
+	for invalid_cell: Vector2i in [Vector2i(1, 1), BreachSystem.HATCH_CELL, Vector2i(-1, -1), Vector2i(MapGrid.WIDTH, MapGrid.HEIGHT)]:
+		grid.hover_cell = invalid_cell
+		view.rebuild_map()
+		_assert_false(ghost.visible, "rock, hatch and OOB hide retained ghost")
+		_assert_equal(ghost_root.get_child_count(), 1, "invalid hover retains one assembly")
+		await process_frame
+	grid.hover_cell = cell
+	for tool: String in ["select", "dig", "cancel", "zone"]:
+		grid.preview_tool = tool
+		view.rebuild_map()
+		_assert_false(ghost.visible, "%s has no fixture ghost" % tool)
+		_assert_equal(view._is_view_preview_valid(tool, cell), grid.is_preview_valid(tool, cell), "%s keeps grid tint validity" % tool)
+		await process_frame
+	grid.preview_tool = "lamp"
+	view.rebuild_map()
+	await process_frame
+	var occupied_signature := view._map_signature()
+	game.buildings.erase(building)
+	_assert_true(view._map_signature() != occupied_signature, "removal changes signature with stationary hover and tool")
+	var removed_snapshot := game.create_snapshot()
+	view.rebuild_map()
+	await process_frame
+	_assert_equal(view._map_signature(), valid_signature, "removal restores signature without moving hover")
+	_assert_true(ghost_root.get_child(0) == ghost and ghost.visible, "removal reveals retained same-kind ghost")
+	_assert_hover_material(view, cell, view._mat_hover_ok, "removal restores green hover")
+	var proxies := view._building_proxies.duplicate()
+	grid.preview_tool = "medical"
+	view.rebuild_map()
+	_assert_false(is_instance_valid(ghost), "valid kind change frees hidden retained assembly")
+	_assert_equal(view._building_proxies, proxies, "ghost replacement leaves live proxy registry untouched")
+	_assert_true(is_instance_valid(live_proxy) and live_proxy.get_parent() == view.fixture_root, "ghost teardown leaves live fixture attached")
+	_assert_equal(game.create_snapshot(), removed_snapshot, "ghost visibility and replacement leave simulation untouched")
+	building.free()
+	_dispose(game)
+
+
+func _assert_hover_material(view: MapView3D, cell: Vector2i, expected: StandardMaterial3D, label: String) -> void:
+	var center := view.map_grid.cell_to_world(cell)
+	for child in view.hex_root.get_children():
+		if child is MeshInstance3D and is_equal_approx(child.position.x, center.x) and is_equal_approx(child.position.z, center.y):
+			_assert_true(child.material_override == expected, label)
+			return
+	_assert_true(false, "%s: hover prism missing" % label)

@@ -29,6 +29,9 @@ var lighting_system: LightingSystem
 var _last_map_signature := ""
 var _resident_proxies: Dictionary = {}
 var _building_proxies: Dictionary[int, Node3D] = {}
+var _build_ghost_root: Node3D
+var _build_ghost: Node3D
+var _build_ghost_kind := -1
 var _rubble_props: Dictionary = {}
 var _food_props: Dictionary = {}
 var _hatch_proxy: MeshInstance3D
@@ -55,6 +58,9 @@ var _mat_hatch: StandardMaterial3D
 
 func _ready() -> void:
 	_ensure_materials()
+	_build_ghost_root = Node3D.new()
+	_build_ghost_root.name = "BuildGhostRoot"
+	add_child(_build_ghost_root)
 	var sun := get_node_or_null("Sun") as DirectionalLight3D
 	if sun != null:
 		sun.light_energy = 0.32
@@ -137,6 +143,7 @@ func rebuild_map(force := false) -> void:
 	if map_grid == null:
 		return
 	_ensure_materials()
+	_sync_build_ghost()
 	var signature := _map_signature()
 	if not force and signature == _last_map_signature:
 		return
@@ -150,6 +157,52 @@ func rebuild_map(force := false) -> void:
 			hex_root.add_child(prism)
 			if map_grid.get_tile(cell) == MapGrid.Tile.ROCK:
 				_add_perimeter_walls(cell, prism)
+
+
+## Occupancy is presentation-only; non-build tools retain MapGrid's rules.
+func _is_view_preview_valid(tool: String, cell: Vector2i) -> bool:
+	if not map_grid.is_preview_valid(tool, cell):
+		return false
+	if VaultGame.BUILD_KIND_BY_TOOL.has(tool):
+		var game := get_parent() as VaultGame
+		return game != null and game.get_building_at(cell) == null
+	return true
+
+
+func _sync_build_ghost() -> void:
+	var tool := map_grid.preview_tool
+	if not VaultGame.BUILD_KIND_BY_TOOL.has(tool):
+		if _build_ghost != null:
+			_build_ghost.hide()
+		return
+	var kind := int(VaultGame.BUILD_KIND_BY_TOOL[tool])
+	if _build_ghost == null or _build_ghost_kind != kind:
+		if _build_ghost != null:
+			_build_ghost_root.remove_child(_build_ghost)
+			_build_ghost.free()
+		_build_ghost = _make_building_proxy(kind)
+		_build_ghost_kind = kind
+		_apply_build_ghost_materials(_build_ghost)
+		_build_ghost_root.add_child(_build_ghost)
+	if not _is_view_preview_valid(tool, map_grid.hover_cell):
+		_build_ghost.hide()
+		return
+	var center := map_grid.cell_to_world(map_grid.hover_cell)
+	_build_ghost.position = Vector3(center.x, FLOOR_HEIGHT, center.y)
+	_build_ghost.scale = Vector3.ONE
+	_build_ghost.show()
+
+
+func _apply_build_ghost_materials(assembly: Node3D) -> void:
+	for part: MeshInstance3D in assembly.get_children():
+		var mat := part.material_override as StandardMaterial3D
+		var color: Color = part.get_meta("original_albedo", mat.albedo_color)
+		color.a = 0.55
+		mat.albedo_color = color
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.emission = Color.BLACK
+		mat.emission_energy_multiplier = 0.0
+		mat.emission_enabled = false
 
 
 # The same yaw-0, pointy-top vertices as CylinderMesh, at full HEX_SIZE.
@@ -240,7 +293,7 @@ func _map_signature() -> String:
 		lit_bits = lighting_system.get_lit_floor_count()
 		if lighting_system.is_coverage_overlay_visible():
 			lit_bits += 100000
-	return "%d:%s:%d:%d:%d:%s:%d" % [
+	return "%d:%s:%d:%d:%d:%s:%d:%d" % [
 		map_grid.topology_revision,
 		";".join(dig_bits),
 		zone_bits,
@@ -248,6 +301,7 @@ func _map_signature() -> String:
 		hover.y,
 		map_grid.preview_tool,
 		lit_bits,
+		int(_is_view_preview_valid(map_grid.preview_tool, hover)),
 	]
 
 
@@ -277,13 +331,13 @@ func _make_hex_instance(cell: Vector2i) -> MeshInstance3D:
 			mat = _mat_floor
 	if (
 		map_grid.preview_tool == "lamp"
-		and map_grid.is_preview_valid("lamp", map_grid.hover_cell)
+		and _is_view_preview_valid("lamp", map_grid.hover_cell)
 		and map_grid.is_walkable(cell)
 		and LightingSystem.is_cell_in_lumen_range(cell, map_grid.hover_cell)
 	):
 		mat = _mat_hover_ok
 	if cell == map_grid.hover_cell and map_grid.preview_tool != "select":
-		mat = _mat_hover_ok if map_grid.is_preview_valid(map_grid.preview_tool, cell) else _mat_hover_bad
+		mat = _mat_hover_ok if _is_view_preview_valid(map_grid.preview_tool, cell) else _mat_hover_bad
 		if is_rock and not map_grid.dig_marks.has(cell):
 			height = maxf(height, DIG_HEIGHT)
 	instance.scale = Vector3(1.0, height, 1.0)
