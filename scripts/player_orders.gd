@@ -1183,6 +1183,13 @@ func _primary_next_step() -> Dictionary:
 	)
 	if not food_ready:
 		if game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY) < 1:
+			for tray: VaultBuilding in game.buildings:
+				if tray.kind == VaultBuilding.Kind.GROW_TRAY and not tray.complete:
+					return {
+						"text": "Next: YOU leave Haul + Craft on · THEY finish the Grow Tray",
+						"help": "Keep Haul + Craft above OFF so crew supply and finish the Grow Tray blueprint.",
+						"tool": "select",
+					}
 			return {
 				"text": "Next: YOU place Grow Tray · THEY haul output",
 				"help": "Designate GROW and keep it powered. Haul defaults move raw food to stock.",
