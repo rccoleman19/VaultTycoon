@@ -96,6 +96,7 @@ func _run() -> void:
 	_test_medical_finish_restore()
 	_test_medical_enable_restore()
 	_test_medical_mixed_fallbacks()
+	_test_medical_admitted_patient_spare()
 	_test_medical_guards()
 	_test_medical_priority()
 	_test_medical_brownout()
@@ -1066,13 +1067,75 @@ func _test_medical_mixed_fallbacks() -> void:
 	reserved.reserved_by = game.residents[1].resident_id
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, Vector2i(21, 12)), "unfinished Med blueprint can be placed beside reserved bed")
+	_assert_step(game, FINISH_MED_NEXT, "select", FINISH_MED_HELP)
+	game.active_tool = "cancel"
+	_assert_true(game.issue_order(Vector2i(21, 12)), "cancel last unfinished Med beside occupied bed")
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, Vector2i(21, 12)), "replace unfinished Med beside occupied bed")
 	var spare := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(22, 12))
 	spare.manually_disabled = true
-	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	_assert_step(game, ENABLE_MED_NEXT, "select", ENABLE_MED_HELP)
 	game.active_tool = "cancel"
 	_assert_true(game.issue_order(Vector2i(21, 12)), "cancel removes unfinished Med blueprint")
+	_assert_step(game, ENABLE_MED_NEXT, "select", ENABLE_MED_HELP)
+	spare.reserved_by = game.residents[2].resident_id
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, Vector2i(21, 12)), "reserved disabled Med cannot enable but unfinished spare can finish")
+	_assert_step(game, FINISH_MED_NEXT, "select", FINISH_MED_HELP)
+	spare.reserved_by = -1
+	_assert_step(game, ENABLE_MED_NEXT, "select", ENABLE_MED_HELP)
+	_assert_true(game.toggle_building_enabled(spare.building_id), "enable free spare beside occupied bed")
+	game.residents[2].needs.health = 99.0
+	_assert_dig(game, "one free enabled spare suppresses Med guidance for multiple waiting injuries")
+	_dispose(game)
+
+
+func _test_medical_admitted_patient_spare() -> void:
+	var game := _healthy_game()
+	game.food_system.meals = game.get_alive_count()
+	var occupied := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(27, 12))
+	var patient: VaultResident = game.residents[0]
+	patient.needs.health = 60.0
+	for tick in range(200):
+		game.job_system.advance(0.1)
+		if patient.state == "Rest-Medical":
+			break
+	_assert_equal(patient.state, "Rest-Medical", "job system naturally admits first injured patient")
+	_assert_equal(patient.get_cell(game.map_grid), occupied.cell, "admitted patient physically reaches Med Bed")
+	_assert_equal(occupied.reserved_by, patient.resident_id, "occupied Med Bed reciprocally reserves admitted patient")
+	_assert_equal(patient.medical_bed_id, occupied.building_id, "admitted patient reciprocally retains Med Bed")
+	_assert_dig(game, "admitted patient alone needs no spare Med Bed")
+	var waiting: VaultResident = game.residents[1]
+	waiting.needs.health = 60.0
+	game.job_system.advance(0.1)
+	_assert_equal(waiting.medical_bed_id, -1, "second injured patient remains unreserved with occupied Med Bed")
+	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, Vector2i(21, 12)), "unfinished spare beside naturally occupied Med Bed")
+	var blueprint := game.get_building_at(Vector2i(21, 12))
+	_assert_step(game, FINISH_MED_NEXT, "select", FINISH_MED_HELP)
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "occupied Med finish refresh preserves active tool")
+	_assert_equal(game.player_orders.objective_label.text, FINISH_MED_NEXT, "occupied Med refresh displays exact finish")
+	var spare := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(22, 12))
+	spare.manually_disabled = true
+	_assert_step(game, ENABLE_MED_NEXT, "select", ENABLE_MED_HELP)
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "occupied Med enable refresh preserves active tool")
+	_assert_equal(game.player_orders.objective_label.text, ENABLE_MED_NEXT, "occupied Med refresh displays exact enable over finish")
+	_assert_true(game.toggle_building_enabled(spare.building_id), "enable free spare for second injured patient")
+	_assert_dig(game, "enabling free spare clears naturally occupied Med interrupt")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, DIG_NEXT, "refresh clears occupied Med enable interrupt")
+	_assert_equal(game.active_tool, "dig", "resolved occupied Med enable preserves active tool")
+	_assert_true(game.deconstruct_building(spare.building_id), "remove enabled spare to test completion independently")
+	_assert_step(game, FINISH_MED_NEXT, "select", FINISH_MED_HELP)
+	_assert_equal(blueprint.add_delivery(blueprint.get_cost()), blueprint.get_cost(), "occupied Med unfinished spare receives salvage")
+	_assert_true(blueprint.apply_build_work(blueprint.get_build_time()), "ordinary construction completes free Med spare")
+	_assert_dig(game, "completing free spare clears naturally occupied Med interrupt")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, DIG_NEXT, "refresh clears occupied Med finish interrupt")
+	_assert_equal(game.active_tool, "dig", "resolved occupied Med finish preserves active tool")
 	_dispose(game)
 
 
