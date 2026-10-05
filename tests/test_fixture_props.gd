@@ -3,6 +3,7 @@ extends "res://tests/test_runner.gd"
 
 func _run() -> void:
 	_test_fixture_palettes()
+	_test_remaining_fixture_palettes()
 	await _test_assembly_cleanup()
 	print("Fixture props tests: %d assertions, %d failures" % [_assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
@@ -64,6 +65,82 @@ func _test_fixture_palettes() -> void:
 	_dispose(game)
 
 
+func _test_remaining_fixture_palettes() -> void:
+	var game := _spawn_game()
+	var view := game.get_node("MapView3D") as MapView3D
+	for kind: int in [VaultBuilding.Kind.STOCKPILE, VaultBuilding.Kind.GROW_TRAY, VaultBuilding.Kind.AIR_RECYCLER, VaultBuilding.Kind.RECREATION_CONSOLE, VaultBuilding.Kind.MEDICAL_BED]:
+		var unfinished := _add_completed_building(game, kind, Vector2i(18, 12))
+		var neighbor := _add_completed_building(game, kind, Vector2i(19, 12))
+		unfinished.complete = false
+		unfinished.delivered = 0
+		unfinished.construction_left = unfinished.get_build_time()
+		unfinished.powered = false
+		neighbor.powered = true
+		view.sync_actors([], game.buildings, false)
+		var assembly: Node3D = view._building_proxies[unfinished.building_id]
+		var other: Node3D = view._building_proxies[neighbor.building_id]
+		var label := "kind %d" % kind
+		_assert_true(assembly.get_child_count() >= 4 and assembly.get_child_count() <= 8, "%s uses four to eight primitive parts" % label)
+		_assert_false(assembly.has_node("Legacy"), "%s replaces legacy mesh" % label)
+		for part: MeshInstance3D in assembly.get_children():
+			var other_part := other.get_node(NodePath(part.name)) as MeshInstance3D
+			_assert_true(part.material_override != other_part.material_override, "%s owns independent materials" % label)
+			_assert_false(bool(part.get_meta("powered_emitter")), "%s has no emitters" % label)
+		_assert_palette(assembly, false, false, "%s unfinished" % label)
+		_assert_palette(other, true, true, "%s powered neighbor" % label)
+		for iteration in 5:
+			view.sync_actors([], game.buildings, false)
+		_assert_palette(assembly, false, false, "%s repeated unfinished sync" % label)
+		unfinished.complete = true
+		var consumer := unfinished.is_power_consumer()
+		view.sync_actors([], game.buildings, false)
+		_assert_palette(assembly, true, not consumer, "%s completed without power" % label)
+		for iteration in 5:
+			view.sync_actors([], game.buildings, false)
+		_assert_palette(assembly, true, not consumer, "%s repeated unpowered sync" % label)
+		_assert_palette(other, true, true, "%s neighbor remains original" % label)
+		unfinished.powered = true
+		view.sync_actors([], game.buildings, false)
+		_assert_palette(assembly, true, true, "%s completion and power restore palette" % label)
+		if consumer:
+			neighbor.manually_disabled = true
+			view.sync_actors([], game.buildings, false)
+			_assert_palette(other, true, false, "%s manual disable overrides stale powered flag" % label)
+			_assert_palette(assembly, true, true, "%s manual disable stays independent" % label)
+			neighbor.manually_disabled = false
+			view.sync_actors([], game.buildings, false)
+			_assert_palette(other, true, true, "%s enable restores palette" % label)
+		_assert_remaining_design(assembly, kind)
+	_dispose(game)
+
+
+func _assert_remaining_design(assembly: Node3D, kind: int) -> void:
+	match kind:
+		VaultBuilding.Kind.STOCKPILE:
+			var shelf := assembly.get_node("MiddleShelf") as MeshInstance3D
+			var lower := assembly.get_node("CrateLower") as MeshInstance3D
+			var upper := assembly.get_node("CrateUpper") as MeshInstance3D
+			_assert_true(lower.position.y + (lower.mesh as BoxMesh).size.y / 2.0 < shelf.position.y - (shelf.mesh as BoxMesh).size.y / 2.0, "rack has visible gap above lower cargo")
+			_assert_true(upper.position.y + (upper.mesh as BoxMesh).size.y / 2.0 < 9.3, "rack has visible gap above upper cargo")
+		VaultBuilding.Kind.GROW_TRAY:
+			_assert_true(assembly.has_node("Soil") and assembly.has_node("EndReservoir"), "grow trough has inset soil and end reservoir")
+		VaultBuilding.Kind.AIR_RECYCLER:
+			var vessels := 0
+			for part: MeshInstance3D in assembly.get_children():
+				if part.mesh is CylinderMesh:
+					vessels += 1
+			_assert_equal(vessels, 1, "air recycler has one vessel, distinct from paired Charge drums")
+			_assert_true(assembly.get_node("Filter").position.x < 0 and assembly.get_node("Blower").position.x > 0, "air recycler has asymmetric filter and blower")
+		VaultBuilding.Kind.RECREATION_CONSOLE:
+			var screen := assembly.get_node("ScreenFace") as MeshInstance3D
+			var housing := assembly.get_node("ScreenHousing") as MeshInstance3D
+			_assert_true(screen.position.z > housing.position.z + (housing.mesh as BoxMesh).size.z / 2.0, "console screen faces +Z")
+			_assert_approximately((screen.material_override as StandardMaterial3D).emission_energy_multiplier, 0.0, 0.0001, "console screen is non-emissive")
+		VaultBuilding.Kind.MEDICAL_BED:
+			_assert_true(assembly.has_node("RailLeft") and assembly.has_node("RailRight") and assembly.has_node("HeadEquipment"), "clinical couch has rails and head equipment")
+			_assert_false(assembly.has_node("Headboard"), "clinical couch does not copy Bunk headboard")
+
+
 func _assert_palette(assembly: Node3D, complete: bool, active: bool, label: String) -> void:
 	_assert_approximately(assembly.position.y, MapView3D.FLOOR_HEIGHT, 0.0001, "%s root stays on floor" % label)
 	for part: MeshInstance3D in assembly.get_children():
@@ -85,18 +162,19 @@ func _assert_palette(assembly: Node3D, complete: bool, active: bool, label: Stri
 func _test_assembly_cleanup() -> void:
 	var game := _spawn_game()
 	var view := game.get_node("MapView3D") as MapView3D
-	var lamp := _add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(18, 12))
-	view.sync_actors([], game.buildings, false)
-	var assembly: Node3D = view._building_proxies[lamp.building_id]
-	var parts := assembly.get_children()
-	var child_count := view.fixture_root.get_child_count()
-	game.buildings.erase(lamp)
-	view.sync_actors([], game.buildings, false)
-	_assert_false(view._building_proxies.has(lamp.building_id), "teardown erases assembly id")
-	_assert_equal(view.fixture_root.get_child_count(), child_count - 1, "teardown removes whole assembly from FixtureRoot")
-	_assert_true(assembly.is_queued_for_deletion(), "teardown queues assembly for deletion")
-	await process_frame
-	_assert_false(is_instance_valid(assembly), "assembly is freed")
-	for part: Node in parts:
-		_assert_false(is_instance_valid(part), "all assembly parts are freed")
+	for kind: int in [VaultBuilding.Kind.LAMP, VaultBuilding.Kind.STOCKPILE, VaultBuilding.Kind.GROW_TRAY, VaultBuilding.Kind.AIR_RECYCLER, VaultBuilding.Kind.RECREATION_CONSOLE, VaultBuilding.Kind.MEDICAL_BED]:
+		var building := _add_completed_building(game, kind, Vector2i(18, 12))
+		view.sync_actors([], game.buildings, false)
+		var assembly: Node3D = view._building_proxies[building.building_id]
+		var parts := assembly.get_children()
+		var child_count := view.fixture_root.get_child_count()
+		game.buildings.erase(building)
+		view.sync_actors([], game.buildings, false)
+		_assert_false(view._building_proxies.has(building.building_id), "teardown erases assembly id")
+		_assert_equal(view.fixture_root.get_child_count(), child_count - 1, "teardown removes whole assembly from FixtureRoot")
+		_assert_true(assembly.is_queued_for_deletion(), "teardown queues assembly for deletion")
+		await process_frame
+		_assert_false(is_instance_valid(assembly), "assembly is freed")
+		for part: Node in parts:
+			_assert_false(is_instance_valid(part), "all assembly parts are freed")
 	_dispose(game)
