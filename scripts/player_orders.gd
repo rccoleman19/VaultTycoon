@@ -904,6 +904,14 @@ func _toggle_details_rail() -> void:
 		details_toggle.text = "DETAILS ▾" if _details_expanded else "DETAILS ▸"
 
 
+func _unfinished_charge_count() -> int:
+	var count := 0
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GENERATOR and not building.complete and not building.is_emergency_core:
+			count += 1
+	return count
+
+
 func _primary_next_step() -> Dictionary:
 	var critical_resident := false
 	var mood_break_risk := false
@@ -947,6 +955,12 @@ func _primary_next_step() -> Dictionary:
 					"help": "Power the Nutrient Station so Cook can run.",
 					"tool": "select",
 				}
+			if _unfinished_charge_count() > 0:
+				return {
+					"text": "Next: YOU leave Haul + Craft on · THEY finish the Charge Node",
+					"help": "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
+					"tool": "select",
+				}
 			return {
 				"text": "Next: YOU place a Charge Node · THEY power the kitchen",
 				"help": "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power.",
@@ -979,6 +993,12 @@ func _primary_next_step() -> Dictionary:
 				"text": "Next: YOU enable a Rec Console · THEY recover mood",
 				"tool": "select",
 				"help": "Select a completed Rec Console and click ENABLE so crew can recover mood.",
+			}
+		if _unfinished_charge_count() > 0:
+			return {
+				"text": "Next: YOU leave Haul + Craft on · THEY finish the Charge Node",
+				"help": "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
+				"tool": "select",
 			}
 		return {
 			"text": "Next: YOU place a Charge Node · THEY power the Rec Console",
@@ -1097,6 +1117,12 @@ func _primary_next_step() -> Dictionary:
 							"tool": "select",
 							"help": "Enable a completed Grow Tray so it can grow raw food. Haul delivers its output for Cook.",
 						}
+					if _unfinished_charge_count() > 0:
+						return {
+							"text": "Next: YOU leave Haul + Craft on · THEY finish the Charge Node",
+							"help": "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
+							"tool": "select",
+						}
 					return {
 						"text": "Next: YOU place a Charge Node · THEY power the Grow Tray",
 						"tool": "generator",
@@ -1136,6 +1162,12 @@ func _primary_next_step() -> Dictionary:
 			"tool": "bed",
 		}
 	if game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) < 1:
+		if _unfinished_charge_count() > 0:
+			return {
+				"text": "Next: YOU leave Haul + Craft on · THEY finish the Charge Node",
+				"help": "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
+				"tool": "select",
+			}
 		return {
 			"text": "Next: YOU place a Charge Node · THEY supply/build",
 			"help": "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.",
