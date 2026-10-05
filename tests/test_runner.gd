@@ -782,19 +782,19 @@ func _test_fixture_proxy_progress() -> void:
 	var view := game.get_node("MapView3D") as MapView3D
 	var sync := func() -> void:
 		view.sync_actors(game.residents, game.buildings, false, game.job_system.jobs)
-	var assert_proxy := func(building: VaultBuilding, expected_scale: float, expected_y: float, label: String) -> MeshInstance3D:
-		var proxy := view._building_proxies.get(building.building_id) as MeshInstance3D
+	var assert_proxy := func(building: VaultBuilding, expected_scale: float, expected_y: float, label: String) -> Node3D:
+		var proxy := view._building_proxies.get(building.building_id) as Node3D
 		_assert_true(proxy != null, "%s has a building proxy" % label)
 		if proxy != null:
 			_assert_approximately(proxy.scale.x, expected_scale, 0.0001, "%s scale x" % label)
 			_assert_approximately(proxy.scale.y, expected_scale, 0.0001, "%s scale y" % label)
 			_assert_approximately(proxy.scale.z, expected_scale, 0.0001, "%s scale z" % label)
-			_assert_approximately(proxy.position.y, expected_y, 0.0001, "%s center height" % label)
+			_assert_approximately(proxy.position.y, expected_y, 0.0001, "%s floor contact" % label)
 		return proxy
 	sync.call()
 	for building: VaultBuilding in game.buildings:
 		_assert_true(building.complete, "starter fixture is complete")
-		assert_proxy.call(building, 1.0, 2.2, "completed starter fixture")
+		assert_proxy.call(building, 1.0, MapView3D.FLOOR_HEIGHT, "completed starter fixture")
 	game.begin_shift()
 	var target := Vector2i(18, 12)
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, target), "bunk blueprint can be placed")
@@ -805,13 +805,13 @@ func _test_fixture_proxy_progress() -> void:
 	_assert_equal(bunk.get_cost(), 8, "bunk costs eight salvage")
 	_assert_approximately(bunk.get_build_time(), 8.0, 0.0001, "bunk takes eight seconds to assemble")
 	sync.call()
-	var original_proxy: MeshInstance3D = assert_proxy.call(bunk, 0.5, 1.1, "placed bunk 0/8")
+	var original_proxy: Node3D = assert_proxy.call(bunk, 0.5, MapView3D.FLOOR_HEIGHT, "placed bunk 0/8")
 	for stage: Array in [
-		[0, 8.0, false, 0.500, 1.100, "bunk 0/8"],
-		[4, 8.0, false, 0.625, 1.375, "bunk 4/8"],
-		[8, 8.0, false, 0.750, 1.650, "bunk supplied, eight seconds left"],
-		[8, 4.0, false, 0.875, 1.925, "bunk four seconds left"],
-		[8, 0.0, true, 1.000, 2.200, "bunk complete"],
+		[0, 8.0, false, 0.500, MapView3D.FLOOR_HEIGHT, "bunk 0/8"],
+		[4, 8.0, false, 0.625, MapView3D.FLOOR_HEIGHT, "bunk 4/8"],
+		[8, 8.0, false, 0.750, MapView3D.FLOOR_HEIGHT, "bunk supplied, eight seconds left"],
+		[8, 4.0, false, 0.875, MapView3D.FLOOR_HEIGHT, "bunk four seconds left"],
+		[8, 0.0, true, 1.000, MapView3D.FLOOR_HEIGHT, "bunk complete"],
 	]:
 		bunk.delivered = int(stage[0])
 		bunk.construction_left = float(stage[1])
@@ -823,13 +823,12 @@ func _test_fixture_proxy_progress() -> void:
 	bunk.delivered = bunk.get_cost() - 1
 	bunk.construction_left = bunk.get_build_time()
 	sync.call()
-	_assert_true(assert_proxy.call(bunk, 0.71875, 1.58125, "last partial supply") == original_proxy, "partial supply retains the original proxy")
+	_assert_true(assert_proxy.call(bunk, 0.71875, MapView3D.FLOOR_HEIGHT, "last partial supply") == original_proxy, "partial supply retains the original proxy")
 	bunk.delivered = bunk.get_cost()
 	var supply_endpoint := lerpf(0.50, 0.75, float(bunk.delivered) / float(bunk.get_cost()))
 	_assert_approximately(supply_endpoint, 0.750, 0.0001, "supply lerp ends at scale 0.750")
-	_assert_approximately(2.2 * supply_endpoint, 1.650, 0.0001, "supply lerp ends at height 1.650")
 	sync.call()
-	_assert_true(assert_proxy.call(bunk, supply_endpoint, 2.2 * supply_endpoint, "first assembly step") == original_proxy, "crossing from supply to assembly keeps the same proxy")
+	_assert_true(assert_proxy.call(bunk, supply_endpoint, MapView3D.FLOOR_HEIGHT, "first assembly step") == original_proxy, "crossing from supply to assembly keeps the same proxy")
 	if original_proxy != null:
 		var unchanged_position := original_proxy.position
 		var unchanged_scale := original_proxy.scale
@@ -839,8 +838,8 @@ func _test_fixture_proxy_progress() -> void:
 		_assert_equal(original_proxy.scale, unchanged_scale, "sync without work does not resize the proxy")
 
 	for restored: Dictionary in [
-		{"delivered": 4, "construction_left": 8.0, "complete": false, "scale": 0.625, "y": 1.375},
-		{"delivered": 8, "construction_left": 2.0, "complete": false, "scale": 0.9375, "y": 2.0625},
+		{"delivered": 4, "construction_left": 8.0, "complete": false, "scale": 0.625, "y": MapView3D.FLOOR_HEIGHT},
+		{"delivered": 8, "construction_left": 2.0, "complete": false, "scale": 0.9375, "y": MapView3D.FLOOR_HEIGHT},
 	]:
 		bunk.delivered = int(restored.delivered)
 		bunk.construction_left = float(restored.construction_left)
@@ -858,7 +857,7 @@ func _test_fixture_proxy_progress() -> void:
 		lamp.construction_left = lamp.get_build_time() * 0.5
 		lamp.complete = false
 		sync.call()
-		assert_proxy.call(lamp, 0.875, 1.925, "Lumen at half its five-second build time")
+		assert_proxy.call(lamp, 0.875, MapView3D.FLOOR_HEIGHT, "Lumen at half its five-second build time")
 	_dispose(game)
 
 

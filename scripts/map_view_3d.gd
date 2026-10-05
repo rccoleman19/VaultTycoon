@@ -14,6 +14,7 @@ const CAMERA_SIDE := 30.0
 const HEX_MESH_YAW_DEGREES := 0.0
 const COLONIST_RADIUS := 2.4
 const COLONIST_HEIGHT := 13.0
+const BUNK_MATTRESS_TOP := 3.90
 
 var map_grid: MapGrid
 var lighting_system: LightingSystem
@@ -26,7 +27,7 @@ var lighting_system: LightingSystem
 
 var _last_map_signature := ""
 var _resident_proxies: Dictionary = {}
-var _building_proxies: Dictionary = {}
+var _building_proxies: Dictionary[int, Node3D] = {}
 var _rubble_props: Dictionary = {}
 var _food_props: Dictionary = {}
 var _hatch_proxy: MeshInstance3D
@@ -427,7 +428,7 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 				var bed_center := MapGrid.offset_cell_to_world(building.cell)
 				if pos.distance_to(bed_center) <= 1.0:
 					proxy.rotation = Vector3(PI / 2, 0, 0)
-					proxy.position = Vector3(bed_center.x, 2.2 + 4.5 / 2 + COLONIST_RADIUS, bed_center.y)
+					proxy.position = Vector3(bed_center.x, FLOOR_HEIGHT + BUNK_MATTRESS_TOP + COLONIST_RADIUS, bed_center.y)
 				break
 		if not resident.alive:
 			proxy.material_override = _mat_colonist_dead
@@ -452,7 +453,7 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 		if not is_instance_valid(building):
 			continue
 		live_buildings[building.building_id] = true
-		var proxy: MeshInstance3D = _building_proxies.get(building.building_id)
+		var proxy: Node3D = _building_proxies.get(building.building_id)
 		if proxy == null or not is_instance_valid(proxy):
 			proxy = _make_building_proxy(building.kind)
 			fixture_root.add_child(proxy)
@@ -464,16 +465,15 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 				s = lerpf(0.50, 0.75, float(building.delivered) / float(building.get_cost()))
 			else:
 				s = lerpf(0.75, 1.00, 1.0 - building.construction_left / building.get_build_time())
-		proxy.position = Vector3(center.x, 2.2 * s, center.y)
+		proxy.position = Vector3(center.x, FLOOR_HEIGHT, center.y)
 		proxy.scale = Vector3.ONE * s
-		var color := _building_color(building)
-		if proxy.material_override is StandardMaterial3D:
-			(proxy.material_override as StandardMaterial3D).albedo_color = color
+		_sync_fixture_appearance(proxy, building)
 	for id: Variant in _building_proxies.keys():
 		if live_buildings.has(id):
 			continue
-		var stale_b: MeshInstance3D = _building_proxies[id]
+		var stale_b: Node3D = _building_proxies[id]
 		if is_instance_valid(stale_b):
+			fixture_root.remove_child(stale_b)
 			stale_b.queue_free()
 		_building_proxies.erase(id)
 
@@ -506,34 +506,95 @@ func _make_colonist_proxy() -> MeshInstance3D:
 	return proxy
 
 
-func _make_building_proxy(kind: int) -> MeshInstance3D:
-	var proxy := MeshInstance3D.new()
-	if (
-		kind == VaultBuilding.Kind.LAMP
-		or kind == VaultBuilding.Kind.GENERATOR
-		or kind == VaultBuilding.Kind.AIR_RECYCLER
-	):
-		var cyl := CylinderMesh.new()
-		cyl.top_radius = 4.0
-		cyl.bottom_radius = 4.0
-		cyl.height = 5.0
-		cyl.radial_segments = 10
-		proxy.mesh = cyl
-	else:
-		var box := BoxMesh.new()
-		box.size = Vector3(10.0, 4.5, 10.0)
-		proxy.mesh = box
-	proxy.material_override = _make_mat(_building_color_for_kind(kind))
-	return proxy
+## Fixture geometry is authored upward from the foot; each instance owns its materials.
+func _make_building_proxy(kind: int) -> Node3D:
+	var root := Node3D.new()
+	var steel := Color("505b60")
+	var dark_steel := Color("303a40")
+	match kind:
+		VaultBuilding.Kind.BED:
+			_fixture_box(root, "Foot", Vector3(7.8, 1.8, 13.8), Vector3(0, 0.9, 0), dark_steel)
+			_fixture_box(root, "Frame", Vector3(8.8, 1.0, 15.0), Vector3(0, 2.3, 0), steel)
+			_fixture_box(root, "Mattress", Vector3(7.6, 1.1, 13.4), Vector3(0, BUNK_MATTRESS_TOP - 0.55, 0), Color("aebbb8"))
+			_fixture_box(root, "Pillow", Vector3(5.6, 0.7, 2.6), Vector3(0, BUNK_MATTRESS_TOP + 0.35, -4.8), Color("ddd8c6"))
+			_fixture_box(root, "Headboard", Vector3(8.8, 4.8, 0.7), Vector3(0, 2.4, -7.15), steel)
+		VaultBuilding.Kind.KITCHEN:
+			_fixture_box(root, "Foot", Vector3(10.4, 0.7, 7.8), Vector3(0, 0.35, 0), dark_steel)
+			_fixture_box(root, "Cabinet", Vector3(10.8, 4.4, 8.2), Vector3(0, 2.9, 0), Color("89938d"))
+			_fixture_box(root, "Worktop", Vector3(11.6, 0.6, 8.8), Vector3(0, 5.4, 0), Color("d1c5a6"))
+			_fixture_box(root, "Appliance", Vector3(10.8, 2.7, 2.2), Vector3(0, 7.05, -3.0), steel)
+			_fixture_box(root, "CookSurface", Vector3(4.8, 0.12, 4.0), Vector3(-2.0, 5.71, 0.6), dark_steel)
+		VaultBuilding.Kind.GENERATOR:
+			# Emergency Core and Charge Node deliberately share this assembly.
+			_fixture_box(root, "Foot", Vector3(10.8, 0.9, 9.4), Vector3(0, 0.45, 0), dark_steel)
+			_fixture_box(root, "Housing", Vector3(10.0, 2.6, 8.6), Vector3(0, 2.2, 0), steel)
+			for x: float in [-2.6, 2.6]:
+				var drum := CylinderMesh.new()
+				drum.top_radius = 2.1
+				drum.bottom_radius = 2.1
+				drum.height = 3.4
+				drum.radial_segments = 12
+				_fixture_part(root, "Drum", drum, Vector3(x, 4.8, 0), Color("7f8b87"))
+			_fixture_box(root, "TealInset", Vector3(2.8, 1.0, 0.15), Vector3(0, 2.6, 4.31), Color("65ada5"))
+		VaultBuilding.Kind.LAMP:
+			_fixture_box(root, "Foot", Vector3(5.8, 1.0, 5.4), Vector3(0, 0.5, 0), dark_steel)
+			_fixture_box(root, "Pedestal", Vector3(1.8, 5.8, 1.8), Vector3(0, 3.9, 0), steel)
+			_fixture_box(root, "EmitterBacking", Vector3(4.0, 4.4, 1.8), Vector3(0, 8.1, 0), dark_steel)
+			_fixture_box(root, "Emitter", Vector3(2.8, 3.4, 0.3), Vector3(0, 8.1, 0.95), Color("efbe63"), true)
+			_fixture_box(root, "GuardLeft", Vector3(0.5, 4.4, 2.2), Vector3(-1.75, 8.1, 0.2), steel)
+			_fixture_box(root, "GuardRight", Vector3(0.5, 4.4, 2.2), Vector3(1.75, 8.1, 0.2), steel)
+			_fixture_box(root, "GuardCap", Vector3(4.0, 0.5, 2.2), Vector3(0, 10.05, 0.2), steel)
+		_:
+			# Deferred kinds retain their legacy primitive, lifted to rest on the floor.
+			if kind == VaultBuilding.Kind.AIR_RECYCLER:
+				var cyl := CylinderMesh.new()
+				cyl.top_radius = 4.0
+				cyl.bottom_radius = 4.0
+				cyl.height = 5.0
+				cyl.radial_segments = 10
+				_fixture_part(root, "Legacy", cyl, Vector3(0, 2.5, 0), _building_color_for_kind(kind))
+			else:
+				_fixture_box(root, "Legacy", Vector3(10.0, 4.5, 10.0), Vector3(0, 2.25, 0), _building_color_for_kind(kind))
+	return root
 
 
-func _building_color(building: VaultBuilding) -> Color:
-	var color := _building_color_for_kind(building.kind)
-	if not building.complete:
-		color.a = 0.55
-	elif building.get_power_demand() > 0 and not building.powered:
-		color = color.darkened(0.35)
-	return color
+func _fixture_box(root: Node3D, part_name: String, size: Vector3, center: Vector3, color: Color, emitter := false) -> void:
+	var box := BoxMesh.new()
+	box.size = size
+	_fixture_part(root, part_name, box, center, color, emitter)
+
+
+func _fixture_part(root: Node3D, part_name: String, mesh: PrimitiveMesh, center: Vector3, color: Color, emitter := false) -> void:
+	var part := MeshInstance3D.new()
+	part.name = part_name
+	part.mesh = mesh
+	part.position = center
+	var mat := _make_mat(color)
+	mat.emission = color if emitter else Color.BLACK
+	mat.emission_energy_multiplier = 0.25 if emitter else 0.0
+	part.material_override = mat
+	# Immutable palette data, independent of the live material altered by sync.
+	part.set_meta("original_albedo", color)
+	part.set_meta("original_emission", mat.emission)
+	part.set_meta("original_emission_energy", mat.emission_energy_multiplier)
+	part.set_meta("powered_emitter", emitter)
+	root.add_child(part)
+
+
+func _sync_fixture_appearance(root: Node3D, building: VaultBuilding) -> void:
+	var inactive := building.is_power_consumer() and (not building.powered or building.manually_disabled)
+	for part: MeshInstance3D in root.get_children():
+		var mat := part.material_override as StandardMaterial3D
+		var color: Color = part.get_meta("original_albedo")
+		if not building.complete:
+			color.a = 0.55
+		elif inactive:
+			color = color.darkened(0.35)
+		mat.albedo_color = color
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED if building.complete else BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.emission = part.get_meta("original_emission")
+		mat.emission_energy_multiplier = part.get_meta("original_emission_energy")
+		mat.emission_enabled = bool(part.get_meta("powered_emitter")) and building.complete and building.powered and not building.manually_disabled
 
 
 func _building_color_for_kind(kind: int) -> Color:
