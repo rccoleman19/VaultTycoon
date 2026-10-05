@@ -544,17 +544,57 @@ func _make_building_proxy(kind: int) -> Node3D:
 			_fixture_box(root, "GuardLeft", Vector3(0.5, 4.4, 2.2), Vector3(-1.75, 8.1, 0.2), steel)
 			_fixture_box(root, "GuardRight", Vector3(0.5, 4.4, 2.2), Vector3(1.75, 8.1, 0.2), steel)
 			_fixture_box(root, "GuardCap", Vector3(4.0, 0.5, 2.2), Vector3(0, 10.05, 0.2), steel)
-		_:
-			# Deferred kinds retain their legacy primitive, lifted to rest on the floor.
-			if kind == VaultBuilding.Kind.AIR_RECYCLER:
-				var cyl := CylinderMesh.new()
-				cyl.top_radius = 4.0
-				cyl.bottom_radius = 4.0
-				cyl.height = 5.0
-				cyl.radial_segments = 10
-				_fixture_part(root, "Legacy", cyl, Vector3(0, 2.5, 0), _building_color_for_kind(kind))
-			else:
-				_fixture_box(root, "Legacy", Vector3(10.0, 4.5, 10.0), Vector3(0, 2.25, 0), _building_color_for_kind(kind))
+		VaultBuilding.Kind.STOCKPILE:
+			# Fixed decorative cargo: open rack and shelf gaps lead the silhouette.
+			_fixture_box(root, "BaseShelf", Vector3(12.0, 0.7, 8.0), Vector3(0, 0.35, 0), Color("97804f"))
+			_fixture_box(root, "PostLeft", Vector3(0.8, 10.0, 0.9), Vector3(-5.6, 5.0, 0), steel)
+			_fixture_box(root, "PostRight", Vector3(0.8, 10.0, 0.9), Vector3(5.6, 5.0, 0), steel)
+			_fixture_box(root, "MiddleShelf", Vector3(10.4, 0.6, 8.0), Vector3(0, 5.0, 0), Color("97804f"))
+			_fixture_box(root, "TopCrossbar", Vector3(12.0, 0.7, 0.8), Vector3(0, 9.65, 0), steel)
+			_fixture_box(root, "CrateLower", Vector3(3.6, 2.4, 4.0), Vector3(-2.7, 1.9, 0.5), Color("747b68"))
+			_fixture_box(root, "CrateUpper", Vector3(3.4, 2.2, 3.6), Vector3(2.8, 6.4, 0.4), Color("89918c"))
+			var drum := CylinderMesh.new()
+			drum.top_radius = 1.4
+			drum.bottom_radius = 1.4
+			drum.height = 2.8
+			drum.radial_segments = 12
+			_fixture_part(root, "CargoDrum", drum, Vector3(2.7, 2.1, 0.5), Color("626e70"))
+		VaultBuilding.Kind.GROW_TRAY:
+			_fixture_box(root, "Plinth", Vector3(8.8, 1.8, 6.8), Vector3(0, 0.9, 0), dark_steel)
+			_fixture_box(root, "Trough", Vector3(11.0, 2.4, 9.0), Vector3(0, 3.0, 0), Color("89938d"))
+			_fixture_box(root, "Soil", Vector3(8.8, 0.25, 7.2), Vector3(-0.5, 4.12, 0), Color("51483a"))
+			_fixture_box(root, "CropLeft", Vector3(2.0, 1.4, 5.2), Vector3(-3.5, 4.9, 0), Color("638153"))
+			_fixture_box(root, "CropMiddle", Vector3(2.0, 1.8, 5.0), Vector3(-0.7, 5.1, 0), Color("78955c"))
+			_fixture_box(root, "CropRight", Vector3(2.0, 1.3, 5.2), Vector3(2.1, 4.85, 0), Color("58794e"))
+			_fixture_box(root, "EndReservoir", Vector3(1.4, 3.0, 8.0), Vector3(4.7, 3.3, 0), Color("657f83"))
+		VaultBuilding.Kind.AIR_RECYCLER:
+			_fixture_box(root, "Skid", Vector3(10.0, 0.8, 9.0), Vector3(0, 0.4, 0), dark_steel)
+			var filter := CylinderMesh.new()
+			filter.top_radius = 2.5
+			filter.bottom_radius = 2.5
+			filter.height = 8.0
+			filter.radial_segments = 12
+			_fixture_part(root, "Filter", filter, Vector3(-2.0, 4.8, -0.7), Color("8a9c99"))
+			_fixture_box(root, "FilterCap", Vector3(5.8, 1.0, 5.8), Vector3(-2.0, 9.3, -0.7), steel)
+			_fixture_box(root, "Blower", Vector3(3.6, 4.2, 6.0), Vector3(3.0, 2.9, 0.8), Color("697b80"))
+			_fixture_box(root, "Duct", Vector3(3.0, 1.8, 2.4), Vector3(1.2, 5.5, -0.7), steel)
+			_fixture_box(root, "Intake", Vector3(2.8, 2.8, 0.2), Vector3(3.0, 3.0, 3.9), dark_steel)
+		VaultBuilding.Kind.RECREATION_CONSOLE:
+			_fixture_box(root, "Foot", Vector3(8.0, 0.8, 6.4), Vector3(0, 0.4, 0), dark_steel)
+			_fixture_box(root, "Pedestal", Vector3(5.8, 4.0, 4.8), Vector3(0, 2.8, -0.5), steel)
+			_fixture_box(root, "ControlDeck", Vector3(10.0, 0.8, 8.0), Vector3(0, 5.2, 0), Color("89938d"))
+			_fixture_box(root, "ScreenHousing", Vector3(8.0, 3.4, 0.8), Vector3(0, 7.3, -2.8), dark_steel)
+			# The inset face looks toward +Z; muted albedo only, no emission.
+			_fixture_box(root, "ScreenFace", Vector3(6.8, 2.4, 0.12), Vector3(0, 7.3, -2.34), Color("54768d"))
+			_fixture_box(root, "ControlStrip", Vector3(6.8, 0.15, 1.0), Vector3(0, 5.675, 2.0), Color("505e68"))
+		VaultBuilding.Kind.MEDICAL_BED:
+			_fixture_box(root, "Pedestal", Vector3(4.8, 2.6, 8.0), Vector3(0, 1.3, 0), steel)
+			_fixture_box(root, "Deck", Vector3(8.6, 0.8, 14.0), Vector3(0, 3.0, 0), Color("a4b5b5"))
+			_fixture_box(root, "Mattress", Vector3(7.2, 1.0, 12.6), Vector3(0, 3.9, 0), Color("dce5e1"))
+			_fixture_box(root, "Pillow", Vector3(5.4, 0.6, 2.4), Vector3(0, 4.7, -4.7), Color("eef0e7"))
+			_fixture_box(root, "RailLeft", Vector3(0.55, 1.8, 6.0), Vector3(-4.05, 4.3, 0.8), Color("bbc9ca"))
+			_fixture_box(root, "RailRight", Vector3(0.55, 1.8, 6.0), Vector3(4.05, 4.3, 0.8), Color("bbc9ca"))
+			_fixture_box(root, "HeadEquipment", Vector3(3.2, 2.6, 1.6), Vector3(2.6, 4.7, -6.7), Color("8aabaa"))
 	return root
 
 
