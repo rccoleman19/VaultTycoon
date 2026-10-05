@@ -80,6 +80,8 @@ func _run() -> void:
 	_test_medical_priority()
 	_test_medical_brownout()
 	_test_bunk_shortage()
+	_test_bunk_tired_sleeper_satisfied()
+	_test_bunk_tired_sleeper_free_capacity()
 	_test_bunk_finish_restore()
 	_test_bunk_finish_deficit()
 	_test_bunk_finish_occupied()
@@ -912,6 +914,9 @@ func _test_bunk_shortage() -> void:
 	_assert_dig(game, "rest above 28 does not need a bunk")
 	resident.sleeping = true
 	_assert_equal(game.player_orders._primary_next_step()["text"], BUNK_NEXT, "sleeping without a bed needs a bunk even above 28 rest")
+	_assert_equal(resident.bed_id, -1, "rest-29 floor sleeper has no bunk")
+	game.player_orders.refresh()
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "rest-29 floor sleeper without a blueprint triggers shortage alert")
 	resident.sleeping = false
 	resident.needs.rest = 28.0
 	var bunk := _add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(20, 12))
@@ -931,6 +936,51 @@ func _test_bunk_shortage() -> void:
 	_assert_equal(game.player_orders._primary_next_step()["text"], BUNK_NEXT, "two residents needing bunks outnumber one free bunk")
 	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(21, 12))
 	_assert_dig(game, "free bunks equal to need prevent shortage")
+	_dispose(game)
+
+
+func _test_bunk_tired_sleeper_satisfied() -> void:
+	var game := _healthy_game()
+	var bunk := _add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(20, 12))
+	var sleeper: VaultResident = game.residents[0]
+	sleeper.sleeping = true
+	sleeper.bed_id = bunk.building_id
+	sleeper.needs.rest = 28.0
+	_assert_dig(game, "rest-28 sleeper assigned to a completed bunk has no unmet bunk need")
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "satisfied tired sleeper refresh preserves dig")
+	_assert_equal(game.player_orders.objective_label.text, DIG_NEXT, "refresh displays dig for satisfied tired sleeper")
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "satisfied tired sleeper does not trigger shortage alert")
+	bunk.complete = false
+	_assert_dig(game, "assigned tired sleeper does not trigger false bunk finish when bunk is unfinished")
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "assigned sleeper with unfinished bunk refresh preserves dig")
+	_assert_equal(game.player_orders.objective_label.text, DIG_NEXT, "refresh displays dig with assigned sleeper and unfinished bunk")
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "assigned sleeper with unfinished bunk does not trigger shortage alert")
+	_dispose(game)
+
+
+func _test_bunk_tired_sleeper_free_capacity() -> void:
+	var game := _progression_bunk_game()
+	var bunk := _add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(17, 10))
+	var sleeper: VaultResident = game.residents[0]
+	sleeper.sleeping = true
+	sleeper.bed_id = bunk.building_id
+	sleeper.needs.rest = 28.0
+	_assert_step(game, PLACE_TWO_BUNKS_NEXT, "bed", PLACE_TWO_BUNKS_HELP)
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "tired sleeper progression placement refresh preserves dig")
+	_assert_equal(game.player_orders.objective_label.text, PLACE_TWO_BUNKS_NEXT, "refresh preserves legitimate progression bunk placement")
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "occupied bunk satisfies tired sleeper during progression")
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 10))
+	game.residents[1].needs.rest = 28.0
+	_assert_step(game, PROGRESSION_CHARGE_NEXT, "generator", PROGRESSION_CHARGE_HELP)
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "free capacity progression refresh preserves dig")
+	_assert_equal(game.player_orders.objective_label.text, PROGRESSION_CHARGE_NEXT, "refresh advances to Charge with enough free bunk capacity")
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "second completed bunk satisfies awake tired resident beside tired sleeper")
 	_dispose(game)
 
 
@@ -976,19 +1026,27 @@ func _test_bunk_finish_deficit() -> void:
 
 
 func _test_bunk_finish_occupied() -> void:
-	var game := _healthy_game()
-	var bunk := _add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(20, 12))
-	var sleeper: VaultResident = game.residents[0]
-	sleeper.sleeping = true
-	sleeper.bed_id = bunk.building_id
-	game.residents[1].needs.rest = 28.0
-	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(21, 12)), "occupied case has one bunk blueprint")
-	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
-	game.residents[2].needs.rest = 28.0
-	_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
-	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(22, 12)), "second blueprint covers remaining occupied-bunk shortage")
-	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
-	_dispose(game)
+	for sleeper_rest in [100.0, 28.0]:
+		var game := _healthy_game()
+		var bunk := _add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(20, 12))
+		var sleeper: VaultResident = game.residents[0]
+		sleeper.sleeping = true
+		sleeper.bed_id = bunk.building_id
+		sleeper.needs.rest = sleeper_rest
+		game.residents[1].needs.rest = 28.0
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(21, 12)), "occupied case has one bunk blueprint")
+		_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+		game.player_orders.refresh()
+		_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "one awake tired resident still needs a free completed bunk")
+		game.residents[2].needs.rest = 28.0
+		_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+		game.player_orders.refresh()
+		_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "two awake tired residents still need free completed bunks")
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(22, 12)), "second blueprint covers remaining occupied-bunk shortage")
+		_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+		game.player_orders.refresh()
+		_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "covering blueprints leave occupied-bunk shortage alert active")
+		_dispose(game)
 
 
 func _test_bunk_finish_guards() -> void:
@@ -1009,6 +1067,8 @@ func _test_bunk_finish_guards() -> void:
 	resident.sleeping = true
 	_assert_equal(resident.bed_id, -1, "floor sleeper has no bunk")
 	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	game.player_orders.refresh()
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "rest-29 floor sleeper with a blueprint still triggers shortage alert")
 	_dispose(game)
 
 
