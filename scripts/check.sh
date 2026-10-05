@@ -48,6 +48,7 @@ run_godot_check stockpile-zones --script res://tests/test_stockpile_zones.gd
 run_godot_check food-hauling --script res://tests/test_food_hauling.gd
 run_godot_check food-loop-playthrough --script res://tests/test_food_loop_playthrough.gd
 run_godot_check air-loop-playthrough --script res://tests/test_air_loop_playthrough.gd
+run_godot_check hatch-walk-playthrough --script res://tests/test_hatch_walk_playthrough.gd
 run_godot_check lighting-darkness --script res://tests/test_lighting_darkness.gd
 run_godot_check manual-draft-forced-orders --script res://tests/test_manual_draft_forced_orders.gd
 run_godot_check boot --quit-after 5
