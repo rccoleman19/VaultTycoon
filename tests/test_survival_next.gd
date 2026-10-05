@@ -30,6 +30,7 @@ const FINISH_MED_HELP := "Keep Haul + Craft above OFF so crew supply and finish 
 const BUNK_NEXT := "Next: YOU place bunks · THEY craft"
 const FINISH_BUNK_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the bunks"
 const FINISH_BUNK_HELP := "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints."
+const PLACE_ONE_BUNKS_NEXT := "Next: YOU place 1 bunk · THEY craft from Craft"
 const PLACE_TWO_BUNKS_NEXT := "Next: YOU place 2 bunks · THEY craft from Craft"
 const PLACE_TWO_BUNKS_HELP := "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them."
 const PROGRESSION_CHARGE_NEXT := "Next: YOU place a Charge Node · THEY supply/build"
@@ -1420,11 +1421,11 @@ func _test_bunk_tired_sleeper_free_capacity() -> void:
 	sleeper.sleeping = true
 	sleeper.bed_id = bunk.building_id
 	sleeper.needs.rest = 28.0
-	_assert_step(game, PLACE_TWO_BUNKS_NEXT, "bed", PLACE_TWO_BUNKS_HELP)
+	_assert_step(game, PLACE_ONE_BUNKS_NEXT, "bed", PLACE_TWO_BUNKS_HELP)
 	game.active_tool = "dig"
 	game.player_orders.refresh()
 	_assert_equal(game.active_tool, "dig", "tired sleeper progression placement refresh preserves dig")
-	_assert_equal(game.player_orders.objective_label.text, PLACE_TWO_BUNKS_NEXT, "refresh preserves legitimate progression bunk placement")
+	_assert_equal(game.player_orders.objective_label.text, PLACE_ONE_BUNKS_NEXT, "refresh preserves legitimate progression bunk placement")
 	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "occupied bunk satisfies tired sleeper during progression")
 	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 10))
 	game.residents[1].needs.rest = 28.0
@@ -1740,15 +1741,15 @@ func _test_bunk_finish_before_food_work() -> void:
 
 func _test_progression_bunk_deficit() -> void:
 	# Completed bunks, unfinished bunks, expected recommendation.
-	for row in [[0, 0, PLACE_TWO_BUNKS_NEXT], [0, 1, PLACE_TWO_BUNKS_NEXT], [1, 0, PLACE_TWO_BUNKS_NEXT], [0, 2, FINISH_BUNK_NEXT], [1, 1, FINISH_BUNK_NEXT], [0, 3, FINISH_BUNK_NEXT], [2, 0, PROGRESSION_CHARGE_NEXT], [2, 1, PROGRESSION_CHARGE_NEXT]]:
+	for row in [[0, 0, PLACE_TWO_BUNKS_NEXT], [0, 1, PLACE_ONE_BUNKS_NEXT], [1, 0, PLACE_ONE_BUNKS_NEXT], [0, 2, FINISH_BUNK_NEXT], [1, 1, FINISH_BUNK_NEXT], [0, 3, FINISH_BUNK_NEXT], [2, 0, PROGRESSION_CHARGE_NEXT], [2, 1, PROGRESSION_CHARGE_NEXT]]:
 		var game := _progression_bunk_game()
 		for index in range(row[0]):
 			_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(17 + index, 10))
 		for index in range(row[1]):
 			_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(20 + index, 10)), "progression deficit case places a real bunk blueprint")
 		match row[2]:
-			PLACE_TWO_BUNKS_NEXT:
-				_assert_step(game, PLACE_TWO_BUNKS_NEXT, "bed", PLACE_TWO_BUNKS_HELP)
+			PLACE_ONE_BUNKS_NEXT, PLACE_TWO_BUNKS_NEXT:
+				_assert_step(game, row[2], "bed", PLACE_TWO_BUNKS_HELP)
 			FINISH_BUNK_NEXT:
 				_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
 			PROGRESSION_CHARGE_NEXT:

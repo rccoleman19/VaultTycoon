@@ -1148,6 +1148,7 @@ func _primary_next_step() -> Dictionary:
 		}
 	var completed_bunks := game.get_completed_building_count(VaultBuilding.Kind.BED)
 	if completed_bunks < 2:
+		var deficit := 2 - completed_bunks - unfinished_bunks
 		if unfinished_bunks >= (2 - completed_bunks):
 			return {
 				"text": "Next: YOU leave Haul + Craft on · THEY finish the bunks",
@@ -1155,7 +1156,7 @@ func _primary_next_step() -> Dictionary:
 				"help": "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints.",
 			}
 		return {
-			"text": "Next: YOU place 2 bunks · THEY craft from Craft",
+			"text": "Next: YOU place 1 bunk · THEY craft from Craft" if deficit == 1 else "Next: YOU place 2 bunks · THEY craft from Craft",
 			"help": "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.",
 			"tool": "bed",
 		}
