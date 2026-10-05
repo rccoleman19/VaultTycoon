@@ -995,6 +995,42 @@ func _primary_next_step() -> Dictionary:
 				"help": "Meals are short. The powered Nutrient Station can cook.",
 			}
 		else:
+			if game.job_system.get_pending_meals() == 0 and game.job_system.get_pending_raw_food() == 0:
+				var total_trays := 0
+				var completed_trays := 0
+				var enabled_trays := 0
+				for tray: VaultBuilding in game.buildings:
+					if tray.kind != VaultBuilding.Kind.GROW_TRAY:
+						continue
+					total_trays += 1
+					if tray.complete:
+						completed_trays += 1
+						if not tray.manually_disabled:
+							enabled_trays += 1
+				if total_trays == 0:
+					return {
+						"text": "Next: YOU place a Grow Tray · THEY grow",
+						"tool": "grow",
+						"help": "Place a Grow Tray and keep it powered. Its raw food output needs Haul delivery before Cook can use it.",
+					}
+				if completed_trays == 0:
+					return {
+						"text": "Next: YOU leave Haul + Craft on · THEY finish the Grow Tray",
+						"tool": "select",
+						"help": "Keep Haul + Craft above OFF so crew supply and finish the Grow Tray blueprint.",
+					}
+				if game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) == 0:
+					if enabled_trays == 0:
+						return {
+							"text": "Next: YOU enable a Grow Tray · THEY grow",
+							"tool": "select",
+							"help": "Enable a completed Grow Tray so it can grow raw food. Haul delivers its output for Cook.",
+						}
+					return {
+						"text": "Next: YOU place a Charge Node · THEY power the Grow Tray",
+						"tool": "generator",
+						"help": "The grid lacks available power for the Grow Tray. Place a Charge Node to add 7 power.",
+					}
 			return {
 				"text": "Next: YOU leave Cook on · THEY cook",
 				"tool": "select",
