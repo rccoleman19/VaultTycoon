@@ -943,6 +943,16 @@ func _primary_next_step() -> Dictionary:
 				"tool": "generator",
 			}
 	if mood_break_risk and game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) < 1:
+		var unfinished_rec := 0
+		for rec: VaultBuilding in game.buildings:
+			if rec.kind == VaultBuilding.Kind.RECREATION_CONSOLE and not rec.complete:
+				unfinished_rec += 1
+		if unfinished_rec >= 1:
+			return {
+				"text": "Next: YOU leave Haul + Craft on · THEY finish the Rec Console",
+				"help": "Keep Haul + Craft above OFF so crew supply and finish the Rec Console blueprint.",
+				"tool": "select",
+			}
 		return {
 			"text": "Next: YOU place a Rec Console · THEY recover mood",
 			"help": "Place a Rec Console so crew can recover mood.",

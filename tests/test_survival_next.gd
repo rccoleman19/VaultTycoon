@@ -6,6 +6,8 @@ const POWER_NEXT := "Next: YOU power the Nutrient Station · THEY cook"
 const CHARGE_NEXT := "Next: YOU place a Charge Node · THEY power the kitchen"
 const CHARGE_HELP := "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power."
 const REC_NEXT := "Next: YOU place a Rec Console · THEY recover mood"
+const FINISH_REC_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the Rec Console"
+const FINISH_REC_HELP := "Keep Haul + Craft above OFF so crew supply and finish the Rec Console blueprint."
 const ENABLE_REC_NEXT := "Next: YOU enable a Rec Console · THEY recover mood"
 const ENABLE_REC_HELP := "Select a completed Rec Console and click ENABLE so crew can recover mood."
 const REC_CHARGE_NEXT := "Next: YOU place a Charge Node · THEY power the Rec Console"
@@ -67,6 +69,8 @@ func _run() -> void:
 	_test_interrupts_before_haul()
 	_test_no_pending_food_with_haul_off()
 	_test_existing_charge_node_insufficient()
+	_test_rec_finish_restore()
+	_test_rec_finish_guards()
 	_test_rec_enable_restore()
 	_test_rec_charge_restore()
 	_test_rec_guards()
@@ -582,8 +586,72 @@ func _assert_offline_rec(game: VaultGame, disabled: bool) -> void:
 
 func _assert_rec_suppressed(game: VaultGame) -> void:
 	var text: String = game.player_orders._primary_next_step()["text"]
-	for rec_next in [REC_NEXT, ENABLE_REC_NEXT, REC_CHARGE_NEXT]:
-		_assert_true(text != rec_next, "powered Rec suppresses %s" % rec_next)
+	for rec_next in [REC_NEXT, FINISH_REC_NEXT, ENABLE_REC_NEXT, REC_CHARGE_NEXT]:
+		_assert_true(text != rec_next, "Rec advice suppressed: %s" % rec_next)
+
+
+func _test_rec_finish_restore() -> void:
+	var game := _healthy_game()
+	game.residents[0].needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12)), "Rec blueprint can be placed")
+	var rec := game.get_building_at(Vector2i(20, 12))
+	_assert_false(rec.complete, "Rec blueprint starts unfinished")
+	_assert_equal(rec.delivered, 0, "Rec blueprint starts unsupplied")
+	_assert_step(game, FINISH_REC_NEXT, "select", FINISH_REC_HELP)
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "Rec finish refresh preserves active dig tool")
+	_assert_equal(game.player_orders.objective_label.text, FINISH_REC_NEXT, "refresh displays Rec finish")
+	_assert_equal(rec.add_delivery(rec.get_cost()), rec.get_cost(), "Rec blueprint receives its salvage cost")
+	_assert_true(rec.is_supplied(), "Rec blueprint is fully supplied")
+	_assert_false(rec.complete, "supplied Rec still needs construction")
+	_assert_step(game, FINISH_REC_NEXT, "select", FINISH_REC_HELP)
+	game.active_tool = "cancel"
+	_assert_true(game.issue_order(Vector2i(20, 12)), "cancel removes unfinished Rec blueprint")
+	_assert_equal(game.get_building_at(Vector2i(20, 12)), null, "canceled Rec leaves no blueprint")
+	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12)), "Rec blueprint can be replaced after cancellation")
+	rec = game.get_building_at(Vector2i(20, 12))
+	_assert_equal(rec.add_delivery(rec.get_cost()), rec.get_cost(), "replacement Rec receives salvage")
+	_assert_step(game, FINISH_REC_NEXT, "select", FINISH_REC_HELP)
+	_assert_true(rec.apply_build_work(rec.get_build_time()), "normal construction work completes Rec blueprint")
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(rec.powered, "completed Rec is powered by starter grid")
+	_assert_rec_suppressed(game)
+	_assert_dig(game, "completed powered Rec resolves finish recommendation")
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, DIG_NEXT, "refresh clears resolved Rec finish")
+	_assert_equal(game.active_tool, "dig", "resolved Rec finish refresh preserves dig")
+	rec.manually_disabled = true
+	game.power_grid.recalculate(game.buildings)
+	_assert_step(game, ENABLE_REC_NEXT, "select", ENABLE_REC_HELP)
+	rec.manually_disabled = false
+	_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(21, 12))
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(game.power_grid.is_building_shed(rec.building_id), "higher priority Lumens shed newly completed Rec")
+	_assert_step(game, REC_CHARGE_NEXT, "generator", REC_CHARGE_HELP)
+	_dispose(game)
+
+
+func _test_rec_finish_guards() -> void:
+	for supplied in [false, true]:
+		var game := _healthy_game()
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12)), "guard case has unfinished Rec")
+		var rec := game.get_building_at(Vector2i(20, 12))
+		if supplied:
+			_assert_equal(rec.add_delivery(rec.get_cost()), rec.get_cost(), "guard Rec blueprint is supplied")
+		for mood in [9.0001, 35.0, 100.0]:
+			game.residents[0].needs.mood = mood
+			_assert_rec_suppressed(game)
+			_assert_dig(game, "mood %s does not trigger unfinished Rec" % mood)
+		game.residents[0].needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+		_assert_step(game, FINISH_REC_NEXT, "select", FINISH_REC_HELP)
+		game.residents[0].alive = false
+		_assert_rec_suppressed(game)
+		_assert_dig(game, "dead mood-break resident does not trigger unfinished Rec")
+		_dispose(game)
 
 
 func _test_rec_enable_restore() -> void:
@@ -662,7 +730,7 @@ func _test_rec_guards() -> void:
 		_assert_true(game.place_blueprint(VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12)), "unfinished Rec blueprint can be placed")
 		game.power_grid.recalculate(game.buildings)
 		_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 0, "blueprint alone has zero completed Rec")
-		_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
+		_assert_step(game, FINISH_REC_NEXT, "select", FINISH_REC_HELP)
 		var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(21, 12))
 		rec.manually_disabled = disabled
 		# With Lumen disabled, the kitchen consumes both Core power before Rec.
@@ -685,6 +753,8 @@ func _test_kitchen_before_offline_rec() -> void:
 	for disabled in [true, false]:
 		var game := _critical_game()
 		game.residents[0].needs.mood = 9.0
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(22, 12)), "kitchen crisis has unfinished Rec")
+		_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
 		var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12))
 		rec.manually_disabled = disabled
 		# Two higher priority Lumens consume both Core power before Rec or kitchen.
