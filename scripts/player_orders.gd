@@ -948,6 +948,23 @@ func _primary_next_step() -> Dictionary:
 			"help": "Place a Rec Console so crew can recover mood.",
 			"tool": "rec",
 		}
+	if mood_break_risk and game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) > 0 and game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) == 0:
+		var all_rec_disabled := true
+		for rec: VaultBuilding in game.buildings:
+			if rec.kind == VaultBuilding.Kind.RECREATION_CONSOLE and rec.complete and not rec.manually_disabled:
+				all_rec_disabled = false
+				break
+		if all_rec_disabled:
+			return {
+				"text": "Next: YOU enable a Rec Console · THEY recover mood",
+				"tool": "select",
+				"help": "Select a completed Rec Console and click ENABLE so crew can recover mood.",
+			}
+		return {
+			"text": "Next: YOU place a Charge Node · THEY power the Rec Console",
+			"tool": "generator",
+			"help": "The grid lacks available power for the Rec Console. Place a Charge Node to add 7 power.",
+		}
 	var free_medical := 0
 	for bed: VaultBuilding in game.buildings:
 		if bed.kind == VaultBuilding.Kind.MEDICAL_BED and bed.complete and not bed.manually_disabled and bed.reserved_by < 0:

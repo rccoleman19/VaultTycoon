@@ -6,6 +6,10 @@ const POWER_NEXT := "Next: YOU power the Nutrient Station · THEY cook"
 const CHARGE_NEXT := "Next: YOU place a Charge Node · THEY power the kitchen"
 const CHARGE_HELP := "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power."
 const REC_NEXT := "Next: YOU place a Rec Console · THEY recover mood"
+const ENABLE_REC_NEXT := "Next: YOU enable a Rec Console · THEY recover mood"
+const ENABLE_REC_HELP := "Select a completed Rec Console and click ENABLE so crew can recover mood."
+const REC_CHARGE_NEXT := "Next: YOU place a Charge Node · THEY power the Rec Console"
+const REC_CHARGE_HELP := "The grid lacks available power for the Rec Console. Place a Charge Node to add 7 power."
 const MED_NEXT := "Next: YOU place a Med Bed · THEY treat"
 const BUNK_NEXT := "Next: YOU place bunks · THEY craft"
 const ENABLE_COOK_NEXT := "Next: YOU enable Cook · THEY cook"
@@ -53,6 +57,11 @@ func _run() -> void:
 	_test_interrupts_before_haul()
 	_test_no_pending_food_with_haul_off()
 	_test_existing_charge_node_insufficient()
+	_test_rec_enable_restore()
+	_test_rec_charge_restore()
+	_test_rec_guards()
+	_test_kitchen_before_offline_rec()
+	_test_offline_rec_priority()
 	_test_medical_availability()
 	_test_bunk_shortage()
 	_test_living_residents_only()
@@ -522,6 +531,173 @@ func _test_existing_charge_node_insufficient() -> void:
 	_assert_true(game.power_grid.is_building_shed(kitchen.building_id), "higher-priority demand sheds kitchen despite existing Charge Node")
 	_assert_step(game, CHARGE_NEXT, "generator", CHARGE_HELP)
 	_dispose(game)
+
+
+func _assert_offline_rec(game: VaultGame, disabled: bool) -> void:
+	if disabled:
+		_assert_step(game, ENABLE_REC_NEXT, "select", ENABLE_REC_HELP)
+	else:
+		_assert_step(game, REC_CHARGE_NEXT, "generator", REC_CHARGE_HELP)
+
+
+func _assert_rec_suppressed(game: VaultGame) -> void:
+	var text: String = game.player_orders._primary_next_step()["text"]
+	for rec_next in [REC_NEXT, ENABLE_REC_NEXT, REC_CHARGE_NEXT]:
+		_assert_true(text != rec_next, "powered Rec suppresses %s" % rec_next)
+
+
+func _test_rec_enable_restore() -> void:
+	var game := _healthy_game()
+	game.residents[0].needs.mood = 9.0
+	var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12))
+	var spare := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(21, 12))
+	rec.manually_disabled = true
+	spare.manually_disabled = true
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(22, 12)), "enabled unfinished Rec blueprint can be placed")
+	game.power_grid.recalculate(game.buildings)
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 2, "unfinished blueprint excluded from completed Rec count")
+	_assert_offline_rec(game, true)
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "Rec enable refresh preserves active dig tool")
+	_assert_equal(game.player_orders.objective_label.text, ENABLE_REC_NEXT, "refresh displays Rec enable")
+	rec.manually_disabled = false
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(rec.powered, "enabling Rec restores power on starter grid")
+	_assert_false(spare.powered, "disabled spare stays offline beside powered Rec")
+	_assert_rec_suppressed(game)
+	_assert_dig(game, "powered Rec lets Next move on after enable")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, DIG_NEXT, "refresh clears resolved Rec enable")
+	_assert_equal(game.active_tool, "dig", "resolved enable refresh preserves dig")
+	_dispose(game)
+
+
+func _test_rec_charge_restore() -> void:
+	var game := _healthy_game()
+	game.residents[0].needs.mood = 9.0
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(20, 12))
+	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12))
+	_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(22, 12))
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(23, 12))
+	game.power_grid.recalculate(game.buildings)
+	_assert_equal(game.power_grid.supply, 9, "Core plus Charge supply nine power")
+	_assert_equal(game.power_grid.demand, 9, "Lumen Grow Kitchen Air demand nine power")
+	_assert_equal(game.power_grid.served, 9, "all existing demand is served")
+	var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(24, 12))
+	var spare := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(25, 12))
+	spare.manually_disabled = true
+	game.power_grid.recalculate(game.buildings)
+	_assert_equal(game.power_grid.demand, 10, "enabled completed Rec raises demand to ten")
+	_assert_equal(game.power_grid.served, 9, "higher priority fixtures retain nine power")
+	_assert_true(game.power_grid.is_building_shed(rec.building_id), "real allocation sheds enabled Rec beside disabled spare")
+	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 0, "no Rec is powered")
+	_assert_offline_rec(game, false)
+	game.active_tool = "dig"
+	game.player_orders._set_architect_tab("dig")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, REC_CHARGE_NEXT, "refresh displays Rec Charge")
+	_assert_equal(game.active_tool, "dig", "Rec Charge refresh preserves active dig tool")
+	_assert_equal(game.player_orders._architect_open_tab, "build", "Rec Charge suggestion opens BUILD")
+	_assert_true(game.player_orders.command_buttons["generator"].is_visible_in_tree(), "suggested CHARGE is visible in BUILD")
+	_assert_equal(game.player_orders.command_buttons["generator"].modulate, Color("75d4b4"), "suggested CHARGE is highlighted teal")
+	_assert_equal(game.player_orders.command_buttons["dig"].modulate, Color("efc56b"), "active dig stays gold")
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(26, 12))
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(rec.powered, "extra Charge capacity restores Rec power")
+	_assert_false(spare.powered, "disabled spare remains offline after Charge")
+	_assert_rec_suppressed(game)
+	_assert_dig(game, "powered Rec lets Next move on after Charge")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, DIG_NEXT, "refresh clears resolved Rec Charge")
+	_assert_equal(game.active_tool, "dig", "resolved Charge refresh preserves dig")
+	_dispose(game)
+
+
+func _test_rec_guards() -> void:
+	for disabled in [true, false]:
+		var game := _healthy_game()
+		game.residents[0].needs.mood = 9.0
+		_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12)), "unfinished Rec blueprint can be placed")
+		game.power_grid.recalculate(game.buildings)
+		_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 0, "blueprint alone has zero completed Rec")
+		_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
+		var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(21, 12))
+		rec.manually_disabled = disabled
+		# With Lumen disabled, the kitchen consumes both Core power before Rec.
+		for building: VaultBuilding in game.buildings:
+			if building.kind == VaultBuilding.Kind.LAMP:
+				building.manually_disabled = true
+		_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(22, 12))
+		game.power_grid.recalculate(game.buildings)
+		_assert_offline_rec(game, disabled)
+		for mood in [9.0001, 35.0]:
+			game.residents[0].needs.mood = mood
+			_assert_dig(game, "mood %s does not trigger offline Rec" % mood)
+		game.residents[0].needs.mood = 9.0
+		game.residents[0].alive = false
+		_assert_dig(game, "dead mood-break resident does not trigger offline Rec")
+		_dispose(game)
+
+
+func _test_kitchen_before_offline_rec() -> void:
+	for disabled in [true, false]:
+		var game := _critical_game()
+		game.residents[0].needs.mood = 9.0
+		var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12))
+		rec.manually_disabled = disabled
+		# Two higher priority Lumens consume both Core power before Rec or kitchen.
+		_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(21, 12))
+		game.power_grid.recalculate(game.buildings)
+		_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 0, "Rec is offline during kitchen crisis")
+		_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
+		var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(23, 12))
+		kitchen.manually_disabled = true
+		game.power_grid.recalculate(game.buildings)
+		_assert_step(game, POWER_NEXT, "select", "Power the Nutrient Station so Cook can run.")
+		kitchen.manually_disabled = false
+		game.power_grid.recalculate(game.buildings)
+		_assert_true(game.power_grid.is_building_shed(kitchen.building_id), "real grid sheds enabled kitchen")
+		_assert_step(game, CHARGE_NEXT, "generator", CHARGE_HELP)
+		_dispose(game)
+
+
+func _test_offline_rec_priority() -> void:
+	for disabled in [true, false]:
+		for lower_step in ["medical", "bunks", "haul", "enable_cook", "cook", "grow"]:
+			var game := _powered_critical_game()
+			var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(21, 12))
+			rec.manually_disabled = disabled
+			game.power_grid.recalculate(game.buildings)
+			var expected := COOK_NEXT
+			match lower_step:
+				"medical":
+					game.residents[0].needs.food = 100.0
+					game.residents[0].needs.health = 99.0
+					expected = MED_NEXT
+				"bunks":
+					game.food_system.meals = game.get_alive_count()
+					game.residents[0].needs.rest = 14.0
+					expected = BUNK_NEXT
+				"haul":
+					game.job_system.queue_meals(Vector2i(20, 12), 2)
+					for resident: VaultResident in game.residents:
+						resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+					expected = ENABLE_HAUL_NEXT
+				"enable_cook":
+					for resident: VaultResident in game.residents:
+						resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+					expected = ENABLE_COOK_NEXT
+				"grow":
+					game.food_system.raw_food = 0
+					expected = GROW_NEXT
+			_assert_equal(game.player_orders._primary_next_step()["text"], expected, "lower priority branch is ready")
+			game.residents[0].needs.mood = 9.0
+			_assert_offline_rec(game, disabled)
+			game.residents[0].needs.mood = 100.0
+			_assert_equal(game.player_orders._primary_next_step()["text"], expected, "lower priority branch resumes above mood-break")
+			_dispose(game)
 
 
 func _test_medical_availability() -> void:
