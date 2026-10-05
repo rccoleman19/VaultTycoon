@@ -16,6 +16,8 @@ const ENABLE_MED_HELP := "Select a completed Med Bed and click ENABLE so the inj
 const FINISH_MED_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the Med Bed"
 const FINISH_MED_HELP := "Keep Haul + Craft above OFF so crew supply and finish the Med Bed blueprint."
 const BUNK_NEXT := "Next: YOU place bunks · THEY craft"
+const FINISH_BUNK_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the bunks"
+const FINISH_BUNK_HELP := "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints."
 const ENABLE_COOK_NEXT := "Next: YOU enable Cook · THEY cook"
 const ENABLE_COOK_HELP := "Enable Cook on a living, undrafted resident so the powered Nutrient Station can run."
 const COOK_NEXT := "Next: YOU leave Cook on · THEY cook"
@@ -74,6 +76,12 @@ func _run() -> void:
 	_test_medical_priority()
 	_test_medical_brownout()
 	_test_bunk_shortage()
+	_test_bunk_finish_restore()
+	_test_bunk_finish_deficit()
+	_test_bunk_finish_occupied()
+	_test_bunk_finish_guards()
+	_test_bunk_finish_priority()
+	_test_bunk_finish_before_food_work()
 	_test_living_residents_only()
 	print("Survival next tests: %d assertions, %d failures" % [_assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
@@ -889,7 +897,10 @@ func _test_bunk_shortage() -> void:
 	var bunk := _add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(20, 12))
 	_assert_dig(game, "one free completed bunk satisfies one tired resident")
 	bunk.complete = false
-	_assert_equal(game.player_orders._primary_next_step()["text"], BUNK_NEXT, "unfinished bunk does not count as free")
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 0, "unfinished bunk does not count as completed")
+	game.player_orders.refresh()
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "unfinished bunk still leaves the shortage alert active")
 	bunk.complete = true
 	var sleeper: VaultResident = game.residents[1]
 	sleeper.sleeping = true
@@ -901,6 +912,159 @@ func _test_bunk_shortage() -> void:
 	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(21, 12))
 	_assert_dig(game, "free bunks equal to need prevent shortage")
 	_dispose(game)
+
+
+func _test_bunk_finish_restore() -> void:
+	var game := _healthy_game()
+	game.residents[0].needs.rest = 28.0
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(20, 12)), "bunk blueprint can be placed")
+	var bunk := game.get_building_at(Vector2i(20, 12))
+	_assert_false(bunk.complete, "bunk blueprint starts unfinished")
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "bunk finish refresh preserves active dig tool")
+	_assert_equal(game.player_orders.objective_label.text, FINISH_BUNK_NEXT, "refresh displays bunk finish")
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "blueprint leaves bunk shortage alert active")
+	_assert_equal(bunk.add_delivery(bunk.get_cost()), bunk.get_cost(), "bunk blueprint receives its salvage cost")
+	_assert_true(bunk.apply_build_work(bunk.get_build_time()), "normal construction work completes bunk blueprint")
+	_assert_dig(game, "finished free bunk suppresses bunk Next")
+	game.player_orders.refresh()
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "completed free bunk clears shortage alert")
+	_assert_equal(game.player_orders.objective_label.text, DIG_NEXT, "refresh clears resolved bunk finish")
+	_assert_equal(game.active_tool, "dig", "resolved bunk finish refresh preserves dig")
+	_dispose(game)
+
+
+func _test_bunk_finish_deficit() -> void:
+	# Tired crew, free finished bunks, unfinished bunks, expected recommendation.
+	for row in [[2, 1, 1, FINISH_BUNK_NEXT], [3, 0, 1, BUNK_NEXT], [3, 0, 2, BUNK_NEXT], [3, 0, 3, FINISH_BUNK_NEXT], [1, 1, 1, DIG_NEXT]]:
+		var game := _healthy_game()
+		for index in range(row[0]):
+			game.residents[index].needs.rest = 28.0
+		for index in range(row[1]):
+			_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(20 + index, 12))
+		for index in range(row[2]):
+			_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(23 + index, 12)), "deficit case has real bunk blueprint")
+		if row[3] == FINISH_BUNK_NEXT:
+			_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+		elif row[3] == BUNK_NEXT:
+			_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+		else:
+			_assert_dig(game, "spare blueprint does not interrupt when finished bunks meet need")
+		_dispose(game)
+
+
+func _test_bunk_finish_occupied() -> void:
+	var game := _healthy_game()
+	var bunk := _add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(20, 12))
+	var sleeper: VaultResident = game.residents[0]
+	sleeper.sleeping = true
+	sleeper.bed_id = bunk.building_id
+	game.residents[1].needs.rest = 28.0
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(21, 12)), "occupied case has one bunk blueprint")
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	game.residents[2].needs.rest = 28.0
+	_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(22, 12)), "second blueprint covers remaining occupied-bunk shortage")
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	_dispose(game)
+
+
+func _test_bunk_finish_guards() -> void:
+	var game := _healthy_game()
+	var resident: VaultResident = game.residents[0]
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(20, 12)), "guard case has covering bunk blueprint")
+	resident.needs.rest = 28.0001
+	_assert_dig(game, "rest just above 28 suppresses bunk finish")
+	resident.needs.rest = 28.0
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	resident.drafted = true
+	_assert_dig(game, "drafted tired resident suppresses bunk finish")
+	resident.drafted = false
+	resident.alive = false
+	_assert_dig(game, "dead tired resident suppresses bunk finish")
+	resident.alive = true
+	resident.needs.rest = 29.0
+	resident.sleeping = true
+	_assert_equal(resident.bed_id, -1, "floor sleeper has no bunk")
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	_dispose(game)
+
+
+func _test_bunk_finish_priority() -> void:
+	var game := _healthy_game()
+	var resident: VaultResident = game.residents[0]
+	resident.needs.rest = 28.0
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(20, 12)), "priority case has covering bunk blueprint")
+	resident.needs.food = 19.0
+	game.food_system.meals = 0
+	resident.needs.mood = 9.0
+	resident.needs.health = 99.0
+	_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
+	resident.needs.food = 100.0
+	game.food_system.meals = game.get_alive_count()
+	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
+	resident.needs.mood = 100.0
+	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	resident.needs.health = 100.0
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	_dispose(game)
+	for disabled in [true, false]:
+		game = _powered_critical_game()
+		resident = game.residents[0]
+		resident.needs.rest = 28.0
+		resident.needs.mood = 9.0
+		resident.needs.health = 99.0
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(21, 12)), "offline Rec priority case has bunk blueprint")
+		var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(22, 12))
+		rec.manually_disabled = disabled
+		var kitchen := game.get_building_at(Vector2i(20, 12))
+		kitchen.manually_disabled = true
+		game.power_grid.recalculate(game.buildings)
+		_assert_step(game, POWER_NEXT, "select", "Power the Nutrient Station so Cook can run.")
+		kitchen.manually_disabled = false
+		game.power_grid.recalculate(game.buildings)
+		_assert_offline_rec(game, disabled)
+		resident.needs.mood = 100.0
+		_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+		resident.needs.health = 100.0
+		_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+		_dispose(game)
+
+
+func _test_bunk_finish_before_food_work() -> void:
+	for food_step in ["haul", "enable_cook", "cook", "grow"]:
+		var game := _powered_critical_game()
+		game.residents[0].needs.rest = 28.0
+		var expected := COOK_NEXT
+		var help := COOK_HELP
+		var tool := "select"
+		match food_step:
+			"haul":
+				game.job_system.queue_meals(Vector2i(20, 12), 2)
+				for crew: VaultResident in game.residents:
+					crew.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+					crew.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+				expected = ENABLE_HAUL_NEXT
+				help = ENABLE_HAUL_HELP
+			"enable_cook":
+				for crew: VaultResident in game.residents:
+					crew.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+				expected = ENABLE_COOK_NEXT
+				help = ENABLE_COOK_HELP
+			"grow":
+				game.food_system.raw_food = 0
+				expected = GROW_NEXT
+				help = GROW_HELP
+				tool = "grow"
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(21, 12)), "food priority case has covering bunk blueprint")
+		var bunk := game.get_building_at(Vector2i(21, 12))
+		_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+		_assert_equal(bunk.add_delivery(bunk.get_cost()), bunk.get_cost(), "food priority bunk receives salvage")
+		_assert_true(bunk.apply_build_work(bunk.get_build_time()), "real construction resolves bunk shortage before food work")
+		_assert_step(game, expected, tool, help)
+		_dispose(game)
 
 
 func _test_living_residents_only() -> void:
