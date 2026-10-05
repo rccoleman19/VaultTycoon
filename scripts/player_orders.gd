@@ -1006,10 +1006,19 @@ func _primary_next_step() -> Dictionary:
 		if resident.alive and not resident.drafted and (resident.needs.rest <= 28.0 or (resident.sleeping and resident.bed_id < 0)):
 			residents_needing_bunks += 1
 	var free_bunks := 0
+	var unfinished_bunks := 0
 	for building: VaultBuilding in game.buildings:
 		if building.kind == VaultBuilding.Kind.BED and building.complete and not occupied_bunks.has(building.building_id):
 			free_bunks += 1
+		if building.kind == VaultBuilding.Kind.BED and not building.complete:
+			unfinished_bunks += 1
 	if residents_needing_bunks > free_bunks:
+		if unfinished_bunks >= (residents_needing_bunks - free_bunks):
+			return {
+				"text": "Next: YOU leave Haul + Craft on · THEY finish the bunks",
+				"tool": "select",
+				"help": "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints.",
+			}
 		return {
 			"text": "Next: YOU place bunks · THEY craft",
 			"help": "Place bunks so tired undrafted crew have a bed.",
