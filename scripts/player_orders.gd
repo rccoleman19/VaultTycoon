@@ -1003,7 +1003,7 @@ func _primary_next_step() -> Dictionary:
 	for resident: VaultResident in game.residents:
 		if resident.sleeping and resident.bed_id >= 0:
 			occupied_bunks[resident.bed_id] = true
-		if resident.alive and not resident.drafted and (resident.needs.rest <= 28.0 or (resident.sleeping and resident.bed_id < 0)):
+		elif resident.alive and not resident.drafted and (resident.needs.rest <= 28.0 or (resident.sleeping and resident.bed_id < 0)):
 			residents_needing_bunks += 1
 	var free_bunks := 0
 	var unfinished_bunks := 0
@@ -1433,7 +1433,7 @@ func _refresh_alerts() -> void:
 	for resident: VaultResident in game.residents:
 		if resident.sleeping and resident.bed_id >= 0:
 			occupied_bunks[resident.bed_id] = true
-		if resident.alive and not resident.drafted and (resident.needs.rest <= 28.0 or (resident.sleeping and resident.bed_id < 0)):
+		elif resident.alive and not resident.drafted and (resident.needs.rest <= 28.0 or (resident.sleeping and resident.bed_id < 0)):
 			residents_needing_bunks += 1
 	var free_bunks := 0
 	for building: VaultBuilding in game.buildings:
