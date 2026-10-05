@@ -86,6 +86,10 @@ func _run() -> void:
 	_test_bunk_shortage()
 	_test_bunk_tired_sleeper_satisfied()
 	_test_bunk_tired_sleeper_free_capacity()
+	_test_bunk_medical_rester_satisfied()
+	_test_bunk_medical_rester_free_capacity_and_release()
+	_test_bunk_medical_rester_progression()
+	_test_bunk_medical_injury_guard()
 	_test_bunk_finish_restore()
 	_test_bunk_finish_deficit()
 	_test_bunk_finish_occupied()
@@ -1051,6 +1055,145 @@ func _test_bunk_tired_sleeper_free_capacity() -> void:
 	_assert_equal(game.active_tool, "dig", "free capacity progression refresh preserves dig")
 	_assert_equal(game.player_orders.objective_label.text, PROGRESSION_CHARGE_NEXT, "refresh advances to Charge with enough free bunk capacity")
 	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "second completed bunk satisfies awake tired resident beside tired sleeper")
+	_dispose(game)
+
+
+func _admit_tired_medical_patient(game: VaultGame, rest: float) -> VaultBuilding:
+	game.food_system.meals = game.get_alive_count()
+	var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(27, 12))
+	var patient: VaultResident = game.residents[0]
+	patient.needs.health = 60.0
+	patient.needs.rest = rest
+	_assert_true(bed.complete and not bed.manually_disabled, "medical fixture is completed and enabled")
+	_assert_true(not game.map_grid.find_path(patient.get_cell(game.map_grid), bed.cell).is_empty(), "medical fixture is reachable")
+	_assert_true(patient.needs.food > 35.0 and patient.needs.health <= 95.0, "patient meets natural admission gates")
+	game.job_system.advance(0.01)
+	_assert_equal(patient.medical_bed_id, bed.building_id, "job system reserves medical bed before arrival")
+	_assert_equal(patient.state, "Seeking Medical Bed", "patient naturally seeks medical bed before arrival")
+	_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+	game.player_orders.refresh()
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "medical reservation while seeking does not exempt tired patient")
+	for tick in range(200):
+		if patient.state == "Rest-Medical":
+			break
+		game.job_system.advance(0.1)
+	_assert_equal(patient.get_cell(game.map_grid), bed.cell, "patient reaches medical bed through job system movement")
+	_assert_equal(patient.state, "Rest-Medical", "job system naturally admits patient to restorative care")
+	_assert_equal(patient.medical_bed_id, bed.building_id, "admitted patient retains medical bed assignment")
+	_assert_false(patient.sleeping, "medical admission does not fake sleeping")
+	_assert_equal(patient.bed_id, -1, "medical patient has no bunk assignment")
+	_assert_equal(patient.needs.rest, rest, "admission alone does not change rest")
+	return bed
+
+
+func _assert_medical_rester_dig(game: VaultGame) -> void:
+	_assert_step(game, DIG_NEXT, "dig", "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional.")
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "medical rester refresh preserves active dig tool")
+	_assert_equal(game.player_orders.objective_label.text, DIG_NEXT, "refresh displays dig for medical rester")
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "medical rester has no unmet bunk shortage")
+
+
+func _test_bunk_medical_rester_satisfied() -> void:
+	# Separate naturally admitted rest-28 boundary from recovery below the threshold.
+	for initial_rest in [20.0, 28.0]:
+		var game := _healthy_game()
+		_admit_tired_medical_patient(game, initial_rest)
+		var patient: VaultResident = game.residents[0]
+		_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 0, "medical rester fixture has zero bunks")
+		_assert_medical_rester_dig(game)
+		if initial_rest < 28.0:
+			var previous_rest := patient.needs.rest
+			# Use the resident's actual needs path; it derives medical_rest from admission.
+			patient.advance_needs(0.01, true, false)
+			_assert_true(patient.needs.rest > previous_rest and patient.needs.rest <= 28.0, "medical care restores rest while still below bunk threshold")
+			_assert_equal(patient.state, "Rest-Medical", "rest recovery happens during medical care")
+			_assert_false(patient.sleeping, "rest recovery keeps medical patient awake")
+			_assert_equal(patient.bed_id, -1, "rest recovery consumes no bunk")
+			_assert_medical_rester_dig(game)
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(20, 12)), "medical rester case places covering unfinished bunk")
+		_assert_false(game.get_building_at(Vector2i(20, 12)).complete, "covering bunk stays unfinished")
+		_assert_medical_rester_dig(game)
+		_dispose(game)
+
+
+func _test_bunk_medical_rester_free_capacity_and_release() -> void:
+	for covering_blueprint in [false, true]:
+		var game := _healthy_game()
+		var medical_bed := _admit_tired_medical_patient(game, 20.0)
+		var patient: VaultResident = game.residents[0]
+		game.residents[1].needs.rest = 28.0
+		if covering_blueprint:
+			_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(20, 12)), "one blueprint covers genuine unmet resident beside patient")
+			_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+		else:
+			_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+		game.active_tool = "dig"
+		game.player_orders.refresh()
+		_assert_equal(game.active_tool, "dig", "genuine unmet need beside medical patient preserves dig")
+		_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "medical bed is not free bunk capacity for another tired resident")
+		_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(21, 12))
+		_assert_medical_rester_dig(game)
+		# Remove the other resident's need so release tests the patient's own deficit.
+		game.residents[1].needs.rest = 100.0
+		_assert_true(game.deconstruct_building(game.get_building_at(Vector2i(21, 12)).building_id), "remove free bunk before testing medical release")
+		patient.needs.health = 99.0
+		game.job_system.advance(0.5)
+		_assert_equal(patient.needs.health, 100.0, "medical treatment naturally reaches release threshold")
+		_assert_equal(patient.medical_bed_id, -1, "medical recovery releases patient reservation")
+		_assert_equal(medical_bed.reserved_by, -1, "medical release frees medical bed")
+		_assert_true(patient.needs.rest <= 28.0, "released patient remains tired")
+		_assert_false(patient.sleeping, "release has not yet assigned ordinary sleep")
+		_assert_equal(patient.bed_id, -1, "released patient still has no bunk")
+		if covering_blueprint:
+			_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+		else:
+			_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+		game.player_orders.refresh()
+		_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "medical release restores patient's ordinary bunk shortage")
+		_assert_equal(game.active_tool, "dig", "medical release refresh preserves dig")
+		_dispose(game)
+
+
+func _test_bunk_medical_rester_progression() -> void:
+	var game := _progression_bunk_game()
+	_admit_tired_medical_patient(game, 28.0)
+	_assert_step(game, PLACE_TWO_BUNKS_NEXT, "bed", PLACE_TWO_BUNKS_HELP)
+	game.active_tool = "dig"
+	game.player_orders.refresh()
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "medical rest preserves progression without unmet bunk alert")
+	for cell in [Vector2i(20, 12), Vector2i(21, 12)]:
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, cell), "medical progression places legitimate bunk blueprint")
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, FINISH_BUNK_NEXT, "medical rest preserves progression finish recommendation")
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "progression finish beside patient has no unmet bunk alert")
+	for cell in [Vector2i(20, 12), Vector2i(21, 12)]:
+		var bunk := game.get_building_at(cell)
+		_assert_equal(bunk.add_delivery(bunk.get_cost()), bunk.get_cost(), "medical progression bunk receives salvage")
+		_assert_true(bunk.apply_build_work(bunk.get_build_time()), "normal construction finishes medical progression bunk")
+	_assert_step(game, PROGRESSION_CHARGE_NEXT, "generator", PROGRESSION_CHARGE_HELP)
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "dig", "medical progression refresh preserves dig through completion")
+	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "completed medical progression has no bunk shortage")
+	_dispose(game)
+
+
+func _test_bunk_medical_injury_guard() -> void:
+	var game := _healthy_game()
+	_add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(27, 12))
+	var resident: VaultResident = game.residents[0]
+	resident.needs.health = 96.0
+	resident.needs.rest = 28.0
+	_assert_equal(resident.medical_bed_id, -1, "injury alone has no medical reservation")
+	_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+	game.player_orders.refresh()
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "injury alone does not exempt ordinary tired resident")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(20, 12)), "injury-only guard has covering bunk blueprint")
+	_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+	game.player_orders.refresh()
+	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "injury alone does not suppress bunk finish shortage")
 	_dispose(game)
 
 
