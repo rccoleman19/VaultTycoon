@@ -33,6 +33,9 @@ var _hatch_proxy: MeshInstance3D
 var _shared_hex_mesh: CylinderMesh
 var _mat_rock: StandardMaterial3D
 var _mat_rock_border: StandardMaterial3D
+var _mat_wall: StandardMaterial3D
+var _wall_rock_meshes: Dictionary = {}
+var _chamber_fill: OmniLight3D
 var _mat_floor: StandardMaterial3D
 var _mat_floor_dark: StandardMaterial3D
 var _mat_floor_lit: StandardMaterial3D
@@ -50,6 +53,19 @@ var _mat_hatch: StandardMaterial3D
 
 func _ready() -> void:
 	_ensure_materials()
+	var sun := get_node_or_null("Sun") as DirectionalLight3D
+	if sun != null:
+		sun.light_energy = 0.32
+	_chamber_fill = OmniLight3D.new()
+	_chamber_fill.name = "ChamberFill"
+	_chamber_fill.light_color = Color(1.0, 0.82, 0.62)
+	_chamber_fill.light_energy = 0.65
+	_chamber_fill.omni_range = 210.0
+	_chamber_fill.omni_attenuation = 0.8
+	# Presentation only: this light never participates in Lumen coverage.
+	var chamber_center := MapGrid.offset_cell_to_world(MapGrid.CHAMBER.get_center())
+	_chamber_fill.position = Vector3(chamber_center.x, 42.0, chamber_center.y)
+	add_child(_chamber_fill)
 	if camera_3d:
 		camera_3d.current = true
 
@@ -79,11 +95,12 @@ func _ensure_materials() -> void:
 		_shared_hex_mesh.radial_segments = 6
 		_shared_hex_mesh.rings = 1
 	if _mat_rock == null:
-		_mat_rock = _make_mat(Color(0.16, 0.14, 0.13))
-		_mat_rock_border = _make_mat(Color(0.125, 0.17, 0.20))
-		_mat_floor = _make_mat(Color(0.18, 0.27, 0.31))
-		_mat_floor_dark = _make_mat(Color(0.08, 0.11, 0.14))
-		_mat_floor_lit = _make_mat(Color(1.0, 0.78, 0.28, 1.0))
+		_mat_rock = _make_terrain_mat(Color(0.16, 0.14, 0.13))
+		_mat_rock_border = _make_terrain_mat(Color(0.125, 0.12, 0.11))
+		_mat_floor = _make_terrain_mat(Color(0.43, 0.42, 0.39))
+		_mat_floor_dark = _make_terrain_mat(Color(0.27, 0.26, 0.24))
+		_mat_floor_lit = _make_terrain_mat(_mat_floor.albedo_color.lerp(Color(1.0, 0.78, 0.28), 0.12))
+		_mat_wall = _make_terrain_mat(Color(0.36, 0.35, 0.32))
 		_mat_dig = _make_mat(Color(0.85, 0.55, 0.18))
 		_mat_zone = _make_mat(Color(0.28, 0.62, 0.70))
 		_mat_hover_ok = _make_mat(Color(0.35, 0.85, 0.65))
@@ -104,6 +121,16 @@ func _make_mat(color: Color) -> StandardMaterial3D:
 	return mat
 
 
+func _make_terrain_mat(color: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.metallic = 0.0
+	mat.roughness = 0.95
+	mat.albedo_color = color
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
+
+
 func rebuild_map(force := false) -> void:
 	if map_grid == null:
 		return
@@ -116,7 +143,81 @@ func rebuild_map(force := false) -> void:
 		child.queue_free()
 	for y in MapGrid.HEIGHT:
 		for x in MapGrid.WIDTH:
-			hex_root.add_child(_make_hex_instance(Vector2i(x, y)))
+			var cell := Vector2i(x, y)
+			var prism := _make_hex_instance(cell)
+			hex_root.add_child(prism)
+			if map_grid.get_tile(cell) == MapGrid.Tile.ROCK:
+				_add_perimeter_walls(cell, prism)
+
+
+# The same yaw-0, pointy-top vertices as CylinderMesh, at full HEX_SIZE.
+func _hex_vertex(index: int) -> Vector2:
+	var angle := index * PI / 3.0
+	return Vector2(sin(angle), cos(angle)) * MapGrid.HEX_SIZE
+
+
+func _add_perimeter_walls(cell: Vector2i, prism: MeshInstance3D) -> void:
+	var wall_height := prism.scale.y - FLOOR_HEIGHT
+	if wall_height <= 0.0001:
+		return
+	var center := map_grid.cell_to_world(cell)
+	var edge_mask := 0
+	for edge in 6:
+		var a := _hex_vertex(edge)
+		var b := _hex_vertex(edge + 1)
+		var midpoint := (a + b) * 0.5
+		# Twice the edge midpoint is the neighboring cell's center offset.
+		var neighbor := map_grid.world_to_cell(center + midpoint * 2.0)
+		if not map_grid.is_walkable(neighbor):
+			continue
+		edge_mask |= 1 << edge
+		var wall := MeshInstance3D.new()
+		wall.name = "ConcreteWall_%d_%d_%d" % [cell.x, cell.y, edge]
+		var box := BoxMesh.new()
+		const THICKNESS := 0.18
+		box.size = Vector3(a.distance_to(b), wall_height, THICKNESS)
+		wall.mesh = box
+		wall.material_override = _mat_wall
+		var wall_center := center + midpoint - midpoint.normalized() * THICKNESS * 0.5
+		wall.position = Vector3(wall_center.x, FLOOR_HEIGHT + wall_height * 0.5, wall_center.y)
+		var tangent := b - a
+		wall.rotation.y = atan2(-tangent.y, tangent.x)
+		hex_root.add_child(wall)
+	if edge_mask != 0:
+		# Keep the prism's top (including orange dig feedback) and all exterior
+		# faces. Omit only sides behind concrete to avoid coplanar z-fighting.
+		prism.mesh = _rock_mesh_with_walls(edge_mask)
+
+
+func _rock_mesh_with_walls(edge_mask: int) -> ArrayMesh:
+	if _wall_rock_meshes.has(edge_mask):
+		return _wall_rock_meshes[edge_mask]
+	var surface := SurfaceTool.new()
+	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for edge in 6:
+		var a := _hex_vertex(edge)
+		var b := _hex_vertex(edge + 1)
+		var bottom_a := Vector3(a.x, -0.5, a.y)
+		var bottom_b := Vector3(b.x, -0.5, b.y)
+		var top_a := Vector3(a.x, 0.5, a.y)
+		var top_b := Vector3(b.x, 0.5, b.y)
+		_add_terrain_triangle(surface, Vector3(0.0, 0.5, 0.0), top_a, top_b, Vector3.UP)
+		_add_terrain_triangle(surface, Vector3(0.0, -0.5, 0.0), bottom_b, bottom_a, Vector3.DOWN)
+		if edge_mask & (1 << edge) == 0:
+			var normal := Vector3(a.x + b.x, 0.0, a.y + b.y).normalized()
+			_add_terrain_triangle(surface, bottom_a, top_a, top_b, normal)
+			_add_terrain_triangle(surface, bottom_a, top_b, bottom_b, normal)
+	var mesh := surface.commit()
+	_wall_rock_meshes[edge_mask] = mesh
+	return mesh
+
+
+func _add_terrain_triangle(surface: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, normal: Vector3) -> void:
+	surface.set_normal(normal)
+	surface.add_vertex(a)
+	# Godot uses clockwise front faces; keep the supplied outward normal.
+	surface.add_vertex(c)
+	surface.add_vertex(b)
 
 
 func _dig_bucket(cell: Vector2i) -> int:

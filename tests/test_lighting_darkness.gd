@@ -13,7 +13,7 @@ func _run() -> void:
 	_run_case("coverage display control does not mutate the simulation", _test_display_only_control)
 	_run_case("live 3D coverage materials preserve previews and geometry", _test_live_coverage_materials)
 	_run_case("live lamp hover previews coverage without changing the simulation", _test_live_lamp_hover)
-	_run_case("live amber coverage follows completed powered Lumens", _test_live_lumen_materials)
+	_run_case("live tinted concrete coverage follows completed powered Lumens", _test_live_lumen_materials)
 	await _run_layout_case()
 
 	print("")
@@ -410,8 +410,10 @@ func _test_live_coverage_materials() -> void:
 	_assert_equal(_live_hex(view, zone_cell).material_override, view._mat_zone, "overlay off uses stockpile cyan")
 	_assert_equal(_live_hex(view, dark_cell).material_override, view._mat_floor_dark, "overlay off keeps today's dark floor")
 	var geometry_before := {}
+	var meshes_before := {}
 	for cell: Vector2i in [lit_cell, zone_cell, dark_cell, rock_cell, dig_cell]:
 		geometry_before[cell] = _live_hex(view, cell).transform
+		meshes_before[cell] = _live_hex(view, cell).mesh
 	var rock_material := _live_hex(view, rock_cell).material_override
 	var dig_material := _live_hex(view, dig_cell).material_override
 	var hex_mesh := _live_hex(view, lit_cell).mesh as CylinderMesh
@@ -437,15 +439,21 @@ func _test_live_coverage_materials() -> void:
 	game._sync_3d_play_view()
 	_assert_true(game.lighting_system.is_coverage_overlay_visible(), "L input turns the live Light Map on")
 	var amber := _live_hex(view, lit_cell).material_override as StandardMaterial3D
-	_assert_equal(amber.albedo_color, Color(1.0, 0.78, 0.28, 1.0), "lit floor uses the exact amber color")
+	_assert_equal(amber.albedo_color, Color(0.43, 0.42, 0.39).lerp(Color(1.0, 0.78, 0.28), 0.12), "lit floor uses the exact warm concrete tint")
 	_assert_equal(amber.transparency, BaseMaterial3D.TRANSPARENCY_DISABLED, "amber transparency stays disabled")
 	_assert_equal(amber.albedo_color.a, 1.0, "amber alpha is opaque")
-	_assert_equal(amber.shading_mode, BaseMaterial3D.SHADING_MODE_UNSHADED, "amber is unshaded")
+	_assert_equal(amber.shading_mode, BaseMaterial3D.SHADING_MODE_PER_PIXEL, "coverage concrete is shaded")
 	_assert_true(amber != dig_material, "coverage amber is a separate material from dig orange")
 	_assert_true(amber.albedo_color != Color(0.85, 0.55, 0.18), "coverage does not reuse dig orange")
 	_assert_equal(_live_hex(view, zone_cell).material_override, amber, "lit stockpile shares amber instead of cyan")
 	_assert_equal(_live_hex(view, dark_cell).material_override, view._mat_floor_dark, "Light Map uses existing dark material on unlit walkable floor")
-	_assert_equal(view._mat_floor_dark.albedo_color, Color(0.08, 0.11, 0.14), "dark floor keeps its exact color")
+	_assert_equal(view._mat_floor_dark.albedo_color, Color(0.27, 0.26, 0.24), "dark floor keeps its exact concrete color")
+	for terrain: StandardMaterial3D in [view._mat_floor, view._mat_floor_dark, view._mat_wall, view._mat_rock, view._mat_rock_border]:
+		_assert_equal(terrain.shading_mode, BaseMaterial3D.SHADING_MODE_PER_PIXEL, "terrain uses shaded concrete/stone")
+		_assert_equal(terrain.metallic, 0.0, "terrain is nonmetallic")
+		_assert_approximately(terrain.roughness, 0.95, 0.001, "terrain is rough")
+	for feedback: StandardMaterial3D in [view._mat_dig, view._mat_hover_ok, view._mat_hover_bad]:
+		_assert_equal(feedback.shading_mode, BaseMaterial3D.SHADING_MODE_UNSHADED, "dig and hover feedback stay unshaded")
 	_assert_equal(_amber_floor_cells(game), coverage_before, "every lit walkable floor shares amber")
 
 	# The Light Map button calls this same public control while paused.
@@ -475,7 +483,7 @@ func _test_live_coverage_materials() -> void:
 	for cell: Vector2i in geometry_before:
 		var prism := _live_hex(view, cell)
 		_assert_equal(prism.transform, geometry_before[cell], "Light Map preserves prism position, scale, and yaw at %s" % cell)
-		_assert_equal(prism.mesh, hex_mesh, "Light Map retains the shared hex mesh at %s" % cell)
+		_assert_equal(prism.mesh, meshes_before[cell], "Light Map retains the terrain mesh at %s" % cell)
 		_assert_equal(prism.rotation_degrees.y, 0.0, "hex yaw remains zero at %s" % cell)
 	_assert_approximately(hex_mesh.top_radius, MapGrid.HEX_SIZE, 0.001, "hex top radius remains HEX_SIZE")
 	_assert_approximately(hex_mesh.bottom_radius, MapGrid.HEX_SIZE, 0.001, "hex bottom radius remains HEX_SIZE")
@@ -501,7 +509,53 @@ func _test_live_coverage_materials() -> void:
 	game.map_grid.hover_cell = dark_cell
 	game._sync_3d_play_view()
 	_assert_equal(_live_hex(view, dark_cell).material_override, view._mat_hover_ok, "placement hover also wins over dark coverage")
+	_assert_concrete_perimeter(view)
+	# Concrete follows the lowered dig prism; its exposed top stays orange.
+	game.map_grid.apply_dig_work(dig_cell, 4.0)
+	game._sync_3d_play_view()
+	_assert_concrete_perimeter(view)
+	_assert_equal(_live_hex(view, dig_cell).material_override, view._mat_dig, "lowered dig top keeps orange feedback")
+	# Exercise the zero-height boundary before topology turns the rock into floor.
+	game.map_grid.dig_progress[dig_cell] = 8.0
+	game._sync_3d_play_view()
+	_assert_concrete_perimeter(view)
+	_assert_approximately(_live_hex(view, dig_cell).scale.y, MapView3D.FLOOR_HEIGHT, 0.001, "fully lowered dig prism meets floor height")
 	_dispose(game)
+
+
+func _assert_concrete_perimeter(view: MapView3D) -> void:
+	var prisms := {}
+	for child: Node in view.hex_root.get_children():
+		if child is MeshInstance3D and not child.is_queued_for_deletion() and child.material_override != view._mat_wall:
+			prisms[view.map_grid.world_to_cell(Vector2(child.position.x, child.position.z))] = child
+	var expected := 0
+	for y in MapGrid.HEIGHT:
+		for x in MapGrid.WIDTH:
+			var cell := Vector2i(x, y)
+			if view.map_grid.get_tile(cell) != MapGrid.Tile.ROCK:
+				continue
+			if prisms[cell].scale.y <= MapView3D.FLOOR_HEIGHT + 0.0001:
+				continue
+			for neighbor: Vector2i in view.map_grid.get_neighbors(cell):
+				if view.map_grid.is_walkable(neighbor):
+					expected += 1
+	var actual := 0
+	for child: Node in view.hex_root.get_children():
+		if not child is MeshInstance3D or child.is_queued_for_deletion() or child.material_override != view._mat_wall:
+			continue
+		actual += 1
+		var cell := view.map_grid.world_to_cell(Vector2(child.position.x, child.position.z))
+		var prism: MeshInstance3D = prisms[cell]
+		var box := child.mesh as BoxMesh
+		_assert_true(view.map_grid.get_tile(cell) == MapGrid.Tile.ROCK, "concrete is owned by rock")
+		_assert_approximately(child.position.y - box.size.y * 0.5, MapView3D.FLOOR_HEIGHT, 0.001, "wall starts at floor top")
+		_assert_approximately(child.position.y + box.size.y * 0.5, prism.scale.y, 0.001, "wall ends at its rock or dig top")
+		_assert_approximately(box.size.x, MapGrid.HEX_SIZE, 0.001, "wall spans the full shared hex edge")
+		var rock_center := view.map_grid.cell_to_world(cell)
+		var midpoint := Vector2(child.position.x, child.position.z)
+		_assert_approximately(midpoint.distance_to(rock_center) + box.size.z * 0.5, MapGrid.HEX_SIZE * sqrt(3.0) * 0.5, 0.001, "thin wall sits wholly on the rock side")
+		_assert_true(midpoint.distance_to(rock_center) > 0.05, "wall cannot be mistaken for the cell prism")
+	_assert_equal(actual, expected, "exactly one wall per rock-floor edge, with no interior or zero-height walls")
 
 
 func _test_live_lamp_hover() -> void:
