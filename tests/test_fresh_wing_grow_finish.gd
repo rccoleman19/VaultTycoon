@@ -4,6 +4,7 @@ const TICK_CAP := 799
 const CHARGE := ["Next: YOU place a Charge Node · THEY supply/build", "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.", "generator"]
 const FINISH_CHARGE := ["Next: YOU leave Haul + Craft on · THEY finish the Charge Node", "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.", "select"]
 const GROW := ["Next: YOU place Grow Tray · THEY haul output", "Designate GROW and keep it powered. Haul defaults move raw food to stock.", "grow"]
+const FINISH_GROW := ["Next: YOU leave Haul + Craft on · THEY finish the Grow Tray", "Keep Haul + Craft above OFF so crew supply and finish the Grow Tray blueprint.", "select"]
 const NUTRIENT := ["Next: YOU place Nutrient Station · THEY cook/haul", "Designate NUTRI, power it, leave Cook + Haul above OFF.", "kitchen"]
 const DIG_NEXT := [
 	["Next: YOU mark rock [E] · THEY dig on Dig defaults", "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional.", "dig"],
@@ -29,6 +30,7 @@ var _grow: VaultBuilding
 var _grow_complete_elapsed := -1.0
 var _nutrient_tip_elapsed := -1.0
 var _grow_placements := 0
+var _grow_finish_observed := false
 var _grow_supplied := false
 var _grow_craft_claimed := false
 var _grow_crafted := false
@@ -173,6 +175,11 @@ func _walk() -> void:
 
 
 func _act(game: VaultGame, tuple: Array) -> bool:
+	if tuple == FINISH_GROW:
+		if _grow == null or _grow.complete or not game.buildings.has(_grow):
+			return _stop(game, "Grow finish without retained unfinished blueprint")
+		_grow_finish_observed = true
+		return _enable_supply_and_craft(game)
 	if tuple == GROW:
 		if _grow == null:
 			_grow_tip_elapsed = game.day_cycle.elapsed_seconds
@@ -185,8 +192,12 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			_grow = game.get_building_at(GROW_CELL)
 			_grow_placements += 1
 			_assert_true(_grow != null and not _grow.complete and _grow.get_cost() == 12, "one real incomplete Grow blueprint costing 12")
+			var after: Dictionary = game.player_orders._primary_next_step()
+			_assert_equal([after.text, after.help, after.tool], FINISH_GROW, "Grow placement immediately gives exact finish tuple")
 			return _failure_count == 0
-		return _enable_supply_and_craft(game) # Repeated tip: wait, never duplicate.
+		if _grow.complete:
+			return _stop(game, "Grow tip asks to place after Grow already complete")
+		return _stop(game, "repeated Grow place tip with retained unfinished blueprint")
 	if tuple == FINISH_CHARGE:
 		if _charge == null or _charge.complete or not game.buildings.has(_charge):
 			return _stop(game, "Charge finish without retained unfinished blueprint")
@@ -405,6 +416,7 @@ func _check_grow_checkpoint(game: VaultGame) -> void:
 func _check_nutrient_success(game: VaultGame) -> void:
 	_assert_true(_grow_tip_elapsed >= _charge_complete_elapsed and _grow_tip_elapsed < 60.0, "Charge then Grow placed before WARNING")
 	_assert_true(_grow_complete_elapsed >= _grow_tip_elapsed and _grow_complete_elapsed <= _nutrient_tip_elapsed and _nutrient_tip_elapsed < 80.0, "Grow complete then exact Nutrient before 80s")
+	_assert_true(_grow_finish_observed, "driver observed and handled exact Grow finish tuple")
 	_assert_equal(_grow_placements, 1, "exactly one Grow placement")
 	_assert_true(_grow != null and _grow.complete and _grow.delivered == 12 and _grow.construction_left <= 0.0, "Grow fully supplied and crafted complete")
 	_assert_true(_grow.powered and not _grow.manually_disabled, "Grow independently powered and enabled")
