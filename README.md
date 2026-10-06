@@ -401,3 +401,5 @@ not add colored light, falloff, brightness stacking, fog of war, vision, ray
 casting, rock occlusion, room graphs, day/night lighting, batteries, wiring,
 circuits, spatial gas cells, doors, surface play, caravans, factions, research,
 mods, multiplayer, IAP, ads, analytics, final art/audio, or mobile work.
+
+When a Charge Node blueprint is short of salvage, Next tells you how many more rock tiles to mark with Dig, or to leave Dig + Haul on when queued work covers it. The tip accounts for shared stock, hatch patch reserves, deliveries, and cargo already on its way. Unfinished blueprint inspectors show the same per-kind shortfall alongside salvage and assembly progress.

@@ -477,6 +477,37 @@ func get_breach_supply_in_transit() -> int:
 	return _breach_supply_in_transit()
 
 
+func get_breach_salvage_reserve() -> int:
+	return _breach_salvage_reserve()
+
+
+func get_uncredited_rubble() -> int:
+	var amount := 0
+	var carriers: Dictionary = {}
+	for resident: VaultResident in game.residents:
+		if resident.current_job_type == JobType.HAUL_RUBBLE and resident.carrying > 0:
+			amount += resident.carrying
+			carriers[resident.current_job_id] = true
+	for job: Dictionary in jobs:
+		# Rubble amount stays populated during carry; count its carrier only once.
+		if int(job.type) == JobType.HAUL_RUBBLE and not bool(job.done) and not carriers.has(int(job.id)):
+			amount += int(job.amount)
+	return amount
+
+
+func get_build_supply_in_transit(building_id: int) -> int:
+	var amount := 0
+	for job: Dictionary in jobs:
+		if int(job.type) != JobType.SUPPLY_BUILD or bool(job.done) or int(job.building_id) != building_id:
+			continue
+		var cargo := int(job.get("in_transit", 0))
+		for resident: VaultResident in game.residents:
+			if resident.current_job_type == JobType.SUPPLY_BUILD and resident.current_job_id == int(job.id):
+				cargo = maxi(cargo, resident.carrying)
+		amount += cargo
+	return amount
+
+
 func _ensure_state_jobs() -> void:
 	if breach != null and breach.is_response_active():
 		if breach.needs_supply():
