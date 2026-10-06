@@ -1111,7 +1111,7 @@ func issue_order_at_screen(screen_pos: Vector2) -> bool:
 		if hit != null:
 			var current := get_resident_by_id(selected_resident_id)
 			var current_under_cursor := false
-			if current != null and current.alive:
+			if current != null and current.alive and map_grid.world_to_cell(current.position) == map_grid.world_to_cell(hit.position):
 				var only_current: Array[VaultResident] = [current]
 				current_under_cursor = current == hit or map_view_3d.pick_resident_id(screen_pos, only_current) == current.resident_id
 			if hit.alive and not current_under_cursor:

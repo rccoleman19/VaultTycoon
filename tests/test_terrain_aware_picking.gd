@@ -44,6 +44,7 @@ func _run() -> void:
 	_run_case("capsule clicks cycle three co-located residents in hex order", _test_cycle_three)
 	_run_case("capsule clicks cycle two residents and the Emergency Core", _test_cycle_with_fixture)
 	_run_case("clicking another resident's capsule switches directly", _test_direct_switch)
+	_run_case("a selected resident behind on another hex does not hijack the click", _test_cross_hex_behind)
 	_run_case("lying resident picked by its rotated capsule", _test_lying)
 	_run_case("dead resident occludes but is not selectable", _test_dead)
 	_run_case("terrain in front of a capsule wins", _test_terrain_occludes)
@@ -419,6 +420,16 @@ func _selection_label(game: VaultGame) -> String:
 	return "none"
 
 
+# Proves a click lands on the capsule branch (a resident is under the cursor).
+func _assert_capsule_hit(game: VaultGame, screen: Vector2, label: String) -> void:
+	var view := game.map_view_3d
+	if not view.has_method("pick_resident_id"):
+		_fail("pick_resident_id", "MapView3D.pick_resident_id is missing")
+		_assertion_count += 1
+		return
+	_assert_true(int(view.call("pick_resident_id", screen, game.residents)) != -1, "%s: a capsule is under the cursor" % label)
+
+
 func _click_sequence(game: VaultGame, screen: Vector2, clicks: int) -> Array[String]:
 	var sequence: Array[String] = []
 	for _i: int in clicks:
@@ -437,6 +448,7 @@ func _test_cycle_three() -> void:
 	game._sync_3d_play_view(true)
 	var proxy: MeshInstance3D = game.map_view_3d._resident_proxies[1]
 	var screen := _screen(game, Vector3(proxy.global_position.x, 4.0, proxy.global_position.z))
+	_assert_capsule_hit(game, screen, "three co-located")
 	_clear_selection(game)
 	_assert_equal(_click_sequence(game, screen, 4), ["R1", "R2", "R3", "R1"], "four capsule clicks walk the hex order and wrap")
 	game.free()
@@ -457,12 +469,16 @@ func _test_cycle_with_fixture() -> void:
 	game._sync_3d_play_view(true)
 	var proxy: MeshInstance3D = game.map_view_3d._resident_proxies[1]
 	var screen := _screen(game, Vector3(proxy.global_position.x, 9.0, proxy.global_position.z))
+	_assert_capsule_hit(game, screen, "residents on the core")
 	_clear_selection(game)
 	var core_label := "B%d" % core.building_id
 	_assert_equal(_click_sequence(game, screen, 4), ["R1", "R2", core_label, "R1"], "capsule clicks reach the fixture, then wrap")
 	game.free()
 
 
+# Cyra is selected elsewhere. Ari (first in hex order) and Bo share (22,17), with
+# Ari off the ray, so only a direct switch selects Bo; treating the click as a
+# re-click would cycle the hex and select Ari.
 func _test_direct_switch() -> void:
 	var game := _spawn_game(1.0)
 	var view := game.map_view_3d
@@ -471,15 +487,60 @@ func _test_direct_switch() -> void:
 		_assertion_count += 1
 		game.free()
 		return
+	var hex := Vector2i(22, 17)
+	var center := game.map_grid.cell_to_world(hex)
 	var ari: VaultResident = game.get_resident_by_id(1)
+	var bo: VaultResident = game.get_resident_by_id(2)
+	var cyra: VaultResident = game.get_resident_by_id(3)
+	ari.position = center + Vector2(4.0, 0.0)
+	bo.position = center + Vector2(-4.0, 0.0)
+	_assert_equal(game.map_grid.world_to_cell(ari.position), hex, "Ari is drawn in (22,17)")
+	_assert_equal(game.map_grid.world_to_cell(bo.position), hex, "Bo is drawn in (22,17)")
+	game._sync_3d_play_view(true)
 	var bo_proxy: MeshInstance3D = view._resident_proxies[2]
 	var screen := _screen(game, Vector3(bo_proxy.global_position.x, 6.5, bo_proxy.global_position.z))
+	var only_cyra: Array[VaultResident] = [cyra]
 	var only_ari: Array[VaultResident] = [ari]
+	_assert_equal(view.call("pick_resident_id", screen, game.residents), 2, "Bo's capsule is the hit")
+	_assert_equal(view.call("pick_resident_id", screen, only_cyra), -1, "selected Cyra's capsule is not under the cursor")
 	_assert_equal(view.call("pick_resident_id", screen, only_ari), -1, "Ari's capsule is not under the cursor")
-	_assert_equal(view.call("pick_resident_id", screen, game.residents), 2, "Bo's capsule is under the cursor")
+	game.select_resident(3)
+	_click(game, screen)
+	_assert_equal(game.selected_resident_id, 2, "clicking Bo selects Bo directly (not Ari, first on the hex)")
+	game.free()
+
+
+# Offsets from the (22,17) centre: Cyra (-5,-6.4) and Bo (0,0) on (22,17); selected
+# Ari (-7,-14.4) on another hex, behind Cyra's capsule along the ray. The click on
+# Cyra must select Cyra; it is not a re-click of Ari.
+func _test_cross_hex_behind() -> void:
+	var game := _spawn_game(1.0)
+	var view := game.map_view_3d
+	if not view.has_method("pick_resident_id"):
+		_fail("pick_resident_id", "MapView3D.pick_resident_id is missing")
+		_assertion_count += 1
+		game.free()
+		return
+	var hex := Vector2i(22, 17)
+	var center := game.map_grid.cell_to_world(hex)
+	var ari: VaultResident = game.get_resident_by_id(1)
+	var bo: VaultResident = game.get_resident_by_id(2)
+	var cyra: VaultResident = game.get_resident_by_id(3)
+	cyra.position = center + Vector2(-5.0, -6.4)
+	ari.position = center + Vector2(-7.0, -14.4)
+	bo.position = center
+	_assert_equal(game.map_grid.world_to_cell(cyra.position), hex, "Cyra is drawn in (22,17)")
+	_assert_equal(game.map_grid.world_to_cell(bo.position), hex, "Bo is drawn in (22,17)")
+	_assert_true(game.map_grid.world_to_cell(ari.position) != hex, "selected Ari is drawn on another hex")
+	game._sync_3d_play_view(true)
+	var cyra_proxy: MeshInstance3D = view._resident_proxies[3]
+	var screen := _screen(game, Vector3(cyra_proxy.global_position.x, 9.0, cyra_proxy.global_position.z))
+	var only_ari: Array[VaultResident] = [ari]
+	_assert_equal(view.call("pick_resident_id", screen, game.residents), 3, "Cyra's capsule is the hit")
+	_assert_equal(view.call("pick_resident_id", screen, only_ari), 1, "selected Ari's capsule is behind it on the ray")
 	game.select_resident(1)
 	_click(game, screen)
-	_assert_equal(game.selected_resident_id, 2, "clicking Bo with Ari selected selects Bo")
+	_assert_equal(game.selected_resident_id, 3, "clicking Cyra selects Cyra, not Bo via a cross-hex re-click")
 	game.free()
 
 
