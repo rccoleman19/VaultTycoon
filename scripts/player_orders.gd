@@ -1,6 +1,8 @@
 class_name PlayerOrders
 extends CanvasLayer
 
+const DIG_SALVAGE_YIELD := 3
+
 var game: VaultGame
 var root: Control
 var clock_label: Label
@@ -912,6 +914,38 @@ func _unfinished_charge_count() -> int:
 	return count
 
 
+func _salvage_shortfall(kind: int) -> int:
+	var needed := 0
+	for building: VaultBuilding in game.buildings:
+		if building.kind == kind and not building.complete and not building.is_emergency_core:
+			needed += building.get_cost() - building.delivered - game.job_system.get_build_supply_in_transit(building.building_id)
+	var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
+	return maxi(0, needed - spendable)
+
+
+func _salvage_dig_tiles(shortfall: int) -> int:
+	var after_rubble := shortfall - game.job_system.get_uncredited_rubble()
+	if after_rubble <= 0:
+		return 0
+	return ceili(float(after_rubble) / DIG_SALVAGE_YIELD) - game.map_grid.dig_marks.size()
+
+
+func _charge_finish_step() -> Dictionary:
+	var shortfall := _salvage_shortfall(VaultBuilding.Kind.GENERATOR)
+	if shortfall == 0:
+		return {
+			"text": "Next: YOU leave Haul + Craft on · THEY finish the Charge Node",
+			"help": "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
+			"tool": "select",
+		}
+	var tiles := _salvage_dig_tiles(shortfall)
+	return {
+		"text": "Next: YOU mark %d rock [E] · THEY fund the Charge Node" % tiles if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the Charge Node",
+		"help": "The Charge Node blueprint is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [shortfall, DIG_SALVAGE_YIELD],
+		"tool": "dig" if tiles > 0 else "select",
+	}
+
+
 func _primary_next_step() -> Dictionary:
 	var critical_resident := false
 	var mood_break_risk := false
@@ -956,11 +990,7 @@ func _primary_next_step() -> Dictionary:
 					"tool": "select",
 				}
 			if _unfinished_charge_count() > 0:
-				return {
-					"text": "Next: YOU leave Haul + Craft on · THEY finish the Charge Node",
-					"help": "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
-					"tool": "select",
-				}
+				return _charge_finish_step()
 			return {
 				"text": "Next: YOU place a Charge Node · THEY power the kitchen",
 				"help": "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power.",
@@ -995,11 +1025,7 @@ func _primary_next_step() -> Dictionary:
 				"help": "Select a completed Rec Console and click ENABLE so crew can recover mood.",
 			}
 		if _unfinished_charge_count() > 0:
-			return {
-				"text": "Next: YOU leave Haul + Craft on · THEY finish the Charge Node",
-				"help": "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
-				"tool": "select",
-			}
+			return _charge_finish_step()
 		return {
 			"text": "Next: YOU place a Charge Node · THEY power the Rec Console",
 			"tool": "generator",
@@ -1116,11 +1142,7 @@ func _primary_next_step() -> Dictionary:
 							"help": "Enable a completed Grow Tray so it can grow raw food. Haul delivers its output for Cook.",
 						}
 					if _unfinished_charge_count() > 0:
-						return {
-							"text": "Next: YOU leave Haul + Craft on · THEY finish the Charge Node",
-							"help": "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
-							"tool": "select",
-						}
+						return _charge_finish_step()
 					return {
 						"text": "Next: YOU place a Charge Node · THEY power the Grow Tray",
 						"tool": "generator",
@@ -1162,11 +1184,7 @@ func _primary_next_step() -> Dictionary:
 		}
 	if game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) < 1:
 		if _unfinished_charge_count() > 0:
-			return {
-				"text": "Next: YOU leave Haul + Craft on · THEY finish the Charge Node",
-				"help": "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
-				"tool": "select",
-			}
+			return _charge_finish_step()
 		return {
 			"text": "Next: YOU place a Charge Node · THEY supply/build",
 			"help": "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.",
@@ -1226,11 +1244,7 @@ func _primary_next_step() -> Dictionary:
 					break
 		if food_capacity_short:
 			if _unfinished_charge_count() > 0:
-				return {
-					"text": "Next: YOU leave Haul + Craft on · THEY finish the Charge Node",
-					"help": "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
-					"tool": "select",
-				}
+				return _charge_finish_step()
 			return {
 				"text": "Next: YOU place a Charge Node · THEY add power",
 				"help": "The grid lacks power for the food chain. Place a Charge Node to add 7 power.",
@@ -1504,6 +1518,11 @@ func _refresh_inspector() -> void:
 			_show_fixture_controls(building)
 		else:
 			inspector_state.text = "Blueprint · Salvage %d/%d\nAssembly remaining: %.1fs" % [building.delivered, building.get_cost(), building.construction_left]
+			var shortfall := _salvage_shortfall(building.kind)
+			if shortfall > 0:
+				var tiles := _salvage_dig_tiles(shortfall)
+				inspector_state.text += "\nShort %d salvage (shared stock) · " % shortfall
+				inspector_state.text += "dig %d more rock" % tiles if tiles > 0 else "queued dig/haul covers it"
 			_hide_fixture_controls()
 		_hide_needs_and_work()
 		return

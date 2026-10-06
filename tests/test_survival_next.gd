@@ -61,6 +61,10 @@ func _init() -> void:
 
 
 func _run() -> void:
+	_test_salvage_shortfall()
+	_test_salvage_recovery_sources()
+	_test_salvage_inspector()
+	_test_salvage_real_recovery()
 	_test_interrupts_and_priority()
 	_test_kitchen_guards()
 	_test_charge_finish_restore()
@@ -507,6 +511,13 @@ func _test_progression_food_capacity_restore() -> void:
 		var charge := game.get_building_at(cell)
 		_assert_false(charge.complete or charge.is_emergency_core, "food capacity Charge is unfinished non-Core")
 		_assert_equal(charge.delivered, 0, "food capacity Charge starts unsupplied")
+		var funded_stock := game.food_system.salvage
+		game.food_system.salvage = 0
+		_assert_salvage_tip(game, 18, 0)
+		charge.delivered = charge.get_cost()
+		_assert_step(game, FINISH_CHARGE_NEXT, "select", FINISH_CHARGE_HELP)
+		charge.delivered = 0
+		game.food_system.salvage = funded_stock
 		game.power_grid.recalculate(game.buildings)
 		_assert_step(game, FINISH_CHARGE_NEXT, "select", FINISH_CHARGE_HELP)
 		game.player_orders.refresh()
@@ -1924,6 +1935,13 @@ func _test_charge_finish_restore() -> void:
 			_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, cell), "%s Charge blueprint placed" % context)
 			var charge := game.get_building_at(cell)
 			_assert_equal(charge.delivered, 0, "Charge starts unsupplied")
+			var funded_stock := game.food_system.salvage
+			game.food_system.salvage = 0
+			_assert_salvage_tip(game, 18, 0 if context == "progression" else 6)
+			charge.delivered = charge.get_cost()
+			_assert_step(game, FINISH_CHARGE_NEXT, "select", FINISH_CHARGE_HELP)
+			charge.delivered = 0
+			game.food_system.salvage = funded_stock
 			_assert_step(game, FINISH_CHARGE_NEXT, "select", FINISH_CHARGE_HELP)
 			game.active_tool = "dig"
 			game.player_orders.refresh()
@@ -2105,4 +2123,165 @@ func _test_air_priority() -> void:
 	game.get_building_at(Vector2i(23, 12)).manually_disabled = true
 	game.power_grid.recalculate(game.buildings)
 	_assert_step(game, "Next: YOU power food chain · THEY cook/haul alone", "select", "Enable Grow + Nutrient power. Keep Cook/Haul above OFF so defaults keep working.")
+	_dispose(game)
+
+
+const SALVAGE_RECOVERY_BOUND := 120.0
+
+
+func _salvage_rec_game() -> VaultGame:
+	var game := _healthy_game()
+	game.residents[0].needs.mood = 9.0
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(20, 12))
+	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12))
+	_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(22, 12))
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(23, 12))
+	var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(24, 12))
+	game.power_grid.recalculate(game.buildings)
+	_assert_equal([game.power_grid.supply, game.power_grid.demand, game.power_grid.served], [9, 10, 9], "salvage Rec fixture actual grid")
+	_assert_true(game.power_grid.is_building_shed(rec.building_id), "salvage Rec genuinely shed")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, Vector2i(25, 12)), "unfunded Charge placed")
+	game.food_system.salvage = 0
+	return game
+
+
+func _assert_salvage_tip(game: VaultGame, shortfall: int, tiles: int) -> void:
+	_assert_step(game,
+		"Next: YOU mark %d rock [E] · THEY fund the Charge Node" % tiles if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the Charge Node",
+		"dig" if tiles > 0 else "select",
+		"The Charge Node blueprint is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [shortfall, PlayerOrders.DIG_SALVAGE_YIELD])
+
+
+func _test_salvage_shortfall() -> void:
+	var game := _salvage_rec_game()
+	var charge := game.get_building_at(Vector2i(25, 12))
+	_assert_salvage_tip(game, 18, 6)
+	game.set_tool("bed")
+	game.player_orders.refresh()
+	_assert_equal(game.active_tool, "bed", "new dig suggestion preserves active build tool")
+	_assert_equal(game.player_orders.objective_label.text, "Next: YOU mark 6 rock [E] · THEY fund the Charge Node", "refresh displays new dig tip")
+	game.food_system.salvage = 17
+	_assert_salvage_tip(game, 1, 1)
+	game.food_system.salvage = 18
+	_assert_step(game, FINISH_CHARGE_NEXT, "select", FINISH_CHARGE_HELP)
+	charge.add_delivery(10)
+	game.food_system.salvage = 2
+	_assert_salvage_tip(game, 6, 2)
+	var supply := game.job_system._find_matching_job(JobSystem.JobType.SUPPLY_BUILD, charge.cell, charge.building_id)
+	supply.in_transit = 4
+	var carrier: VaultResident = game.residents[0]
+	carrier.current_job_type = JobSystem.JobType.SUPPLY_BUILD
+	carrier.current_job_id = supply.id
+	carrier.carrying = 4
+	_assert_salvage_tip(game, 2, 1)
+	_assert_equal(game.job_system.get_build_supply_in_transit(charge.building_id), 4, "supply cargo counted once")
+	supply.in_transit = 0
+	_assert_salvage_tip(game, 2, 1)
+	carrier.clear_job()
+	carrier.carrying = 0
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(26, 12)), "unrelated blueprint placed")
+	var bed := game.get_building_at(Vector2i(26, 12))
+	var unrelated := game.job_system._find_matching_job(JobSystem.JobType.SUPPLY_BUILD, bed.cell, bed.building_id)
+	unrelated.in_transit = 4
+	_assert_salvage_tip(game, 6, 2)
+	charge.delivered = charge.get_cost()
+	game.food_system.salvage = 0
+	_assert_step(game, FINISH_CHARGE_NEXT, "select", FINISH_CHARGE_HELP)
+	charge.delivered = 0
+	game.food_system.salvage = 18
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, Vector2i(27, 12)), "second Charge placed")
+	_assert_salvage_tip(game, 18, 6)
+	_dispose(game)
+
+
+func _test_salvage_recovery_sources() -> void:
+	var game := _salvage_rec_game()
+	for x in range(17, 19):
+		_assert_true(game.map_grid.queue_dig(Vector2i(x, 10)), "pending rock marked")
+	_assert_salvage_tip(game, 18, 4)
+	for x in range(19, 23):
+		_assert_true(game.map_grid.queue_dig(Vector2i(x, 10)), "covering rock marked")
+	_assert_salvage_tip(game, 18, 0)
+	game.map_grid.dig_marks.clear()
+	game.job_system.queue_rubble(Vector2i(18, 11), 18)
+	_assert_salvage_tip(game, 18, 0)
+	var rubble := game.job_system._find_matching_job(JobSystem.JobType.HAUL_RUBBLE, Vector2i(18, 11), -1)
+	var carrier: VaultResident = game.residents[0]
+	carrier.current_job_type = JobSystem.JobType.HAUL_RUBBLE
+	carrier.current_job_id = rubble.id
+	carrier.carrying = 18
+	_assert_equal(game.job_system.get_uncredited_rubble(), 18, "carried rubble and job amount counted once")
+	_assert_salvage_tip(game, 18, 0)
+	_dispose(game)
+	game = _salvage_rec_game()
+	game.food_system.salvage = 18
+	game.breach_system.advance(0.0, BreachSystem.WARNING_AT_SECONDS)
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.WARNING, "real hatch warning")
+	_assert_equal(game.job_system.get_breach_salvage_reserve(), BreachSystem.PATCH_COST, "active unsupplied patch reserve")
+	_assert_salvage_tip(game, 4, 2)
+	_dispose(game)
+	game = _healthy_game()
+	var observed: Array[int] = []
+	game.map_grid.rubble_created.connect(func(_cell: Vector2i, amount: int): observed.append(amount))
+	_assert_true(game.map_grid.queue_dig(Vector2i(17, 10)), "yield test marks real rock")
+	_assert_true(game.map_grid.apply_dig_work(Vector2i(17, 10), 8.0), "yield test completes real dig")
+	_assert_equal(observed, [PlayerOrders.DIG_SALVAGE_YIELD], "tip constant equals actual emitted dig yield")
+	_dispose(game)
+
+
+func _test_salvage_inspector() -> void:
+	var game := _salvage_rec_game()
+	var charge := game.get_building_at(Vector2i(25, 12))
+	game.selected_resident_id = -1
+	game.selected_building_id = charge.building_id
+	var original := "Blueprint · Salvage %d/%d\nAssembly remaining: %.1fs" % [charge.delivered, charge.get_cost(), charge.construction_left]
+	game.player_orders._refresh_inspector()
+	_assert_equal(game.player_orders.inspector_state.text, original + "\nShort 18 salvage (shared stock) · dig 6 more rock", "inspector retains original lines and appends shortage")
+	game.job_system.queue_rubble(Vector2i(18, 11), 18)
+	game.player_orders._refresh_inspector()
+	_assert_equal(game.player_orders.inspector_state.text, original + "\nShort 18 salvage (shared stock) · queued dig/haul covers it", "inspector covers queued recovery")
+	game.food_system.salvage = 18
+	game.player_orders._refresh_inspector()
+	_assert_equal(game.player_orders.inspector_state.text, original, "funded inspector exactly original two lines")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(26, 12)), "generic inspector blueprint")
+	var bed := game.get_building_at(Vector2i(26, 12))
+	game.selected_building_id = bed.building_id
+	game.food_system.salvage = 0
+	game.player_orders._refresh_inspector()
+	_assert_true("Short %d salvage (shared stock)" % bed.get_cost() in game.player_orders.inspector_state.text, "inspector shortfall applies to non-Charge kind")
+	_dispose(game)
+
+
+func _test_salvage_real_recovery() -> void:
+	var game := _salvage_rec_game()
+	var charge := game.get_building_at(Vector2i(25, 12))
+	var original_alive := game.get_alive_count()
+	game.food_system.meals = 100
+	var tip: Dictionary = game.player_orders._primary_next_step()
+	var count := int(String(tip.text).split(" ")[3])
+	_assert_equal(count, 6, "real recovery reads six tiles from tip")
+	game.set_tool("dig")
+	for x in range(17, 17 + count):
+		_assert_true(game.issue_order(Vector2i(x, 10)), "ordinary reachable rock order")
+	game.set_tool("select")
+	var elapsed := 0.0
+	var dug_at := -1.0
+	var supplied_at := -1.0
+	var ordinary_work := true
+	while elapsed < SALVAGE_RECOVERY_BOUND and not charge.complete and not game.ended:
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		elapsed += VaultGame.SIMULATION_TICK
+		for resident: VaultResident in game.residents:
+			ordinary_work = ordinary_work and not resident.drafted and not resident.is_forced_job
+		if dug_at < 0.0 and game.map_grid.dig_marks.is_empty():
+			dug_at = elapsed
+		if supplied_at < 0.0 and charge.is_supplied():
+			supplied_at = elapsed
+	_assert_true(charge.complete, "ordinary Dig Haul Supply Craft completes Charge within declared bound")
+	_assert_true(ordinary_work, "real recovery uses undrafted crew with no forced jobs")
+	_assert_true(dug_at > 0.0 and supplied_at >= dug_at, "real recovery observes dug and supplied milestones")
+	_assert_equal(game.get_alive_count(), original_alive, "real recovery keeps all residents alive")
+	_assert_true(game.get_building_at(Vector2i(24, 12)).powered, "real recovery powers Rec")
+	_assert_equal([game.power_grid.supply, game.power_grid.demand, game.power_grid.served], [16, 10, 10], "real recovery final power")
+	print("Salvage recovery: dig complete %.1fs, Charge supplied %.1fs, Charge complete %.1fs; PWR %d/%d served %d" % [dug_at, supplied_at, elapsed, game.power_grid.supply, game.power_grid.demand, game.power_grid.served])
 	_dispose(game)
