@@ -44,6 +44,7 @@ run_godot_check work-priorities --script res://tests/test_work_priorities.gd
 run_godot_check breach-modal-speed-keys --script res://tests/test_breach_modal_speed_keys.gd
 run_godot_check medical --script res://tests/test_medical.gd
 run_godot_check survival-next --script res://tests/test_survival_next.gd
+run_godot_check salvage-guidance --script res://tests/test_salvage_guidance.gd
 run_godot_check fixture-props --script res://tests/test_fixture_props.gd
 run_godot_check open-suggested-tab --script res://tests/test_open_suggested_tab.gd
 run_godot_check stockpile-zones --script res://tests/test_stockpile_zones.gd
