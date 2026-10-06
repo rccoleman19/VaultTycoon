@@ -17,6 +17,8 @@ func _run() -> void:
 	_run_case("no work-board or Help text claims column order", _test_no_stale_column_claims)
 	_run_case("equal ranks follow the documented job order", _test_equal_rank_job_order)
 	_run_case("the help text still wraps to four lines", _test_board_fits)
+	_run_case("while the hatch is short of patch salvage, rubble then new digs jump ahead at equal rank", _test_hatch_shortfall_order)
+	_run_case("meal hauls count as needed at exactly two per living resident", _test_meal_threshold_boundary)
 	print("WORK TIE HELP TEXT TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -136,6 +138,128 @@ func _test_board_fits() -> void:
 		_assert_true(probe.get_line_count() <= 4, "help text wraps to at most 4 lines at %d px (got %d)" % [HELP_TEXT_WIDTH, probe.get_line_count()])
 		probe.free()
 	_dispose(game)
+
+
+func _test_hatch_shortfall_order() -> void:
+	# [offered jobs, salvage, patch already delivered, Ari hauls?, expected claim, message].
+	# Shortfall = patch cost - delivered - in transit - salvage; promotion only while it is > 0.
+	var cost := BreachSystem.PATCH_COST
+	var scenarios := [
+		[["rubble", "build"], 0, 0, true, T.HAUL_RUBBLE, "short hatch: rubble jumps ahead of assembly"],
+		[["rubble", "cook"], 0, 0, true, T.HAUL_RUBBLE, "short hatch: rubble jumps ahead of cooking"],
+		[["rubble", "low_meal"], 0, 0, true, T.HAUL_RUBBLE, "short hatch: rubble jumps ahead of needed meals"],
+		[["rubble", "dig"], 0, 0, true, T.HAUL_RUBBLE, "short hatch: rubble still comes before new digs"],
+		[["dig", "build"], 0, 0, true, T.DIG, "short hatch: new digs jump ahead of assembly"],
+		[["dig", "raw"], 0, 0, true, T.DIG, "short hatch: new digs jump ahead of food hauling"],
+		[["dig", "build"], cost - 1, 0, false, T.DIG, "one salvage short: digs still jump ahead of assembly"],
+		[["dig", "build"], cost, 0, false, T.BUILD, "salvage covers the patch: assembly comes before digs again"],
+		[["dig", "cook"], cost, 0, false, T.COOK, "salvage covers the patch: cooking comes before digs again"],
+		[["dig", "build"], cost - 2, 2, false, T.BUILD, "delivered + salvage cover the patch: normal order"],
+	]
+	for scenario: Array in scenarios:
+		var game := _equal_rank_game()
+		var ari: VaultResident = game.residents[0]
+		if not bool(scenario[3]):
+			# Haul OFF keeps Ari off the emergency supply job when salvage is on hand.
+			_assert_true(ari.set_work_priority("haul", VaultResident.PRIORITY_DISABLED), "fixture turns Ari's Haul OFF")
+		game.breach_system.advance(0.0, BreachSystem.WARNING_AT_SECONDS)
+		_assert_true(game.breach_system.is_response_active(), "fixture: hatch response is active")
+		if int(scenario[2]) > 0:
+			_assert_equal(game.breach_system.add_delivery(int(scenario[2])), int(scenario[2]), "fixture: part of the patch is already delivered")
+		game.food_system.salvage = int(scenario[1])
+		_assert_true(game.breach_system.needs_supply(), "fixture: hatch still needs supply")
+		if not _stage_offers(game, ari, scenario[0]):
+			_dispose(game)
+			continue
+		game.job_system.advance(0.0)
+		_assert_equal(ari.current_job_type, int(scenario[4]), str(scenario[5]))
+		_dispose(game)
+	# Salvage already in a hauler's hands counts too: [salvage left on hand, expected, message].
+	_assert_transit_scenario(BreachSystem.PATCH_COST - 2, T.BUILD, "2 in transit + salvage cover the patch: assembly comes before digs")
+	_assert_transit_scenario(BreachSystem.PATCH_COST - 3, T.DIG, "2 in transit + salvage one short: digs jump ahead of assembly")
+
+
+func _assert_transit_scenario(salvage_left: int, expected: int, message: String) -> void:
+	var game := _equal_rank_game()
+	var ari: VaultResident = game.residents[0]
+	var bo: VaultResident = game.residents[1]
+	_assert_true(ari.set_work_priority("haul", VaultResident.PRIORITY_DISABLED), "transit fixture turns Ari's Haul OFF")
+	_assert_true(bo.set_work_priority("haul", 1), "transit fixture gives Bo Haul at rank 1")
+	game.breach_system.advance(0.0, BreachSystem.WARNING_AT_SECONDS)
+	game.food_system.salvage = 2
+	for _tick: int in 200:
+		game.job_system.advance(VaultGame.SIMULATION_TICK)
+		if bo.carrying > 0:
+			break
+	_assert_equal(bo.current_job_type, JobSystem.JobType.SUPPLY_BREACH, "transit fixture: Bo hauls hatch supply")
+	_assert_equal(bo.carrying, 2, "transit fixture: Bo carries 2 salvage")
+	_assert_equal(game.job_system._breach_supply_in_transit(), 2, "transit fixture: 2 salvage in transit")
+	_assert_equal(game.breach_system.patch_delivered, 0, "transit fixture: nothing delivered yet")
+	_assert_true(ari.current_job_id < 0, "transit fixture: Ari is idle before the offers")
+	game.food_system.salvage = salvage_left
+	if not _stage_offers(game, ari, ["dig", "build"]):
+		_dispose(game)
+		return
+	game.job_system.advance(0.0)
+	_assert_equal(ari.current_job_type, expected, message)
+	_dispose(game)
+
+
+func _test_meal_threshold_boundary() -> void:
+	# [meals as a multiple of living crew (+ offset), kill one crewmate?, expected claim, message]. All vs a reachable dig.
+	var scenarios := [
+		[0, false, T.HAUL_MEAL, "meals == 2 x living crew: meal haul is still needed and beats digs"],
+		[1, false, T.DIG, "meals == 2 x living crew + 1: spare meals wait for digs (control)"],
+		[0, true, T.HAUL_MEAL, "one crewmate dead, meals == 2 x living: still needed"],
+		[1, true, T.DIG, "one crewmate dead, meals == 2 x living + 1: spare even though it is under 2 x roster"],
+	]
+	for scenario: Array in scenarios:
+		var game := _equal_rank_game()
+		var ari: VaultResident = game.residents[0]
+		if bool(scenario[1]):
+			var victim: VaultResident = game.residents[game.residents.size() - 1]
+			victim.kill()
+			_assert_equal(game.get_alive_count(), game.residents.size() - 1, "fixture: one crewmate is dead")
+		game.food_system.meals = game.get_alive_count() * 2 + int(scenario[0])
+		if bool(scenario[1]) and int(scenario[0]) == 1:
+			_assert_true(game.food_system.meals <= game.residents.size() * 2, "fixture: meals are within 2 x the full roster")
+		if not _stage_offers(game, ari, ["meal", "dig"]):
+			_dispose(game)
+			continue
+		game.job_system.advance(0.0)
+		_assert_equal(ari.current_job_type, int(scenario[2]), str(scenario[3]))
+		_dispose(game)
+
+
+func _stage_offers(game: VaultGame, ari: VaultResident, offers: Array) -> bool:
+	if "dig" in offers:
+		var dig_cell := MapGrid.CHAMBER.position + Vector2i.LEFT
+		_assert_true(game.map_grid.queue_dig(dig_cell), "fixture queues a reachable dig")
+		game.job_system.queue_dig(dig_cell)
+	if "rubble" in offers:
+		game.job_system.queue_rubble(ari.get_cell(game.map_grid), 3)
+	if "build" in offers:
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(26, 19)), "fixture places a bunk blueprint")
+		var blueprint := game.get_building_at(Vector2i(26, 19))
+		if blueprint == null:
+			_assert_true(false, "fixture finds the bunk blueprint")
+			return false
+		game.job_system.cancel_building(blueprint.building_id)
+		blueprint.add_delivery(blueprint.get_cost())
+		game.job_system.queue_building(blueprint)
+	if "cook" in offers:
+		_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(23, 12))
+		_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(25, 12))
+		game.power_grid.recalculate(game.buildings)
+	if "raw" in offers:
+		game.food_system.raw_food = 0
+		game.job_system.queue_raw_food(Vector2i(21, 12), 2)
+	if "low_meal" in offers:
+		game.food_system.meals = 0
+		game.job_system.queue_meals(Vector2i(22, 12), 2)
+	if "meal" in offers:
+		game.job_system.queue_meals(Vector2i(22, 12), 2)
+	return true
 
 
 func _equal_rank_game() -> VaultGame:
