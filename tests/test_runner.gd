@@ -6,6 +6,7 @@ const BREACH_SAVE_TEST_PATH := "user://headless_breach_round_trip.json"
 const OXYGEN_SAVE_TEST_PATH := "user://headless_oxygen_round_trip.json"
 const POWER_SAVE_TEST_PATH := "user://headless_power_round_trip.json"
 const ATOMIC_SAVE_TEST_PATH := "user://headless_atomic_save.json"
+const DETAILS_SAVE_TEST_PATH := "user://headless_details_round_trip.json"
 
 var _assertion_count := 0
 var _failure_count := 0
@@ -21,6 +22,11 @@ func _init() -> void:
 func _run() -> void:
 	_run_case("main scene boots with a sealed four-resident wing", _test_scene_boot_and_initial_state)
 	_run_case("bed shortage compares undrafted bunk need with free completed bunks", _test_bed_shortage_alert)
+	_run_case("DETAILS respects manual choices through ongoing brownouts", _test_details_brownout_collapse)
+	_run_case("DETAILS opens once for each overlapping urgency onset", _test_details_overlapping_urgencies)
+	_run_case("DETAILS reopens when a cleared brownout recurs", _test_details_brownout_recurrence)
+	_run_case("DETAILS opens once when day seven becomes victory pending", _test_details_victory_pending)
+	_run_case("DETAILS resets urgency history on new game and load", _test_details_reset_and_load)
 	_run_case("tool hotkeys and help match the documented controls", _test_tool_hotkeys_and_help)
 	_run_case("manual work priorities arbitrate jobs across the crew", _test_work_priority_claiming)
 	_run_case("work priorities persist and legacy permissions migrate", _test_work_priority_save_compatibility)
@@ -219,6 +225,235 @@ func _test_bed_shortage_alert() -> void:
 	game.player_orders.refresh()
 	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "one free completed bunk clears the floor sleeper's shortage immediately")
 	_dispose(game)
+
+
+func _add_details_brownout(game: VaultGame) -> VaultBuilding:
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(20, 12))
+	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12))
+	_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(22, 12))
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(23, 12))
+	var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(24, 12))
+	game.power_grid.recalculate(game.buildings)
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	_assert_equal([game.power_grid.supply, game.power_grid.demand, game.power_grid.served], [9, 10, 9], "DETAILS fixture has real 9/10 brownout")
+	_assert_true(game.power_grid.is_building_shed(rec.building_id), "optional Rec is genuinely shed")
+	return rec
+
+
+func _assert_details_state(game: VaultGame, expanded: bool, message: String) -> void:
+	_assert_equal(game.player_orders.details_box.visible, expanded, message)
+	_assert_equal(game.player_orders.details_toggle.text, "DETAILS ▾" if expanded else "DETAILS ▸", message + " toggle text")
+
+
+func _exercise_details_ui(game: VaultGame, toggle: bool, refresh_count := 50) -> void:
+	var snapshot := game.create_snapshot()
+	var controls := [game.user_paused, game.is_simulation_paused(), game.simulation_speed, game.active_tool,
+		game.selected_resident_id, game.selected_building_id, game.selected_breach]
+	var next_text := game.player_orders.objective_label.text
+	var alerts := game.player_orders.alert_label.text
+	var warning_visible := game.player_orders.breach_warning_panel.visible
+	if toggle:
+		game.player_orders.details_toggle.pressed.emit()
+	for _index in refresh_count:
+		game.player_orders.refresh()
+	_assert_variants_equal(snapshot, game.create_snapshot(), "DETAILS toggle/refresh preserves gameplay snapshot")
+	_assert_equal([game.user_paused, game.is_simulation_paused(), game.simulation_speed, game.active_tool,
+		game.selected_resident_id, game.selected_building_id, game.selected_breach], controls, "DETAILS preserves pause, speed, tool and selection")
+	_assert_equal(game.player_orders.objective_label.text, next_text, "DETAILS preserves Next text")
+	_assert_equal(game.player_orders.alert_label.text, alerts, "DETAILS preserves alert text")
+	_assert_equal(game.player_orders.breach_warning_panel.visible, warning_visible, "DETAILS preserves hatch modal visibility")
+
+
+func _test_details_brownout_collapse() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.set_speed(3)
+	game.toggle_pause()
+	game.set_tool("dig")
+	game.select_resident(game.residents[0].resident_id)
+	game.player_orders.refresh()
+	_exercise_details_ui(game, false)
+	_assert_details_state(game, false, "quiet wing stays collapsed across 50 paused refreshes")
+	_exercise_details_ui(game, true)
+	_assert_details_state(game, true, "quiet wing respects manual open")
+	_exercise_details_ui(game, true)
+	_assert_details_state(game, false, "quiet wing respects manual collapse")
+	_add_details_brownout(game)
+	game.player_orders.refresh()
+	_assert_details_state(game, true, "brownout onset opens DETAILS on next refresh")
+	_assert_true("BROWNOUT" in game.player_orders.alert_label.text, "real brownout remains visible in alerts")
+	_exercise_details_ui(game, true)
+	_assert_details_state(game, false, "brownout collapse survives 50 paused refreshes")
+	game.player_orders.help_button.pressed.emit()
+	game.player_orders.refresh()
+	_assert_details_state(game, false, "opening Help does not reset urgency history")
+	game.player_orders.briefing_close_button.pressed.emit()
+	game.player_orders.refresh()
+	_assert_details_state(game, false, "closing Help does not reset urgency history")
+	game.toggle_pause()
+	var elapsed_before := game.day_cycle.elapsed_seconds
+	var brownout_every_tick := true
+	for _tick in int(round(10.0 / VaultGame.SIMULATION_TICK)):
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		game.player_orders.refresh()
+		brownout_every_tick = brownout_every_tick and game.power_grid.brownout_active
+	_assert_approximately(game.day_cycle.elapsed_seconds - elapsed_before, 10.0, 0.0001, "collapsed brownout runs ten simulation seconds")
+	_assert_true(brownout_every_tick, "brownout persists on every refreshed tick of ten running seconds")
+	_assert_details_state(game, false, "running brownout does not reopen DETAILS")
+	_exercise_details_ui(game, true)
+	_assert_details_state(game, true, "player can reopen ongoing brownout DETAILS")
+	_dispose(game)
+
+
+func _test_details_overlapping_urgencies() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	_add_details_brownout(game)
+	game.player_orders.refresh()
+	_exercise_details_ui(game, true)
+	game.set_speed(3)
+	game.set_tool("dig")
+	game.breach_system.advance(0.0, BreachSystem.WARNING_AT_SECONDS)
+	game.player_orders.refresh()
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.WARNING, "real breach advance reaches WARNING at 60 seconds")
+	_assert_true(game.power_grid.brownout_active, "WARNING overlaps the continuing brownout")
+	_assert_details_state(game, true, "new WARNING opens collapsed brownout DETAILS")
+	_assert_true(game.user_paused and game.player_orders.breach_warning_panel.visible, "WARNING still pauses and opens hatch modal")
+	_assert_equal(game.simulation_speed, 1, "WARNING still resets speed to 1x")
+	_assert_true(game.selected_breach and game.active_tool == "select", "WARNING still selects hatch and Select tool")
+	_assert_equal(game.world_camera.position, game.map_grid.cell_to_world(BreachSystem.HATCH_CELL), "WARNING still focuses hatch")
+	_assert_true(game.player_orders.breach_resume_button.has_focus(), "WARNING still focuses Resume Response")
+	_exercise_details_ui(game, true)
+	_assert_details_state(game, false, "collapse sticks during overlapping WARNING and brownout")
+	game.player_orders.breach_resume_button.pressed.emit()
+	_assert_true(game.breach_system.warning_acknowledged, "real Resume Response acknowledges WARNING")
+	_assert_false(game.user_paused or game.player_orders.breach_warning_panel.visible, "Resume Response still resumes and dismisses modal")
+	game.breach_system.advance(BreachSystem.GRACE_SECONDS, BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS)
+	game.player_orders.refresh()
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.OPEN, "unpatched warning really transitions to OPEN")
+	_assert_details_state(game, true, "OPEN is a distinct onset after WARNING")
+	_exercise_details_ui(game, true)
+	_assert_details_state(game, false, "OPEN respects a subsequent collapse")
+	game.breach_system.add_delivery(BreachSystem.PATCH_COST)
+	game.breach_system.apply_patch_work(BreachSystem.PATCH_WORK_SECONDS)
+	game.player_orders.refresh()
+	_assert_true(game.breach_system.is_sealed() and game.power_grid.brownout_active, "patch removes only breach urgency")
+	_assert_details_state(game, false, "losing OPEN while brownout persists does not reopen")
+	_dispose(game)
+
+	game = _spawn_game()
+	game.begin_shift()
+	_add_details_brownout(game)
+	game.player_orders.refresh()
+	_exercise_details_ui(game, true)
+	game.oxygen_system.oxygen = OxygenSystem.LOW_OXYGEN_THRESHOLD - 1.0
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	game.player_orders.refresh()
+	_assert_true(game.oxygen_system.is_low() and game.power_grid.brownout_active, "real low oxygen overlaps brownout independently of breach")
+	_assert_details_state(game, true, "new low O2 reopens brownout DETAILS")
+	_exercise_details_ui(game, true)
+	_assert_details_state(game, false, "collapse sticks during low O2 and brownout")
+	game.oxygen_system.oxygen = OxygenSystem.STARTING_OXYGEN
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	game.player_orders.refresh()
+	_assert_details_state(game, false, "losing low O2 alone does not reopen")
+	_dispose(game)
+
+
+func _test_details_brownout_recurrence() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	var rec := _add_details_brownout(game)
+	game.player_orders.refresh()
+	_exercise_details_ui(game, true)
+	rec.manually_disabled = true
+	game.power_grid.recalculate(game.buildings)
+	game.player_orders.refresh()
+	_assert_false(game.power_grid.brownout_active, "disabling Rec clears real brownout")
+	_assert_details_state(game, false, "clearing brownout keeps player's collapsed state")
+	rec.manually_disabled = false
+	game.power_grid.recalculate(game.buildings)
+	game.player_orders.refresh()
+	_assert_true(game.power_grid.brownout_active, "enabling Rec makes brownout recur")
+	_assert_details_state(game, true, "recurring brownout opens once")
+	_exercise_details_ui(game, true)
+	_assert_details_state(game, false, "recurring brownout respects later collapse")
+	_exercise_details_ui(game, true)
+	rec.manually_disabled = true
+	game.power_grid.recalculate(game.buildings)
+	game.player_orders.refresh()
+	_assert_details_state(game, true, "clearing last urgency never auto-collapses manual open")
+	_dispose(game)
+
+
+func _test_details_victory_pending() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	for resident: VaultResident in game.residents:
+		resident.work_allowed.haul = false
+		resident.work_allowed.craft = false
+	var completion_boundary := DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE
+	game.day_cycle.advance(completion_boundary - VaultGame.SIMULATION_TICK)
+	game.breach_system.advance(0.0, completion_boundary - VaultGame.SIMULATION_TICK)
+	game.player_orders.refresh()
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.OPEN, "pending fixture has real open hatch before final day tick")
+	_assert_false(game.day_cycle.completed, "pending urgency not active before exact day boundary")
+	_exercise_details_ui(game, true)
+	_assert_details_state(game, false, "open breach is collapsed before victory pending onset")
+	game._simulation_step(VaultGame.SIMULATION_TICK)
+	game.player_orders.refresh()
+	_assert_true(game.day_cycle.completed and not game.ended, "real final simulation tick reaches pending victory")
+	_assert_equal(game.player_orders.objective_label.text, "VICTORY PENDING // SEAL HATCH", "pending objective remains exact")
+	_assert_equal(game.player_orders.objective_label.get_theme_color("font_color"), Color("ef6860"), "pending objective retains urgency colour")
+	_assert_true("VICTORY PENDING · SEAL HATCH" in game.player_orders.alert_label.text, "pending hatch alert remains intact")
+	_assert_details_state(game, true, "new victory pending reopens an already known breach")
+	_exercise_details_ui(game, true)
+	_assert_details_state(game, false, "victory pending respects later collapse across refreshes")
+	_dispose(game)
+
+
+func _test_details_reset_and_load() -> void:
+	_remove_test_save(DETAILS_SAVE_TEST_PATH)
+	var game := _spawn_game()
+	game.begin_shift()
+	_add_details_brownout(game)
+	game.player_orders.refresh()
+	_assert_true(game.save_game(false, DETAILS_SAVE_TEST_PATH), "real brownout snapshot saves")
+	_exercise_details_ui(game, true)
+	_assert_details_state(game, false, "pre-load brownout is already latched and manually collapsed")
+	_assert_true(game.load_game(DETAILS_SAVE_TEST_PATH), "real save reloads same brownout into same HUD")
+	game.player_orders.refresh()
+	_assert_true(game.power_grid.brownout_active, "loaded save restores real brownout")
+	_assert_details_state(game, true, "load resets same-kind brownout history and opens once")
+	_exercise_details_ui(game, true)
+	_assert_details_state(game, false, "loaded brownout collapse sticks")
+	game.new_game(false)
+	game.player_orders.refresh()
+	_assert_false(game.power_grid.brownout_active, "new game clears old grid")
+	_assert_details_state(game, false, "quiet new game preserves manual collapsed state")
+	_add_details_brownout(game)
+	game.player_orders.refresh()
+	_assert_details_state(game, true, "same brownout kind opens after new game reset")
+	_exercise_details_ui(game, true)
+	game.new_game(false)
+	_add_details_brownout(game)
+	game.player_orders.refresh()
+	_assert_details_state(game, true, "new game resets same brownout even without an intervening quiet refresh")
+	_exercise_details_ui(game, true)
+	_exercise_details_ui(game, true)
+	game.new_game(false)
+	game.player_orders.refresh()
+	_assert_details_state(game, true, "quiet new game preserves manual open state")
+	_assert_true(game.save_game(false, DETAILS_SAVE_TEST_PATH), "quiet wing saves through real save path")
+	_assert_true(game.load_game(DETAILS_SAVE_TEST_PATH), "quiet wing loads with DETAILS open")
+	game.player_orders.refresh()
+	_assert_details_state(game, true, "quiet load preserves manual open state")
+	_exercise_details_ui(game, true)
+	_assert_true(game.load_game(DETAILS_SAVE_TEST_PATH), "quiet wing loads with DETAILS collapsed")
+	game.player_orders.refresh()
+	_assert_details_state(game, false, "quiet load preserves manual collapsed state")
+	_dispose(game)
+	_remove_test_save(DETAILS_SAVE_TEST_PATH)
 
 
 func _test_tool_hotkeys_and_help() -> void:

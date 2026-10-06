@@ -25,6 +25,8 @@ var right_scroll: ScrollContainer
 var details_box: VBoxContainer
 var details_toggle: Button
 var _details_expanded := false
+var _details_urgencies: Dictionary = {}
+var _details_resident_instance_id := 0
 var roster_box: VBoxContainer
 var inspector_title: Label
 var inspector_state: Label
@@ -1342,17 +1344,32 @@ func _refresh_objective() -> void:
 
 
 func _expand_details_on_urgency() -> void:
-	if not (
-		game.breach_system.phase == BreachSystem.Phase.WARNING
-		or game.breach_system.phase == BreachSystem.Phase.OPEN
-		or game.power_grid.brownout_active
-		or game.oxygen_system.is_low()
-		or (game.day_cycle.completed and not game.ended and (
-			not game.breach_system.is_sealed() or not game.oxygen_system.is_breathable()
-		))
+	# New games and loaded snapshots replace resident nodes, even at the same sim time.
+	# Residents remain in the roster after death, so this identity is stable during play.
+	var resident_instance_id := 0 if game.residents.is_empty() else game.residents[0].get_instance_id()
+	if resident_instance_id != _details_resident_instance_id:
+		_details_urgencies.clear()
+		_details_resident_instance_id = resident_instance_id
+	var active: Dictionary = {}
+	if game.breach_system.phase == BreachSystem.Phase.WARNING:
+		active["breach_warning"] = true
+	if game.breach_system.phase == BreachSystem.Phase.OPEN:
+		active["breach_open"] = true
+	if game.power_grid.brownout_active:
+		active["brownout"] = true
+	if game.oxygen_system.is_low():
+		active["low_o2"] = true
+	if game.day_cycle.completed and not game.ended and (
+		not game.breach_system.is_sealed() or not game.oxygen_system.is_breathable()
 	):
-		return
-	if details_box != null and not _details_expanded:
+		active["victory_pending"] = true
+	var gained_urgency := false
+	for urgency: String in active:
+		if not _details_urgencies.has(urgency):
+			gained_urgency = true
+			break
+	_details_urgencies = active
+	if gained_urgency and details_box != null and not _details_expanded:
 		_details_expanded = true
 		details_box.visible = true
 		if details_toggle != null:

@@ -63,6 +63,55 @@ func _test_1280_by_720_layout() -> void:
 	game.player_orders.lighting_label.text = "LIT 1800/1800 · L999/999 · D5"
 	await process_frame
 	_assert_true(game.player_orders.lighting_overlay_button.get_global_rect().end.x <= viewport_rect.end.x, "late-game lighting counts cannot displace the Light Map button")
+
+	# Reproduce the usual Rec-shed brownout, with a second Charge awaiting salvage.
+	game.user_paused = true
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(19, 12))
+	_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(21, 12))
+	var recreation := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(22, 12))
+	game.power_grid.recalculate(game.buildings)
+	_assert_equal(game.power_grid.supply, 9, "layout brownout has nine available power")
+	_assert_equal(game.power_grid.demand, 10, "layout brownout has ten demanded power")
+	_assert_true(game.power_grid.is_building_shed(recreation.building_id), "layout brownout sheds Rec")
+	game.food_system.salvage = 0
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, Vector2i(23, 12)), "layout can place the unfunded second Charge")
+	var charge := game.get_building_at(Vector2i(23, 12))
+	game.select_building(charge.building_id)
+	game.player_orders.refresh()
+	for _frame in range(4):
+		await process_frame
+	_assert_true(game.player_orders.details_box.visible, "brownout onset opens DETAILS in the layout scene")
+	var open_height := game.player_orders.right_scroll.size.y
+
+	game.player_orders.details_toggle.pressed.emit()
+	game.player_orders.refresh()
+	game.user_paused = false
+	var brownout_every_tick := true
+	for _tick in int(round(10.0 / VaultGame.SIMULATION_TICK)):
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		game.player_orders.refresh()
+		brownout_every_tick = brownout_every_tick and game.power_grid.brownout_active
+	game.user_paused = true
+	game.player_orders.refresh()
+	_assert_true(brownout_every_tick, "layout brownout persists on every refreshed tick of ten simulated seconds")
+	for _frame in range(4):
+		await process_frame
+	_assert_false(game.player_orders.details_box.visible, "DETAILS remains collapsed after ten more simulated seconds of brownout")
+	_assert_true(game.power_grid.brownout_active, "brownout persists while inspecting the unfunded Charge")
+	_assert_true(game.player_orders.right_scroll.size.y >= 100.0, "collapsed brownout DETAILS preserves meaningful roster and inspector scroll space")
+	var scroll_rect := game.player_orders.right_scroll.get_global_rect()
+	_assert_true(viewport_rect.encloses(scroll_rect), "collapsed brownout right scroll stays inside the 1280 by 720 viewport")
+	_assert_true("Short 18 salvage (shared stock) · dig 6 more rock" in game.player_orders.inspector_state.text, "unfunded second Charge shows its exact salvage shortage and dig tip")
+	var collapsed_height := game.player_orders.right_scroll.size.y
+	print("DETAILS layout: right_scroll open=%s collapsed=%s" % [open_height, collapsed_height])
+
+	game.player_orders.details_toggle.pressed.emit()
+	game.player_orders.refresh()
+	for _frame in range(4):
+		await process_frame
+	_assert_true(game.player_orders.details_box.visible, "player can manually reopen DETAILS during the same brownout")
 	_dispose(game)
 
 
