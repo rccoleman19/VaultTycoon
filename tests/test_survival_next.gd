@@ -62,6 +62,7 @@ func _init() -> void:
 
 func _run() -> void:
 	_test_salvage_shortfall()
+	_test_salvage_supplied_charge_with_reserve()
 	_test_salvage_recovery_sources()
 	_test_salvage_inspector()
 	_test_salvage_real_recovery()
@@ -2194,6 +2195,50 @@ func _test_salvage_shortfall() -> void:
 	_dispose(game)
 
 
+func _test_salvage_supplied_charge_with_reserve() -> void:
+	var game := _salvage_rec_game()
+	var charge := game.get_building_at(Vector2i(25, 12))
+	_assert_equal(charge.get_cost(), 18, "supplied Charge cost")
+	_assert_equal(charge.add_delivery(charge.get_cost()), 18, "Charge fully delivered")
+	_assert_false(charge.complete, "supplied Charge still awaits assembly")
+	game.breach_system.advance(0.0, BreachSystem.WARNING_AT_SECONDS)
+	var reserve := game.job_system.get_breach_salvage_reserve()
+	_assert_true(reserve > 0, "real unsupplied hatch reserves salvage")
+	_assert_equal(reserve, 4, "hatch reserve amount")
+	_assert_equal(game.food_system.salvage, 0, "supplied Charge has no shared stock")
+	_assert_step(game, FINISH_CHARGE_NEXT, "select", FINISH_CHARGE_HELP)
+	game.select_building(charge.building_id)
+	var supplied_original := "Blueprint · Salvage 18/18\nAssembly remaining: %.1fs" % charge.construction_left
+	game.player_orders._refresh_inspector()
+	_assert_equal(game.player_orders.inspector_state.text, supplied_original, "supplied Charge inspector ignores hatch reserve")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, Vector2i(26, 12)), "second unfunded Charge placed beside supplied Charge")
+	var unfunded := game.get_building_at(Vector2i(26, 12))
+	_assert_equal(unfunded.get_cost(), 18, "second Charge cost")
+	_assert_equal(unfunded.delivered, 0, "second Charge is unfunded")
+	_assert_equal(game.job_system.get_uncredited_rubble(), 0, "mixed Charge fixture has no uncredited rubble")
+	_assert_equal(game.map_grid.dig_marks.size(), 0, "mixed Charge fixture has no queued digs")
+	var unfunded_original := "Blueprint · Salvage 0/18\nAssembly remaining: %.1fs" % unfunded.construction_left
+	for sample: Dictionary in [
+		{"salvage": 0, "spendable": -4, "shortfall": 22, "tiles": 8},
+		{"salvage": 6, "spendable": 2, "shortfall": 16, "tiles": 6},
+	]:
+		game.food_system.salvage = sample.salvage
+		var spendable: int = game.food_system.salvage - reserve
+		var shortfall := unfunded.get_cost() - unfunded.delivered - spendable
+		var tiles := ceili(float(shortfall) / 3.0) - game.map_grid.dig_marks.size()
+		_assert_equal(spendable, sample.spendable, "mixed Charge spendable stock includes hatch reserve")
+		_assert_equal(shortfall, sample.shortfall, "only unfunded Charge contributes remaining cost")
+		_assert_equal(tiles, sample.tiles, "mixed Charge recovery tile count")
+		_assert_salvage_tip(game, shortfall, tiles)
+		game.select_building(unfunded.building_id)
+		game.player_orders._refresh_inspector()
+		_assert_equal(game.player_orders.inspector_state.text, unfunded_original + "\nShort %d salvage (shared stock) · dig %d more rock" % [shortfall, tiles], "unfunded Charge inspector includes exact shared shortage")
+		game.select_building(charge.building_id)
+		game.player_orders._refresh_inspector()
+		_assert_equal(game.player_orders.inspector_state.text, supplied_original, "supplied Charge inspector excludes other Charge shortage")
+	_dispose(game)
+
+
 func _test_salvage_recovery_sources() -> void:
 	var game := _salvage_rec_game()
 	for x in range(17, 19):
@@ -2243,12 +2288,17 @@ func _test_salvage_inspector() -> void:
 	game.food_system.salvage = 18
 	game.player_orders._refresh_inspector()
 	_assert_equal(game.player_orders.inspector_state.text, original, "funded inspector exactly original two lines")
+	_dispose(game)
+	game = _healthy_game()
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(26, 12)), "generic inspector blueprint")
 	var bed := game.get_building_at(Vector2i(26, 12))
+	game.selected_resident_id = -1
 	game.selected_building_id = bed.building_id
 	game.food_system.salvage = 0
+	var bed_original := "Blueprint · Salvage %d/%d\nAssembly remaining: %.1fs" % [bed.delivered, bed.get_cost(), bed.construction_left]
+	var tiles := ceili(float(bed.get_cost()) / PlayerOrders.DIG_SALVAGE_YIELD) - game.map_grid.dig_marks.size()
 	game.player_orders._refresh_inspector()
-	_assert_true("Short %d salvage (shared stock)" % bed.get_cost() in game.player_orders.inspector_state.text, "inspector shortfall applies to non-Charge kind")
+	_assert_equal(game.player_orders.inspector_state.text, bed_original + "\nShort %d salvage (shared stock) · dig %d more rock" % [bed.get_cost(), tiles], "inspector shortfall applies to non-Charge kind")
 	_dispose(game)
 
 
@@ -2264,13 +2314,15 @@ func _test_salvage_real_recovery() -> void:
 	for x in range(17, 17 + count):
 		_assert_true(game.issue_order(Vector2i(x, 10)), "ordinary reachable rock order")
 	game.set_tool("select")
+	var ticks := 0
 	var elapsed := 0.0
 	var dug_at := -1.0
 	var supplied_at := -1.0
 	var ordinary_work := true
-	while elapsed < SALVAGE_RECOVERY_BOUND and not charge.complete and not game.ended:
+	while ticks < int(round(SALVAGE_RECOVERY_BOUND / VaultGame.SIMULATION_TICK)) and not charge.complete and not game.ended:
 		game.step_simulation(VaultGame.SIMULATION_TICK)
-		elapsed += VaultGame.SIMULATION_TICK
+		ticks += 1
+		elapsed = ticks * VaultGame.SIMULATION_TICK
 		for resident: VaultResident in game.residents:
 			ordinary_work = ordinary_work and not resident.drafted and not resident.is_forced_job
 		if dug_at < 0.0 and game.map_grid.dig_marks.is_empty():

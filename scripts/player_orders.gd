@@ -919,6 +919,8 @@ func _salvage_shortfall(kind: int) -> int:
 	for building: VaultBuilding in game.buildings:
 		if building.kind == kind and not building.complete and not building.is_emergency_core:
 			needed += building.get_cost() - building.delivered - game.job_system.get_build_supply_in_transit(building.building_id)
+	if needed <= 0:
+		return 0
 	var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
 	return maxi(0, needed - spendable)
 
@@ -1519,7 +1521,7 @@ func _refresh_inspector() -> void:
 		else:
 			inspector_state.text = "Blueprint · Salvage %d/%d\nAssembly remaining: %.1fs" % [building.delivered, building.get_cost(), building.construction_left]
 			var shortfall := _salvage_shortfall(building.kind)
-			if shortfall > 0:
+			if shortfall > 0 and not building.is_supplied():
 				var tiles := _salvage_dig_tiles(shortfall)
 				inspector_state.text += "\nShort %d salvage (shared stock) · " % shortfall
 				inspector_state.text += "dig %d more rock" % tiles if tiles > 0 else "queued dig/haul covers it"
