@@ -59,6 +59,7 @@ run_godot_check fresh-wing-charge-finish --script res://tests/test_fresh_wing_ch
 run_godot_check fresh-wing-grow-finish --script res://tests/test_fresh_wing_grow_finish.gd
 run_godot_check fresh-wing-nutrient-finish --script res://tests/test_fresh_wing_nutrient_finish.gd
 run_godot_check fresh-wing-air-finish --script res://tests/test_fresh_wing_air_finish.gd
+run_godot_check lit-signature --script res://tests/test_lit_signature.gd
 run_godot_check lighting-darkness --script res://tests/test_lighting_darkness.gd
 run_godot_check manual-draft-forced-orders --script res://tests/test_manual_draft_forced_orders.gd
 run_godot_check boot --quit-after 5

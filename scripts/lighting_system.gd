@@ -16,6 +16,9 @@ var _completed_lumens: Array[VaultBuilding] = []
 var _powered_lumens: Array[VaultBuilding] = []
 var _coverage_signature := ""
 var _coverage_overlay_visible := false
+# Bumped on every recompute or clear and never reset, so the 3D map can tell an
+# equal-count reallocation of lit cells from no change.
+var _coverage_revision := 0
 
 
 func setup(grid: MapGrid) -> void:
@@ -30,6 +33,7 @@ func reset() -> void:
 	_powered_lumens.clear()
 	_coverage_signature = ""
 	_coverage_overlay_visible = false
+	_coverage_revision += 1
 	queue_redraw()
 
 
@@ -58,6 +62,7 @@ func refresh(buildings: Array[VaultBuilding], force := false) -> bool:
 				_lit_floor_cells[cell] = true
 				break
 
+	_coverage_revision += 1
 	queue_redraw()
 	coverage_changed.emit()
 	return true
@@ -69,6 +74,10 @@ func is_cell_lit(cell: Vector2i) -> bool:
 
 func is_floor_dark(cell: Vector2i) -> bool:
 	return map_grid != null and is_instance_valid(map_grid) and map_grid.is_walkable(cell) and not is_cell_lit(cell)
+
+
+func get_coverage_revision() -> int:
+	return _coverage_revision
 
 
 func get_lit_floor_count() -> int:
