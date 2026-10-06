@@ -288,19 +288,21 @@ func _map_signature() -> String:
 	for cell: Vector2i in dig_cells:
 		dig_bits.append("%d,%d,%d" % [cell.x, cell.y, _dig_bucket(cell)])
 	var zone_bits := map_grid.stockpile_cells.size()
-	var lit_bits := 0
+	# The lit-cell revision, not the lit count: an equal-size reallocation must rebuild.
+	var lighting_revision := -1
+	var overlay_bits := 0
 	if lighting_system != null and is_instance_valid(lighting_system):
-		lit_bits = lighting_system.get_lit_floor_count()
-		if lighting_system.is_coverage_overlay_visible():
-			lit_bits += 100000
-	return "%d:%s:%d:%d:%d:%s:%d:%d" % [
+		lighting_revision = lighting_system.get_coverage_revision()
+		overlay_bits = int(lighting_system.is_coverage_overlay_visible())
+	return "%d:%s:%d:%d:%d:%s:%d:%d:%d" % [
 		map_grid.topology_revision,
 		";".join(dig_bits),
 		zone_bits,
 		hover.x,
 		hover.y,
 		map_grid.preview_tool,
-		lit_bits,
+		lighting_revision,
+		overlay_bits,
 		int(_is_view_preview_valid(map_grid.preview_tool, hover)),
 	]
 
