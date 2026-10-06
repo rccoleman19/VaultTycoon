@@ -16,9 +16,12 @@ const COLONIST_RADIUS := 2.4
 const COLONIST_HEIGHT := 13.0
 const BUNK_MATTRESS_TOP := 3.90
 const MEDICAL_MATTRESS_TOP := 4.40
-# Pending food at an occupied source waits on the floor this far toward the
-# camera (+Z): past every fixture's front face, still inside the source hex.
-const FOOD_SOURCE_FRONT_OFFSET := 9.0
+# Pending food at an occupied source waits on the floor toward the camera (+Z),
+# FOOD_SOURCE_FRONT_MARGIN (half the 2.4 box + a 0.3 gap) past that fixture's
+# front face, so camera-side rock hides as little of it as possible. Never
+# nearer than a resident on the cell allows, never past 9.0 (inside the hex).
+const FOOD_SOURCE_FRONT_MARGIN := 1.5
+const FOOD_SOURCE_MAX_OFFSET := 9.0
 
 var map_grid: MapGrid
 var lighting_system: LightingSystem
@@ -37,6 +40,7 @@ var _build_ghost: Node3D
 var _build_ghost_kind := -1
 var _rubble_props: Dictionary = {}
 var _food_props: Dictionary = {}
+var _food_front_offsets: Dictionary = {}
 var _hatch_proxy: MeshInstance3D
 var _shared_hex_mesh: CylinderMesh
 var _mat_rock: StandardMaterial3D
@@ -451,7 +455,7 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 		prop.position = Vector3(center.x, 0.7, center.y)
 		for building: VaultBuilding in buildings:
 			if is_instance_valid(building) and building.cell == job.target:
-				prop.position = Vector3(center.x, FLOOR_HEIGHT + 0.7, center.y + FOOD_SOURCE_FRONT_OFFSET)
+				prop.position = Vector3(center.x, FLOOR_HEIGHT + 0.7, center.y + _food_source_front_offset(building.kind))
 				break
 		for resident: VaultResident in residents:
 			if (
@@ -567,6 +571,23 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 		_hatch_proxy.visible = true
 	elif _hatch_proxy != null and is_instance_valid(_hatch_proxy):
 		_hatch_proxy.visible = false
+
+
+## How far toward the camera (+Z) pending food at this kind of source sits: the
+## scale-1 fixture's front face + margin, measured once per kind from the same
+## assembly `_make_building_proxy` builds (its parts are direct, unrotated,
+## unscaled children). A kind without parts only clears a standing resident.
+func _food_source_front_offset(kind: int) -> float:
+	if _food_front_offsets.has(kind):
+		return _food_front_offsets[kind]
+	var front := COLONIST_RADIUS
+	var assembly := _make_building_proxy(kind)
+	for part: MeshInstance3D in assembly.get_children():
+		front = maxf(front, part.position.z + part.mesh.get_aabb().end.z)
+	assembly.free()
+	var offset := minf(front + FOOD_SOURCE_FRONT_MARGIN, FOOD_SOURCE_MAX_OFFSET)
+	_food_front_offsets[kind] = offset
+	return offset
 
 
 ## Colonists/NPCs: one CapsuleMesh pill only — no body art, no multi-mesh humanoids.
