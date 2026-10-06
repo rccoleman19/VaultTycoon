@@ -67,6 +67,7 @@ The simulation starts with 12 meals, 4 raw food, 48 salvage, 100% oxygen, an eme
 | `P` | Open or close the crew work priorities board |
 | `L` or right-HUD **LIGHT MAP [L]** | Toggle the transient Lumen-coverage overlay; view-only and not saved |
 | Roster **PRIORITIES [P]** | Open the crew work priorities board |
+| Right-HUD **DETAILS** | Toggle details; a new urgency opens them once, and a manual collapse sticks until another urgency begins |
 | Work-priority cell | Cycle `1 → 2 → 3 → 4 → OFF → 1`; lower numbers run first |
 | Bottom build buttons | Place the selected fixture blueprint on carved floor; **AIR $14** selects the Air Recycler and **REC $8** the Rec Console |
 | Bottom **HELP** | Open the stabilization checklist and pause behind it; closing restores the prior run/pause state |
