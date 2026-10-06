@@ -44,6 +44,8 @@ func _run() -> void:
 	_run_case("pending food follows whatever fixture occupies its source", _test_removed_producer)
 	_run_case("save and load recolour reused food props", _test_load_recolours)
 	_run_case("south-row and east-column food stays in sight past camera-side rock", _test_south_row_in_sight)
+	_run_case("every fixture assembly and live proxy has meshed parts", _test_fixture_parts_nonempty)
+	_run_case("food boxes keep one material object across syncs and a load", _test_material_identity)
 	print("")
 	print("FOOD PROPS TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	_remove_test_save(SAVE_PATH)
@@ -357,3 +359,86 @@ func _clear_of_rock(grid: MapGrid, point: Vector3, eye: Vector3) -> bool:
 		if grid.get_tile(grid.world_to_cell(Vector2(q.x, q.z))) == MapGrid.Tile.ROCK:
 			return false
 	return true
+
+
+# Hardening: the clearance loops and the art pin above iterate fixture parts, so
+# an empty assembly would pass them vacuously. Position-independent on purpose.
+func _test_fixture_parts_nonempty() -> void:
+	var game := _producer_game()
+	var view := game.map_view_3d
+	for kind: int in VaultBuilding.Kind.values():
+		var label: String = VaultBuilding.Kind.keys()[kind]
+		var assembly := view._make_building_proxy(kind)
+		if not is_instance_valid(assembly):
+			_assert_true(false, "%s fixture assembly exists" % label)
+			continue
+		_assert_true(_meshed_part_count(assembly) > 0, "%s fixture assembly has at least one meshed part" % label)
+		_assert_equal(_meshed_part_count(assembly), assembly.get_child_count(), "%s every assembly child is a meshed part" % label)
+		assembly.free()
+	var bunk := _add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(26, 17))
+	_assert_true(is_instance_valid(bunk), "fixture: a completed Bunk is on the map")
+	game._sync_3d_play_view()
+	var live_kinds := {}
+	for building: VaultBuilding in game.buildings:
+		live_kinds[building.kind] = true
+	for kind: int in [VaultBuilding.Kind.GENERATOR, VaultBuilding.Kind.LAMP, VaultBuilding.Kind.GROW_TRAY, VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.BED]:
+		_assert_true(live_kinds.has(kind), "fixture: a live %s is on the map" % VaultBuilding.Kind.keys()[kind])
+	for building: VaultBuilding in game.buildings:
+		var label := "%s #%d" % [building.get_display_name(), building.building_id]
+		var proxy: Node3D = view._building_proxies.get(building.building_id) as Node3D
+		_assert_true(is_instance_valid(proxy), "%s live proxy exists" % label)
+		if is_instance_valid(proxy):
+			_assert_true(_meshed_part_count(proxy) > 0, "%s live proxy has at least one meshed part" % label)
+	_dispose(game)
+
+
+func _meshed_part_count(assembly: Node3D) -> int:
+	var count := 0
+	for part: Node in assembly.get_children():
+		if part is MeshInstance3D and (part as MeshInstance3D).mesh != null:
+			count += 1
+	return count
+
+
+func _material(prop: MeshInstance3D) -> Material:
+	return prop.material_override if is_instance_valid(prop) else null
+
+
+func _test_material_identity() -> void:
+	_remove_test_save(SAVE_PATH)
+	var game := _producer_game()
+	game.job_system.queue_meals(KITCHEN_CELL, FoodSystem.COOK_OUTPUT)
+	game.food_system.advance(FoodSystem.GROW_SECONDS, game.buildings)
+	game._sync_3d_play_view()
+	var meal := _food_job(game, JobSystem.JobType.HAUL_MEAL, KITCHEN_CELL)
+	var raw := _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, GROW_CELL)
+	_assert_true(not meal.is_empty() and not raw.is_empty(), "fixture: one meal and one raw food job pending")
+	var meal_box := _prop(game, meal)
+	var raw_box := _prop(game, raw)
+	var meal_mat := _material(meal_box)
+	var raw_mat := _material(raw_box)
+	_assert_true(meal_mat != null and raw_mat != null, "both boxes have a material")
+	_assert_true(meal_mat != raw_mat, "each box owns its own material (recolouring one never repaints the other)")
+	for i in 3:
+		game._sync_3d_play_view()
+		game._process(0.0)
+	_assert_true(_prop(game, meal) == meal_box and _prop(game, raw) == raw_box, "repeat syncs reuse both boxes")
+	_assert_true(_material(meal_box) == meal_mat, "repeat syncs keep the meal box's material object")
+	_assert_true(_material(raw_box) == raw_mat, "repeat syncs keep the raw box's material object")
+	_assert_true(game.save_game(false, SAVE_PATH), "save succeeds")
+	_assert_true(game.load_game(SAVE_PATH), "load succeeds")
+	game._sync_3d_play_view()
+	game._sync_3d_play_view()
+	var loaded_meal_box := _prop(game, _food_job(game, JobSystem.JobType.HAUL_MEAL, KITCHEN_CELL))
+	var loaded_raw_box := _prop(game, _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, GROW_CELL))
+	_assert_true(loaded_meal_box != null and loaded_raw_box != null, "both boxes exist after load")
+	# Per node, not as a set: each reused box must still own exactly the material it had.
+	var material_by_box := {meal_box: meal_mat, raw_box: raw_mat}
+	for box: MeshInstance3D in [loaded_meal_box, loaded_raw_box]:
+		_assert_true(material_by_box.has(box), "a loaded box is one of the two reused nodes")
+		_assert_true(material_by_box.has(box) and _material(box) == material_by_box[box], "a reused box keeps its own original material object after load")
+	_assert_true(_material(loaded_meal_box) != _material(loaded_raw_box), "loaded boxes still own separate materials")
+	_assert_equal(_color(loaded_meal_box), MEAL_COLOR, "loaded meal box recoloured in place to orange")
+	_assert_equal(_color(loaded_raw_box), RAW_COLOR, "loaded raw box recoloured in place to green")
+	_remove_test_save(SAVE_PATH)
+	_dispose(game)
