@@ -1358,6 +1358,13 @@ func _primary_next_step() -> Dictionary:
 
 
 func _refresh_objective() -> void:
+	if game.ended and game.outcome == "win":
+		# The SEAL STABILIZED panel is up: report the result, not a Next tip.
+		var survivors := game.get_alive_count()
+		objective_label.text = "SEAL STABILIZED // %d resident%s survived" % [survivors, "" if survivors == 1 else "s"]
+		objective_label.add_theme_color_override("font_color", Color("75d4b4"))
+		_expand_details_on_urgency()
+		return
 	if game.day_cycle.completed and not game.ended:
 		var blockers: Array[String] = []
 		if not game.breach_system.is_sealed():
@@ -1495,13 +1502,13 @@ func _refresh_inspector() -> void:
 				inspector_state.text = "Seal load · %d%%\nO2 venting in %s\n%s" % [
 					roundi(game.breach_system.get_pressure_percent()),
 					_format_seconds(game.breach_system.get_time_to_open()),
-					game.job_system.get_breach_response_status(),
+					_breach_response_line(),
 				]
 			BreachSystem.Phase.OPEN:
 				inspector_state.text = "BREACH OPEN · O2 -%.1f%%/s\nPatch work remaining: %.1fs\n%s" % [
 					OxygenSystem.OPEN_BREACH_LOSS_PER_SECOND,
 					game.breach_system.patch_work_left,
-					game.job_system.get_breach_response_status(),
+					_breach_response_line(),
 				]
 			BreachSystem.Phase.SEALED:
 				inspector_state.text = "CONTAINED · Patch complete\nNo further breach oxygen loss."
@@ -1586,6 +1593,12 @@ func _refresh_inspector() -> void:
 
 
 func _refresh_alerts() -> void:
+	if game.ended:
+		# The outcome panel is up and the shift is over: one outcome line, no live advice.
+		var won := game.outcome == "win"
+		alert_label.text = "SHIFT ENDED · %s" % ("SEAL STABILIZED" if won else "WING LOST")
+		alert_label.add_theme_color_override("font_color", Color("75d4b4") if won else Color("ef6860"))
+		return
 	var alerts: Array[String] = []
 	var drafted_count := 0
 	for resident: VaultResident in game.residents:
@@ -1767,6 +1780,14 @@ func _refresh_oxygen() -> void:
 		oxygen_bar.modulate = Color("75d4b4")
 
 
+func _breach_response_line() -> String:
+	# After a wipe nobody can answer the hatch, but JobSystem still names the
+	# first blocker (e.g. ENABLE HAUL). Win always ends SEALED, so this is loss-only.
+	if game.ended:
+		return "NO LIVING CREW · RESPONSE ENDED"
+	return game.job_system.get_breach_response_status()
+
+
 func _refresh_breach() -> void:
 	var breach := game.breach_system
 	breach_focus_button.visible = breach.phase != BreachSystem.Phase.DORMANT
@@ -1781,7 +1802,7 @@ func _refresh_breach() -> void:
 				_format_seconds(breach.get_time_to_open()),
 				breach.patch_delivered,
 				BreachSystem.PATCH_COST,
-				game.job_system.get_breach_response_status(),
+				_breach_response_line(),
 			]
 			breach_bar.value = breach.get_pressure_percent()
 			breach_bar.modulate = Color("efc56b")
@@ -1791,7 +1812,7 @@ func _refresh_breach() -> void:
 				breach.patch_delivered,
 				BreachSystem.PATCH_COST,
 				breach.patch_work_left,
-				game.job_system.get_breach_response_status(),
+				_breach_response_line(),
 			]
 			breach_bar.value = 100.0
 			breach_bar.modulate = Color("ef6860")
