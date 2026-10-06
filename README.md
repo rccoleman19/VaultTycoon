@@ -112,6 +112,8 @@ The priority board shows every resident as a row and **DIG**, **HAUL**, **CRAFT*
 
 **DIG** covers excavation. **HAUL** covers rubble recovery, raw-food and meal output, blueprint supply, and emergency patch delivery. **CRAFT** covers fixture assembly and emergency hatch patching. **COOK** covers meal preparation at a powered Nutrient Station.
 
+During a hatch warning or open breach, while delivered, in-transit, and stored salvage together fall short of the 4-salvage patch, rubble and then new digs jump ahead of other same-rank work.
+
 Turning a category OFF immediately releases that resident from an automatically claimed job in the disabled category, including safely returning carried salvage or food to its source job. Changing one enabled numeric value to another does not interrupt the current job; it affects the resident's next automatic claim. Emergency hatch supply and patch work remain an absolute override above the numeric board order for undrafted residents, while OFF Haul or Craft remains ineligible for automatic response and produces the existing blocker warning. A valid one-shot forced order is the deliberate exception: it bypasses both the numeric rank and OFF for that exact job only.
 
 ## Manual draft and forced orders
@@ -148,11 +150,11 @@ Starting a New Wing clears every draft and manual command. Loading returns pause
 | Exhaustion | Additional -12 mood per day while rest is below 30 |
 | Low oxygen | Additional -24 mood per day while vault oxygen is at or below 35% |
 | Fully stacked awake pressure | -96 mood per day: baseline, dark, hungry, exhausted, and low O2 |
-| Protected recovery states | Sleeping and physically active Rec Console use suspend passive mood loss |
+| Protected recovery states | Sleeping, physically active Rec Console use, and an undrafted stress break suspend passive mood loss |
 | Unbedded collapse | Waking from floor sleep costs 12 mood once |
 | Work speed | Mood below 30 multiplies work by 0.70; combined need penalties retain a 0.35 floor |
 | HUD tiers | STEADY at 70+, STRAINED at 40–69.999, STRESSED above 9 and below 40, BREAK RISK at 9 or lower |
-| Stress-break fallback | Mood at or below 9 starts a 7-second break that restores 8 mood |
+| Stress-break fallback | Mood at or below 9 starts a 7-second break that holds mood and restores 16 mood when complete; drafting, the hatch response, or Med Bed admission ends it early without the bonus |
 | Severe mood | Mood at or below 5 costs 5 health per day |
 | Recreation trigger | Mood at or below 35 seeks the nearest reachable powered free console |
 | Console recovery | +18 mood per simulation second while physically present; finishes at exactly 85 |
@@ -404,4 +406,4 @@ circuits, spatial gas cells, doors, surface play, caravans, factions, research,
 mods, multiplayer, IAP, ads, analytics, final art/audio, or mobile work.
 
 When a Charge Node blueprint is short of salvage, Next tells you how many more rock tiles to mark with Dig, or to leave Dig + Haul on when queued work covers it. The tip accounts for shared stock, hatch patch reserves, deliveries, and cargo already on its way. Unfinished blueprint inspectors show the same per-kind shortfall alongside salvage and assembly progress.
-Before the Day-7 hold tip, Next gives the same salvage guidance for the oldest unfinished, unsupplied non-core blueprint whose kind is short of salvage; funded builds keep the Day-7 tip.
+Before the Day-7 hold tip, Next gives the same salvage guidance for the oldest unfinished, unsupplied non-core blueprint whose kind is short of salvage; funded builds keep the Day-7 tip unless a living resident's mood is at or below 35 while every completed Rec Console is unpowered, in which case Next asks you to enable a Rec Console, finish a Charge Node, or place a Charge Node.
