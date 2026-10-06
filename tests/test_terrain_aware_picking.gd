@@ -476,9 +476,10 @@ func _test_cycle_with_fixture() -> void:
 	game.free()
 
 
-# Cyra is selected elsewhere. Ari (first in hex order) and Bo share (22,17), with
-# Ari off the ray, so only a direct switch selects Bo; treating the click as a
-# re-click would cycle the hex and select Ari.
+# Cyra is selected and stands on (22,17) too (her default spawn), off the ray.
+# Ari (first in hex order) and Bo also share (22,17), with Ari off the ray, so
+# only a direct switch selects Bo. Treating "selected resident shares the hex"
+# alone as a re-click would cycle the hex and select Ari.
 func _test_direct_switch() -> void:
 	var game := _spawn_game(1.0)
 	var view := game.map_view_3d
@@ -496,6 +497,7 @@ func _test_direct_switch() -> void:
 	bo.position = center + Vector2(-4.0, 0.0)
 	_assert_equal(game.map_grid.world_to_cell(ari.position), hex, "Ari is drawn in (22,17)")
 	_assert_equal(game.map_grid.world_to_cell(bo.position), hex, "Bo is drawn in (22,17)")
+	_assert_equal(game.map_grid.world_to_cell(cyra.position), hex, "selected Cyra also stands on (22,17), off the ray")
 	game._sync_3d_play_view(true)
 	var bo_proxy: MeshInstance3D = view._resident_proxies[2]
 	var screen := _screen(game, Vector3(bo_proxy.global_position.x, 6.5, bo_proxy.global_position.z))
