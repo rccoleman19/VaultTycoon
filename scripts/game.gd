@@ -177,11 +177,12 @@ func _simulation_step(delta_seconds: float) -> void:
 		var lit := lighting_system.is_cell_lit(resident_cell)
 		var assigned_bed := get_building_by_id(resident.bed_id)
 		var in_bed := assigned_bed != null and assigned_bed.complete and resident_cell == assigned_bed.cell
+		# A stress break vents, so passive mood loss pauses as in sleep and active Rec.
 		resident.advance_needs(
 			delta_seconds / DayCycle.SECONDS_PER_DAY,
 			lit,
 			in_bed,
-			job_system.is_actively_recreating(resident),
+			job_system.is_actively_recreating(resident) or (resident.stress_break_left > 0.0 and not resident.drafted),
 			oxygen_system.is_low(),
 		)
 	var next_elapsed := minf(

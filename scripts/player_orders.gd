@@ -945,6 +945,29 @@ func _charge_finish_step() -> Dictionary:
 	return _fund_blueprint_step(VaultBuilding.Kind.GENERATOR)
 
 
+func _offline_rec_step() -> Dictionary:
+	if game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) < 1 or game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) > 0:
+		return {}
+	var all_rec_disabled := true
+	for rec: VaultBuilding in game.buildings:
+		if rec.kind == VaultBuilding.Kind.RECREATION_CONSOLE and rec.complete and not rec.manually_disabled:
+			all_rec_disabled = false
+			break
+	if all_rec_disabled:
+		return {
+			"text": "Next: YOU enable a Rec Console · THEY recover mood",
+			"tool": "select",
+			"help": "Select a completed Rec Console and click ENABLE so crew can recover mood.",
+		}
+	if _unfinished_charge_count() > 0:
+		return _charge_finish_step()
+	return {
+		"text": "Next: YOU place a Charge Node · THEY power the Rec Console",
+		"tool": "generator",
+		"help": "The grid lacks available power for the Rec Console. Place a Charge Node to add 7 power.",
+	}
+
+
 func _fund_blueprint_step(kind: int) -> Dictionary:
 	var shortfall := _salvage_shortfall(kind)
 	var tiles := _salvage_dig_tiles(shortfall)
@@ -959,6 +982,7 @@ func _fund_blueprint_step(kind: int) -> Dictionary:
 func _primary_next_step() -> Dictionary:
 	var critical_resident := false
 	var mood_break_risk := false
+	var rec_wanted := false
 	var injured_without_reservation := false
 	for resident: VaultResident in game.residents:
 		if not resident.alive:
@@ -967,6 +991,8 @@ func _primary_next_step() -> Dictionary:
 			critical_resident = true
 		if resident.needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD:
 			mood_break_risk = true
+		if resident.needs.wants_recreation():
+			rec_wanted = true
 		if resident.needs.health < 100.0 and resident.medical_bed_id < 0:
 			injured_without_reservation = true
 	if critical_resident and game.food_system.meals < game.get_alive_count():
@@ -1022,25 +1048,10 @@ func _primary_next_step() -> Dictionary:
 			"help": "Place a Rec Console so crew can recover mood.",
 			"tool": "rec",
 		}
-	if mood_break_risk and game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) > 0 and game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) == 0:
-		var all_rec_disabled := true
-		for rec: VaultBuilding in game.buildings:
-			if rec.kind == VaultBuilding.Kind.RECREATION_CONSOLE and rec.complete and not rec.manually_disabled:
-				all_rec_disabled = false
-				break
-		if all_rec_disabled:
-			return {
-				"text": "Next: YOU enable a Rec Console · THEY recover mood",
-				"tool": "select",
-				"help": "Select a completed Rec Console and click ENABLE so crew can recover mood.",
-			}
-		if _unfinished_charge_count() > 0:
-			return _charge_finish_step()
-		return {
-			"text": "Next: YOU place a Charge Node · THEY power the Rec Console",
-			"tool": "generator",
-			"help": "The grid lacks available power for the Rec Console. Place a Charge Node to add 7 power.",
-		}
+	if mood_break_risk:
+		var offline_rec_step := _offline_rec_step()
+		if not offline_rec_step.is_empty():
+			return offline_rec_step
 	var free_medical := 0
 	for bed: VaultBuilding in game.buildings:
 		if bed.kind == VaultBuilding.Kind.MEDICAL_BED and bed.complete and not bed.manually_disabled and bed.reserved_by < 0:
@@ -1330,6 +1341,10 @@ func _primary_next_step() -> Dictionary:
 				oldest_short_blueprint = building
 		if oldest_short_blueprint != null:
 			return _fund_blueprint_step(oldest_short_blueprint.kind)
+		if rec_wanted:
+			var offline_rec_step := _offline_rec_step()
+			if not offline_rec_step.is_empty():
+				return offline_rec_step
 		return {
 			"text": "Next: YOU designate needs · THEY hold Day 7",
 			"help": "Keep designating dig/build/stockpile. Defaults keep food, power, and air running.",
@@ -1443,6 +1458,8 @@ func _refresh_inspector() -> void:
 				mood_factors = "Rec Console · paused"
 			else:
 				mood_factors = "Seeking Rec Console · %s" % resident.needs.get_mood_factors(is_lit, false, game.oxygen_system.is_low())
+		elif resident.stress_break_left > 0.0 and not resident.sleeping and not resident.drafted:
+			mood_factors = "Stress break · mood holds · +%d in %ds" % [int(ResidentNeeds.STRESS_BREAK_RECOVERY), ceili(resident.stress_break_left)]
 		inspector_state.text = "Current task: %s\nWork speed: %d%%\nMood: %s\n%s" % [
 			_get_resident_order_status(resident),
 			roundi(resident.get_work_multiplier() * 100.0),
