@@ -8,6 +8,8 @@ const LOW_OXYGEN_MOOD_LOSS_PER_DAY := 24.0
 const RECREATION_RECOVERY_PER_SECOND := 18.0
 const RECREATION_SEEK_THRESHOLD := 35.0
 const RECREATION_TARGET := 85.0
+# Unreserved residents claim a Med Bed at or below this HP; Next guidance uses the same gate.
+const MEDICAL_SEEK_THRESHOLD := 95.0
 const LOW_MOOD_THRESHOLD := 30.0
 const BREAK_MOOD_THRESHOLD := 9.0
 const SEVERE_MOOD_THRESHOLD := 5.0
@@ -72,6 +74,10 @@ func finish_recreation() -> void:
 
 func wants_recreation() -> bool:
 	return mood <= RECREATION_SEEK_THRESHOLD
+
+
+func wants_medical_care() -> bool:
+	return health <= MEDICAL_SEEK_THRESHOLD
 
 
 func is_recreation_satisfied() -> bool:

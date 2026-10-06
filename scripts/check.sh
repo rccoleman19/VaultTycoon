@@ -44,6 +44,7 @@ run_godot_check stress-break-venting --script res://tests/test_stress_break_vent
 run_godot_check work-priorities --script res://tests/test_work_priorities.gd
 run_godot_check breach-modal-speed-keys --script res://tests/test_breach_modal_speed_keys.gd
 run_godot_check medical --script res://tests/test_medical.gd
+run_godot_check medical-next-threshold --script res://tests/test_medical_next_threshold.gd
 run_godot_check survival-next --script res://tests/test_survival_next.gd
 run_godot_check fixture-props --script res://tests/test_fixture_props.gd
 run_godot_check open-suggested-tab --script res://tests/test_open_suggested_tab.gd
