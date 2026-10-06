@@ -448,7 +448,7 @@ func _test_echo_powered() -> void:
 
 func _test_echo_injured() -> void:
 	var game := _echo_game(20.0)
-	game.residents[0].needs.health = 99.0
+	game.residents[0].needs.health = 95.0
 	_assert_step(game, "Next: YOU place a Med Bed · THEY treat", "medical", "Place a Med Bed so the injured can be treated.")
 	game.free()
 

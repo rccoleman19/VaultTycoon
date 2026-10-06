@@ -636,7 +636,7 @@ func _handle_medical(resident: VaultResident, delta_seconds: float) -> bool:
 	if resident.needs.health >= 100.0:
 		return false
 	if bed == null:
-		if resident.needs.health > 95.0 or resident.needs.food <= 35.0:
+		if not resident.needs.wants_medical_care() or resident.needs.food <= 35.0:
 			return false
 		for candidate: VaultBuilding in game.buildings:
 			if _can_use_medical(resident, candidate):
