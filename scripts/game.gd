@@ -19,6 +19,34 @@ const BUILD_KIND_BY_TOOL := {
 	"medical": VaultBuilding.Kind.MEDICAL_BED,
 }
 
+const _SNAPSHOT_INT := 0
+const _SNAPSHOT_NUMBER := 1
+const _SNAPSHOT_BOOL := 2
+const _SNAPSHOT_STRING := 3
+const _SNAPSHOT_BUILDING_FIELDS := {
+	"id": _SNAPSHOT_INT,
+	"kind": _SNAPSHOT_INT,
+	"complete": _SNAPSHOT_BOOL,
+	"delivered": _SNAPSHOT_INT,
+	"construction_left": _SNAPSHOT_NUMBER,
+	"powered": _SNAPSHOT_BOOL,
+	"manually_disabled": _SNAPSHOT_BOOL,
+	"is_emergency_core": _SNAPSHOT_BOOL,
+	"production_progress": _SNAPSHOT_NUMBER,
+}
+const _SNAPSHOT_RESIDENT_FIELDS := {
+	"id": _SNAPSHOT_INT,
+	"name": _SNAPSHOT_STRING,
+	"alive": _SNAPSHOT_BOOL,
+	"sleeping": _SNAPSHOT_BOOL,
+	"bed_id": _SNAPSHOT_INT,
+	"recreating": _SNAPSHOT_BOOL,
+	"recreation_id": _SNAPSHOT_INT,
+	"recreation_sessions": _SNAPSHOT_INT,
+	"stress_break_left": _SNAPSHOT_NUMBER,
+	"drafted": _SNAPSHOT_BOOL,
+}
+
 @onready var map_grid: MapGrid = $MapGrid
 @onready var building_root: Node2D = $Buildings
 @onready var resident_root: Node2D = $Colonists
@@ -683,6 +711,8 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 
 
 func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
+	if not _is_snapshot_schema_valid(snapshot):
+		return false
 	var map_data: Variant = snapshot.get("map")
 	var resident_data: Variant = snapshot.get("residents")
 	var building_data: Variant = snapshot.get("buildings")
@@ -772,6 +802,96 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 		if saved_oxygen < OxygenSystem.CRITICAL_OXYGEN_THRESHOLD:
 			return false
 	return true
+
+
+# Loading is all-or-nothing: apply_snapshot frees and rebuilds the live wing, so
+# every value it or a deserializer reads must have its JSON type checked here.
+# Missing optional keys keep loader defaults; entries the loaders skip stay skipped,
+# but tuple-list prefixes still need checking for the existing semantic lookups.
+func _is_snapshot_schema_valid(snapshot: Dictionary) -> bool:
+	var map_data: Variant = snapshot.get("map")
+	var building_data: Variant = snapshot.get("buildings")
+	var resident_data: Variant = snapshot.get("residents")
+	if not map_data is Dictionary or not building_data is Array or not resident_data is Array:
+		return false
+	for key: String in ["food", "oxygen", "day", "breach", "jobs"]:
+		if snapshot.has(key) and not snapshot[key] is Dictionary:
+			return false
+	if not _snapshot_fields_valid(snapshot, {"next_building_id": _SNAPSHOT_INT, "ended": _SNAPSHOT_BOOL, "outcome": _SNAPSHOT_STRING}):
+		return false
+	if snapshot.has("camera"):
+		if not snapshot.camera is Array:
+			return false
+		if snapshot.camera.size() >= 3 and not _snapshot_entries_valid([snapshot.camera], [_SNAPSHOT_NUMBER, _SNAPSHOT_NUMBER, _SNAPSHOT_NUMBER]):
+			return false
+	if not _snapshot_fields_valid(snapshot.get("food", {}), {"meals": _SNAPSHOT_INT, "raw_food": _SNAPSHOT_INT, "salvage": _SNAPSHOT_INT}):
+		return false
+	if not _snapshot_fields_valid(snapshot.get("day", {}), {"elapsed_seconds": _SNAPSHOT_NUMBER, "current_day": _SNAPSHOT_INT, "completed": _SNAPSHOT_BOOL}):
+		return false
+	var saved_cells: Variant = map_data.get("cells")
+	if not saved_cells is Array:
+		return false
+	for value: Variant in saved_cells:
+		if not _is_integer_in_range(value, 0, MapGrid.Tile.size() - 1):
+			return false
+	if not _snapshot_entries_valid(map_data.get("dig_marks", []), [_SNAPSHOT_INT, _SNAPSHOT_INT, _SNAPSHOT_NUMBER]):
+		return false
+	var jobs_data: Dictionary = snapshot.get("jobs", {})
+	for key: String in ["rubble", "raw_food", "meals", "supplies", "breach_supply", "breach_patch"]:
+		if jobs_data.has(key) and not jobs_data[key] is Array:
+			return false
+	if not _snapshot_entries_valid(jobs_data.get("rubble", []), [_SNAPSHOT_INT, _SNAPSHOT_INT, _SNAPSHOT_INT]):
+		return false
+	if not _snapshot_entries_valid(jobs_data.get("supplies", []), [_SNAPSHOT_INT, _SNAPSHOT_INT, _SNAPSHOT_INT, _SNAPSHOT_INT, _SNAPSHOT_INT]):
+		return false
+	for entry: Variant in building_data:
+		if not entry is Dictionary or not _snapshot_entries_valid([entry.get("cell")], [_SNAPSHOT_INT, _SNAPSHOT_INT], true):
+			return false
+		if not _snapshot_fields_valid(entry, _SNAPSHOT_BUILDING_FIELDS):
+			return false
+	for entry: Variant in resident_data:
+		if not entry is Dictionary or not _snapshot_entries_valid([entry.get("position")], [_SNAPSHOT_NUMBER, _SNAPSHOT_NUMBER], true):
+			return false
+		if not _snapshot_fields_valid(entry, _SNAPSHOT_RESIDENT_FIELDS):
+			return false
+	return true
+
+
+func _snapshot_fields_valid(data: Dictionary, fields: Dictionary) -> bool:
+	for key: String in fields:
+		if data.has(key) and not _snapshot_value_valid(data[key], int(fields[key])):
+			return false
+	return true
+
+
+# Each Array entry's leading values must match kinds as far as the entry reaches:
+# loaders skip short entries, but semantic lookups still read their prefixes.
+# Non-Array entries stay skipped. With required, every entry must be a full Array.
+func _snapshot_entries_valid(entries: Variant, kinds: Array, required := false) -> bool:
+	if not entries is Array:
+		return false
+	for entry: Variant in entries:
+		if not entry is Array or (required and entry.size() < kinds.size()):
+			if required:
+				return false
+			continue
+		for index in mini(entry.size(), kinds.size()):
+			if not _snapshot_value_valid(entry[index], int(kinds[index])):
+				return false
+	return true
+
+
+func _snapshot_value_valid(value: Variant, kind: int) -> bool:
+	match kind:
+		_SNAPSHOT_INT:
+			return _is_integer_in_range(value, -2_147_483_648, 2_147_483_647)
+		_SNAPSHOT_NUMBER:
+			return typeof(value) in [TYPE_INT, TYPE_FLOAT] and is_finite(float(value))
+		_SNAPSHOT_BOOL:
+			return typeof(value) == TYPE_BOOL
+		_SNAPSHOT_STRING:
+			return typeof(value) == TYPE_STRING
+	return false
 
 
 func _is_serialized_manual_control_semantically_valid(
