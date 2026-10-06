@@ -61,6 +61,7 @@ run_godot_check fresh-wing-nutrient-finish --script res://tests/test_fresh_wing_
 run_godot_check fresh-wing-air-finish --script res://tests/test_fresh_wing_air_finish.gd
 run_godot_check lighting-darkness --script res://tests/test_lighting_darkness.gd
 run_godot_check manual-draft-forced-orders --script res://tests/test_manual_draft_forced_orders.gd
+run_godot_check terrain-aware-picking --script res://tests/test_terrain_aware_picking.gd
 run_godot_check boot --quit-after 5
 
 # Fresh-clone cold boot: class cache must resolve global GDScript classes without an editor visit.
