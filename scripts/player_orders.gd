@@ -979,7 +979,62 @@ func _fund_blueprint_step(kind: int) -> Dictionary:
 	}
 
 
+func _breach_blocker_step() -> Dictionary:
+	# During WARNING/OPEN, name what stops the automatic patch before any other tip.
+	# A covered response keeps the ordinary tips; sealing ends this branch.
+	var breach := game.breach_system
+	if not breach.is_response_active():
+		return {}
+	var undrafted := false
+	for resident: VaultResident in game.residents:
+		if resident.alive and not resident.drafted:
+			undrafted = true
+			break
+	if not undrafted:
+		return {
+			"text": "Next: YOU undraft crew [R] · THEY respond to hatch",
+			"help": "Drafted crew never answer the hatch. Select a drafted resident and press R to undraft.",
+			"tool": "select",
+		}
+	var missing: Array[String] = []
+	if breach.needs_supply() and not _has_eligible_worker("haul"):
+		missing.append("Haul")
+	if not _has_eligible_worker("craft"):
+		missing.append("Craft")
+	if not missing.is_empty():
+		var names := " + ".join(missing)
+		return {
+			"text": "Next: YOU enable %s [P] · THEY patch hatch" % names,
+			"help": "Open PRIORITIES [P] and set %s above OFF for an undrafted resident so crew auto-respond to the hatch." % names,
+			"tool": "select",
+		}
+	var shortfall := maxi(
+		0,
+		BreachSystem.PATCH_COST
+			- breach.patch_delivered
+			- game.job_system.get_breach_supply_in_transit()
+			- game.food_system.salvage,
+	)
+	if shortfall > 0:
+		if shortfall > game.job_system.get_uncredited_rubble() and not _has_eligible_worker("dig"):
+			return {
+				"text": "Next: YOU enable Dig [P] · THEY fund the hatch patch",
+				"help": "The hatch patch is %d salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage." % shortfall,
+				"tool": "select",
+			}
+		var tiles := _salvage_dig_tiles(shortfall)
+		return {
+			"text": "Next: YOU mark %d rock [E] · THEY fund the hatch patch" % tiles if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the hatch patch",
+			"help": "The hatch patch is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [shortfall, DIG_SALVAGE_YIELD],
+			"tool": "dig" if tiles > 0 else "select",
+		}
+	return {}
+
+
 func _primary_next_step() -> Dictionary:
+	var breach_blocker := _breach_blocker_step()
+	if not breach_blocker.is_empty():
+		return breach_blocker
 	var critical_resident := false
 	var mood_break_risk := false
 	var rec_wanted := false
