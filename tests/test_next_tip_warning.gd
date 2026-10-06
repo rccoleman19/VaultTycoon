@@ -20,6 +20,19 @@ const UNDRAFT_LOCKED := ["Next: YOU acknowledge warning · then undraft crew [R]
 const ENABLE_BOTH_LOCKED := ["Next: YOU acknowledge warning · then enable Haul + Craft [P]", LOCK_HELP + "Open PRIORITIES [P] and set Haul + Craft above OFF for an undrafted resident so crew auto-respond to the hatch.", "select"]
 const ENABLE_DIG_LOCKED := ["Next: YOU acknowledge warning · then enable Dig [P]", LOCK_HELP + "The hatch patch is 2 salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage.", "select"]
 const LOSS_LINE := "WING LOST // no residents remain"
+const NO_PATH_TEXT := "Next: YOU mark a tunnel to the hatch [E] · THEY dig it out"
+const NO_PATH_HAUL := [NO_PATH_TEXT, "No undrafted Haul crew can walk to the hatch. Mark rock with DIG [E] to connect them to the hatch; crew with Dig above OFF dig it out.", "dig"]
+const NO_PATH_CRAFT := [NO_PATH_TEXT, "No undrafted Craft crew can walk to the hatch. Mark rock with DIG [E] to connect them to the hatch; crew with Dig above OFF dig it out.", "dig"]
+const NO_PATH_STATUS := "BLOCKED · NO PATH TO HATCH"
+const SHORT_3_HELP := "The hatch patch is 3 salvage short. Each dug rock tile yields 3 salvage once hauled."
+const PATCH_SHORT_3 := ["Next: YOU mark 1 rock [E] · THEY fund the hatch patch", SHORT_3_HELP, "dig"]
+const PATCH_SHORT_3_COVERED := ["Next: YOU leave Dig + Haul on · THEY fund the hatch patch", SHORT_3_HELP, "select"]
+const ENABLE_DIG_3 := ["Next: YOU enable Dig [P] · THEY fund the hatch patch", "The hatch patch is 3 salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage.", "select"]
+# A rock-sealed floor pocket west of the chamber; one rock tile (TUNNEL) joins it to chamber floor (17, 14).
+const POCKET: Array[Vector2i] = [Vector2i(14, 14), Vector2i(15, 14), Vector2i(14, 15), Vector2i(15, 15)]
+const TUNNEL := Vector2i(16, 14)
+const POCKET_SAVE_PATH := "user://next_tip_no_path.json"
+const TUNNEL_WALK_TICKS := 600
 const CARRIER_WALK_TICKS := 200
 
 
@@ -39,6 +52,9 @@ func _run() -> void:
 	_run_case("unacknowledged WARNING asks to acknowledge before R or P", _test_unacknowledged_warning)
 	_run_case("a real carrier switched OFF is released and Next asks for Haul", _test_carrier_switched_off)
 	_run_case("a real wipe shows the loss line instead of a Next tip", _test_loss_screen)
+	_run_case("crew cut off from the hatch (loaded save) ask for a tunnel until one is dug", _test_no_path_haul)
+	_run_case("a supplied patch with Craft crew cut off asks for a tunnel", _test_no_path_craft)
+	_run_case("only rubble a Haul resident can reach funds the hatch patch", _test_unreachable_rubble)
 	print("NEXT TIP WARNING TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
 
@@ -416,4 +432,161 @@ func _test_loss_screen() -> void:
 	_assert_equal(game.player_orders.objective_label.text, LOSS_LINE, "loss screen shows the outcome, not a Next tip")
 	_assert_equal(game.player_orders.objective_label.get_theme_color("font_color"), Color("ef6860"), "loss line uses the red outcome colour")
 	_assert_equal(game.player_orders._breach_blocker_step(), {}, "no living crew: no hatch blocker")
+	_dispose(game)
+
+
+# Real path to a disconnected map: carve a sealed pocket into a saved snapshot, move the
+# chosen residents into it, write it with SaveLoad and load it with game.load_game.
+func _load_pocket(pocket_residents: Array, rubble: Array, salvage: int) -> VaultGame:
+	var game := _healthy()
+	var snapshot: Dictionary = game.create_snapshot()
+	for cell: Vector2i in POCKET:
+		snapshot.map.cells[cell.y * MapGrid.WIDTH + cell.x] = MapGrid.Tile.FLOOR
+	for slot in pocket_residents.size():
+		var spot: Vector2 = game.map_grid.cell_to_world(POCKET[slot % POCKET.size()])
+		snapshot.residents[int(pocket_residents[slot])].position = [spot.x, spot.y]
+	snapshot.jobs["rubble"] = rubble
+	snapshot.food["salvage"] = salvage
+	_assert_true(bool(game.save_load.save_snapshot(snapshot, POCKET_SAVE_PATH).ok), "pocket snapshot saved")
+	_assert_true(game.load_game(POCKET_SAVE_PATH), "pocket snapshot loads through load_game")
+	_remove_test_save(POCKET_SAVE_PATH)
+	game.user_paused = false
+	_assert_true(game.map_grid.find_path(POCKET[0], BreachSystem.HATCH_CELL).is_empty(), "pocket is cut off from the hatch")
+	for slot in pocket_residents.size():
+		_assert_equal(game.residents[int(pocket_residents[slot])].get_cell(game.map_grid), POCKET[slot % POCKET.size()], "resident loaded inside the pocket")
+	return game
+
+
+func _status(game: VaultGame) -> String:
+	return game.job_system.get_breach_response_status()
+
+
+func _test_no_path_haul() -> void:
+	var game := _load_pocket([0, 1, 2, 3], [], 48)
+	_assert_tuple(game, DIG, "DORMANT: a cut-off crew keeps the ordinary tip")
+	game.day_cycle.elapsed_seconds = BreachSystem.WARNING_AT_SECONDS - TICK
+	game.step_simulation(TICK)
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.WARNING, "real hatch WARNING")
+	_assert_false(game.breach_system.warning_acknowledged, "warning starts unacknowledged")
+	_assert_equal(_status(game), NO_PATH_STATUS, "DETAILS: no path to hatch")
+	_assert_tuple(game, NO_PATH_HAUL, "unacknowledged: DIG is not locked, so the tunnel tip is plain")
+	game.acknowledge_breach_warning(false)
+	_assert_tuple(game, NO_PATH_HAUL, "acknowledged WARNING: mark a tunnel")
+	game.status_message_left = 0.0
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, NO_PATH_TEXT, "HUD objective names the tunnel")
+	_assert_true(game.player_orders.tool_status.text.contains(NO_PATH_HAUL[1]), "HUD help line carries the tunnel help")
+	_set_all(game, "haul", VaultResident.PRIORITY_DISABLED)
+	_assert_tuple(game, ENABLE_HAUL, "Haul OFF outranks no path, as in DETAILS")
+	_assert_equal(_status(game), "BLOCKED · ENABLE HAUL", "DETAILS also names Haul first")
+	_set_all(game, "haul", VaultResident.DEFAULT_WORK_PRIORITY)
+	game.food_system.salvage = 0
+	_assert_equal(_status(game), NO_PATH_STATUS, "DETAILS: no path outranks the salvage shortfall")
+	_assert_tuple(game, NO_PATH_HAUL, "no path outranks the salvage shortfall")
+	game.food_system.salvage = 48
+	# Follow the tip through real input: DIG tool, one click on the joining rock.
+	game.set_tool("dig")
+	_assert_true(game.issue_order(TUNNEL), "the joining rock accepts a dig order from the pocket side")
+	game.set_tool("select")
+	var blocked_mismatch: Array[String] = []
+	var opened_at := -1.0
+	for _tick in TUNNEL_WALK_TICKS:
+		game.step_simulation(TICK)
+		var cut_off := _status(game) == NO_PATH_STATUS
+		var shown: String = _tuple(game)[0]
+		if cut_off != (shown == NO_PATH_TEXT) and blocked_mismatch.size() < 3:
+			blocked_mismatch.append("%.1fs %s / %s" % [game.day_cycle.elapsed_seconds, _status(game), shown])
+		if not cut_off and opened_at < 0.0:
+			opened_at = game.day_cycle.elapsed_seconds
+		if game.breach_system.is_sealed():
+			break
+	_assert_equal(blocked_mismatch, [] as Array[String], "Next shows the tunnel tip exactly while DETAILS shows no path")
+	_assert_true(opened_at > 0.0, "the dug tunnel reconnects the crew")
+	_assert_equal(game.map_grid.get_tile(TUNNEL), MapGrid.Tile.FLOOR, "the tunnel rock was dug out")
+	_assert_true(game.breach_system.is_sealed(), "following the tip lets the crew seal the hatch")
+	# An outcome line on the objective still leaves the Next help on the help line.
+	game.day_cycle.completed = true
+	game.status_message_left = 0.0
+	game.player_orders.refresh()
+	_assert_true(game.player_orders.objective_label.text.begins_with("VICTORY PENDING // "), "day complete shows the victory-pending line")
+	var after_help: String = game.player_orders._primary_next_step().help
+	_assert_true(not after_help.is_empty() and game.player_orders.tool_status.text.contains(after_help), "victory pending keeps the Next help on the help line")
+	_dispose(game)
+
+
+func _test_no_path_craft() -> void:
+	var game := _load_pocket([0, 1, 2, 3], [], 48)
+	_warn(game)
+	_assert_equal(game.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "patch fully supplied")
+	_assert_equal(_status(game), NO_PATH_STATUS, "DETAILS: supplied, but no Craft path")
+	_assert_tuple(game, NO_PATH_CRAFT, "supplied patch with every crafter cut off asks for a tunnel")
+	_open(game)
+	_assert_tuple(game, NO_PATH_CRAFT, "OPEN keeps the tunnel tip")
+	_dispose(game)
+	# Split crew: Haul only in the chamber, Craft only in the pocket. The stage decides.
+	game = _load_pocket([0, 1], [], 48)
+	for index in [0, 1]:
+		game.residents[index].set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+	for index in [2, 3]:
+		game.residents[index].set_work_priority("craft", VaultResident.PRIORITY_DISABLED)
+	_warn(game)
+	_assert_true(_status(game) != NO_PATH_STATUS, "DETAILS: supply stage follows the chamber haulers")
+	_assert_equal(game.player_orders._breach_blocker_step(), {}, "supply stage: chamber haulers reach the hatch, no blocker")
+	_assert_equal(game.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "patch fully supplied")
+	_assert_equal(_status(game), NO_PATH_STATUS, "DETAILS: patch stage, crafters cut off")
+	_assert_tuple(game, NO_PATH_CRAFT, "patch stage: only cut-off crafters, so mark a tunnel")
+	game.residents[2].set_work_priority("craft", VaultResident.DEFAULT_WORK_PRIORITY)
+	_assert_equal(game.player_orders._breach_blocker_step(), {}, "one chamber crafter clears the tunnel tip")
+	_dispose(game)
+
+
+func _test_unreachable_rubble() -> void:
+	# Crew in the chamber, salvage 1, and the only rubble (3) sits in the sealed pocket.
+	var game := _load_pocket([], [[POCKET[0].x, POCKET[0].y, 3]], 1)
+	_warn(game)
+	_assert_equal(game.job_system.get_uncredited_rubble(), 3, "the pocket rubble is queued")
+	for resident: VaultResident in game.residents:
+		_assert_true(game.map_grid.find_path(resident.get_cell(game.map_grid), POCKET[0]).is_empty(), "no resident can walk to the pocket rubble")
+	_assert_equal(_status(game), "BLOCKED · NEEDS 3 SALVAGE", "DETAILS: 3 salvage short")
+	_assert_tuple(game, PATCH_SHORT_3, "unreachable rubble does not cover the shortfall: mark 1 rock")
+	_set_all(game, "dig", VaultResident.PRIORITY_DISABLED)
+	_assert_tuple(game, ENABLE_DIG_3, "unreachable rubble does not stand in for Dig")
+	_set_all(game, "dig", VaultResident.DEFAULT_WORK_PRIORITY)
+	# Scheduler parity: nobody claims it, and the shortfall stays.
+	game.step_simulation(10.0)
+	var pocket_job: Dictionary = {}
+	for job: Dictionary in game.job_system.jobs:
+		if int(job.type) == JobSystem.JobType.HAUL_RUBBLE and not bool(job.done):
+			pocket_job = job
+	_assert_equal([int(pocket_job.get("amount", 0)), int(pocket_job.get("reserved_by", 0))], [3, -1], "10 s later the pocket rubble is still unclaimed")
+	_assert_tuple(game, PATCH_SHORT_3, "the shortfall is unchanged")
+	# A reachable pile does cover it; a carried pile keeps covering it until delivery.
+	game.job_system.queue_rubble(Vector2i(18, 11), 3)
+	_assert_equal(game.job_system.get_uncredited_rubble(), 6, "chamber rubble joins the pocket rubble in the raw count")
+	_assert_tuple(game, PATCH_SHORT_3_COVERED, "reachable rubble covers the shortfall")
+	var carried := false
+	for _tick in CARRIER_WALK_TICKS:
+		game.step_simulation(TICK)
+		for resident: VaultResident in game.residents:
+			if resident.current_job_type == JobSystem.JobType.HAUL_RUBBLE and resident.carrying > 0:
+				carried = true
+		if carried:
+			break
+	_assert_true(carried, "a Haul resident picks up the chamber rubble")
+	_assert_tuple(game, PATCH_SHORT_3_COVERED, "rubble in hand still covers the shortfall")
+	_dispose(game)
+	# A pocket resident reaches the pocket rubble only while it may Haul and is undrafted.
+	game = _load_pocket([0], [[POCKET[1].x, POCKET[1].y, 3]], 1)
+	game.residents[0].set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+	_warn(game)
+	_assert_true(_status(game) != NO_PATH_STATUS, "chamber haulers still reach the hatch")
+	_assert_tuple(game, PATCH_SHORT_3, "a pocket resident with Haul OFF does not make the rubble reachable")
+	game.residents[0].set_work_priority("haul", VaultResident.DEFAULT_WORK_PRIORITY)
+	_assert_tuple(game, PATCH_SHORT_3_COVERED, "with Haul on, the pocket resident can claim it (scheduler test)")
+	game.residents[0].drafted = true
+	_assert_tuple(game, PATCH_SHORT_3, "a drafted pocket resident does not make the rubble reachable")
+	game.residents[0].drafted = false
+	_assert_tuple(game, PATCH_SHORT_3_COVERED, "undrafted again, the pocket resident covers it")
+	game.residents[0].kill()
+	_assert_tuple(game, PATCH_SHORT_3, "a dead pocket resident does not make the rubble reachable")
 	_dispose(game)

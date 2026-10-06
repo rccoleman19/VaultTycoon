@@ -481,7 +481,15 @@ func get_breach_salvage_reserve() -> int:
 	return _breach_salvage_reserve()
 
 
-func get_uncredited_rubble() -> int:
+# The NO PATH TO HATCH test from get_breach_response_status for the current
+# patch stage: Haul crew while supplying, Craft crew once supplied.
+func has_hatch_worker_path() -> bool:
+	return _has_worker_path(JobType.SUPPLY_BREACH if breach.needs_supply() else JobType.PATCH_BREACH)
+
+
+# reachable_only keeps rubble a Haul resident can reach; enough >= 0 stops
+# counting once that much is found (callers only compare against it).
+func get_uncredited_rubble(reachable_only := false, enough := -1) -> int:
 	var amount := 0
 	var carriers: Dictionary = {}
 	for resident: VaultResident in game.residents:
@@ -489,10 +497,22 @@ func get_uncredited_rubble() -> int:
 			amount += resident.carrying
 			carriers[resident.current_job_id] = true
 	for job: Dictionary in jobs:
+		if enough >= 0 and amount >= enough:
+			break
 		# Rubble amount stays populated during carry; count its carrier only once.
 		if int(job.type) == JobType.HAUL_RUBBLE and not bool(job.done) and not carriers.has(int(job.id)):
+			if reachable_only and not _has_rubble_hauler(job):
+				continue
 			amount += int(job.amount)
 	return amount
+
+
+# Same test the scheduler uses before a Haul resident claims a rubble job.
+func _has_rubble_hauler(job: Dictionary) -> bool:
+	for resident: VaultResident in game.residents:
+		if resident.alive and _resident_allows(resident, JobType.HAUL_RUBBLE) and _job_available(resident, job):
+			return true
+	return false
 
 
 func get_build_supply_in_transit(building_id: int) -> int:
