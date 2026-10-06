@@ -16,6 +16,9 @@ const COLONIST_RADIUS := 2.4
 const COLONIST_HEIGHT := 13.0
 const BUNK_MATTRESS_TOP := 3.90
 const MEDICAL_MATTRESS_TOP := 4.40
+# Pending food at an occupied source waits on the floor this far toward the
+# camera (+Z): past every fixture's front face, still inside the source hex.
+const FOOD_SOURCE_FRONT_OFFSET := 9.0
 
 var map_grid: MapGrid
 var lighting_system: LightingSystem
@@ -433,16 +436,23 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 			continue
 		live_food[job.id] = true
 		var prop: MeshInstance3D = _food_props.get(job.id)
+		var food_color := Color("c46a3a") if int(job.type) == JobSystem.JobType.HAUL_MEAL else Color("74b76c")
 		if prop == null or not is_instance_valid(prop):
 			prop = MeshInstance3D.new()
 			var box := BoxMesh.new()
 			box.size = Vector3(2.4, 1.4, 2.4)
 			prop.mesh = box
-			prop.material_override = _make_mat(Color("c46a3a") if int(job.type) == JobSystem.JobType.HAUL_MEAL else Color("74b76c"))
+			prop.material_override = _make_mat(food_color)
 			prop_root.add_child(prop)
 			_food_props[job.id] = prop
+		# Job ids restart on load, so a cached box can now belong to the other food type.
+		(prop.material_override as StandardMaterial3D).albedo_color = food_color
 		var center := MapGrid.offset_cell_to_world(job.target)
 		prop.position = Vector3(center.x, 0.7, center.y)
+		for building: VaultBuilding in buildings:
+			if is_instance_valid(building) and building.cell == job.target:
+				prop.position = Vector3(center.x, FLOOR_HEIGHT + 0.7, center.y + FOOD_SOURCE_FRONT_OFFSET)
+				break
 		for resident: VaultResident in residents:
 			if (
 				is_instance_valid(resident) and resident.alive
