@@ -18,6 +18,11 @@ func _run() -> void:
 	_run_case("a disconnected forced responder reports no path", _test_disconnected_forced_responder)
 	_run_case("a loaded forced hatch order keeps its live status", _test_forced_supply_after_load)
 	_run_case("automatic response statuses are unchanged", _test_automatic_statuses_unchanged)
+	_run_case("a forced marker on someone else's, a done, or a missing job does not count", _test_stale_reservation_variants)
+	_run_case("drafted or dead flags alone exclude the forced responder", _test_direct_flag_guards)
+	_run_case("the patch stage ignores a still-reserved forced supply hauler", _test_stage_switch_with_live_supply_reservation)
+	_run_case("a forced supply saved mid-carry stays en route every tick after load", _test_load_mid_carry_ticks)
+	_run_case("a loaded forced patch keeps responding every tick until sealed", _test_load_forced_patch_ticks)
 	print("FORCED HATCH STATUS TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -227,6 +232,135 @@ func _test_automatic_statuses_unchanged() -> void:
 	game.job_system.advance(0.0)
 	_assert_equal(_status(game), PATCH_RESPONDING, "automatic crafter reports responding")
 	_dispose(game)
+
+
+func _test_stale_reservation_variants() -> void:
+	for variant: String in ["other resident", "done", "missing"]:
+		var game := _warned_game()
+		var ari: VaultResident = game.residents[0]
+		var bo: VaultResident = game.residents[1]
+		_force_hatch(game, ari, JobSystem.JobType.SUPPLY_BREACH, variant)
+		_assert_equal(_status(game), HAUL_EN_ROUTE, "%s: fixture starts en route" % variant)
+		var job := game.job_system._find_job(ari.current_job_id)
+		_assert_false(job.is_empty(), "%s: fixture finds the forced job" % variant)
+		match variant:
+			"other resident":
+				job.reserved_by = bo.resident_id
+			"done":
+				job.done = true
+			"missing":
+				ari.current_job_id = 999999
+		_assert_true(ari.is_forced_job, "%s: Ari keeps the forced marker" % variant)
+		_assert_equal(_status(game), HAUL_BLOCKED, "%s: the stale forced marker does not count" % variant)
+		_dispose(game)
+
+
+func _test_direct_flag_guards() -> void:
+	# Every in-game path that drafts or kills also clears the force; these pin the helper's own guards.
+	var game := _warned_game()
+	var ari: VaultResident = game.residents[0]
+	_force_hatch(game, ari, JobSystem.JobType.SUPPLY_BREACH, "guard")
+	ari.drafted = true
+	_assert_true(ari.is_forced_job, "drafted flag fixture keeps the forced marker")
+	_assert_equal(_status(game), HAUL_BLOCKED, "the drafted flag alone excludes the forced hauler")
+	ari.drafted = false
+	_assert_equal(_status(game), HAUL_EN_ROUTE, "clearing the flag restores en route")
+	ari.alive = false
+	_assert_true(ari.is_forced_job, "dead flag fixture keeps the forced marker")
+	_assert_equal(_status(game), HAUL_BLOCKED, "the dead flag alone excludes the forced hauler")
+	ari.alive = true
+	_assert_equal(_status(game), HAUL_EN_ROUTE, "clearing the flag restores en route again")
+	_dispose(game)
+
+
+func _test_stage_switch_with_live_supply_reservation() -> void:
+	var game := _warned_game()
+	var ari: VaultResident = game.residents[0]
+	var bo: VaultResident = game.residents[1]
+	_force_hatch(game, ari, JobSystem.JobType.SUPPLY_BREACH, "switch")
+	var job := game.job_system._find_job(ari.current_job_id)
+	# No advance: the forced supply reservation is still live when the stage flips.
+	_assert_equal(game.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "fixture supplies the hatch")
+	_assert_equal(int(job.get("reserved_by", -1)), ari.resident_id, "the forced supply reservation is still live")
+	_assert_true(ari.is_forced_job and ari.current_job_type == JobSystem.JobType.SUPPLY_BREACH, "Ari is still the forced hauler")
+	_assert_equal(_status(game), CRAFT_BLOCKED, "the patch stage ignores the forced hauler and reports the Craft blocker")
+	bo.set_work_priority("craft", 3)
+	_assert_equal(_status(game), "AWAITING PATCH CREW", "an eligible crafter turns it into awaiting the patch crew")
+	_dispose(game)
+
+
+func _test_load_mid_carry_ticks() -> void:
+	var source := _warned_game()
+	var ari: VaultResident = source.residents[0]
+	# Snapshot validation ties the WARNING phase to elapsed time in [60, 80).
+	source.day_cycle.elapsed_seconds = BreachSystem.WARNING_AT_SECONDS + 1.0
+	_force_hatch(source, ari, JobSystem.JobType.SUPPLY_BREACH, "carry save")
+	for _tick: int in 100:
+		source.step_simulation(VaultGame.SIMULATION_TICK)
+		if ari.carrying > 0:
+			break
+	_assert_true(ari.carrying > 0, "save source: the forced hauler is carrying salvage")
+	_assert_true(source.breach_system.needs_supply(), "save source: the hatch still needs supply")
+	_assert_equal(_status(source), HAUL_EN_ROUTE, "save source reports en route mid-carry")
+	var snapshot := source.create_snapshot()
+	_dispose(source)
+	var loaded := _spawn_game()
+	_assert_true(loaded.apply_snapshot(snapshot), "mid-carry snapshot loads")
+	var loaded_ari: VaultResident = loaded.residents[0]
+	_assert_true(loaded_ari.is_forced_job, "load restores the forced order")
+	_assert_equal(loaded_ari.current_job_type, JobSystem.JobType.SUPPLY_BREACH, "load restores hatch supply")
+	_assert_equal(_status(loaded), HAUL_EN_ROUTE, "loaded mid-carry supply reports en route")
+	var wrong := 0
+	var checked := 0
+	for _tick: int in 200:
+		loaded.step_simulation(VaultGame.SIMULATION_TICK)
+		if not loaded.breach_system.needs_supply():
+			break
+		checked += 1
+		if _status(loaded) != HAUL_EN_ROUTE:
+			wrong += 1
+	_assert_true(checked > 0, "status was checked on ticks before delivery (got %d)" % checked)
+	_assert_equal(wrong, 0, "every tick after load reports en route until delivery")
+	_assert_equal(loaded.breach_system.patch_delivered, BreachSystem.PATCH_COST, "the loaded forced hauler delivers the full patch")
+	_dispose(loaded)
+
+
+func _test_load_forced_patch_ticks() -> void:
+	var source := _warned_game()
+	var ari: VaultResident = source.residents[0]
+	source.day_cycle.elapsed_seconds = BreachSystem.WARNING_AT_SECONDS + 1.0
+	# Natural forced delivery (not add_delivery) so the snapshot carries no stale supply job.
+	_force_hatch(source, ari, JobSystem.JobType.SUPPLY_BREACH, "natural supply")
+	for _tick: int in 200:
+		source.step_simulation(VaultGame.SIMULATION_TICK)
+		if not source.breach_system.needs_supply():
+			break
+	_assert_true(source.breach_system.is_supplied(), "save source: forced supply delivered the patch")
+	_assert_true(source.breach_system.is_response_active(), "save source: hatch response still active")
+	source.day_cycle.elapsed_seconds = minf(source.day_cycle.elapsed_seconds, BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS - 1.0)
+	_force_hatch(source, ari, JobSystem.JobType.PATCH_BREACH, "patch save")
+	_assert_equal(_status(source), PATCH_RESPONDING, "save source reports the crew responding")
+	var snapshot := source.create_snapshot()
+	_dispose(source)
+	var loaded := _spawn_game()
+	_assert_true(loaded.apply_snapshot(snapshot), "forced patch snapshot loads")
+	var loaded_ari: VaultResident = loaded.residents[0]
+	_assert_true(loaded_ari.is_forced_job, "load restores the forced patch order")
+	_assert_equal(loaded_ari.current_job_type, JobSystem.JobType.PATCH_BREACH, "load restores hatch patch")
+	_assert_equal(_status(loaded), PATCH_RESPONDING, "loaded forced patch reports the crew responding")
+	var wrong := 0
+	var checked := 0
+	for _tick: int in 300:
+		loaded.step_simulation(VaultGame.SIMULATION_TICK)
+		if loaded.breach_system.is_sealed():
+			break
+		checked += 1
+		if _status(loaded) != PATCH_RESPONDING:
+			wrong += 1
+	_assert_true(checked > 0, "status was checked on ticks before sealing (got %d)" % checked)
+	_assert_true(loaded.breach_system.is_sealed(), "the loaded forced patch seals the hatch with Craft OFF")
+	_assert_equal(wrong, 0, "every tick after load reports the crew responding until sealed")
+	_dispose(loaded)
 
 
 func _warned_game() -> VaultGame:
