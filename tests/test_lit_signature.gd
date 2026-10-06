@@ -5,6 +5,7 @@ extends "res://tests/test_runner.gd"
 const LUMEN_A := Vector2i(22, 14)  # starting Lumen
 const LUMEN_B := Vector2i(17, 12)
 const LUMEN_C := Vector2i(23, 19)
+const REC_CELL := Vector2i(20, 17)  # plain floor, not a Lumen
 
 
 func _run() -> void:
@@ -14,6 +15,7 @@ func _run() -> void:
 	_run_case("coverage revision is monotonic across refresh, force and new game", _test_revision_monotonic)
 	_run_case("count-changing reallocation still repaints (control)", _test_count_change_control)
 	_run_case("loading a swapped save repaints on a normal frame (control)", _test_load_control)
+	_run_case("toggling a powered non-lamp consumer keeps revision, signature and terrain", _test_non_lamp_toggle)
 	print("")
 	print("LIT SIGNATURE TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
@@ -158,6 +160,42 @@ func _test_load_control() -> void:
 	game._process(0.0)
 	_assert_equal(_lit(game), swapped, "loaded coverage is B+C")
 	_assert_equal(_stale(game), [] as Array[Vector2i], "loaded terrain matches lighting")
+	_dispose(game)
+
+
+func _test_non_lamp_toggle() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.user_paused = true
+	game.set_tool("select")
+	var view: MapView3D = game.map_view_3d
+	var a := game.get_building_at(LUMEN_A)
+	var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, REC_CELL)
+	game.power_grid.recalculate(game.buildings)
+	game._sync_3d_play_view()
+	_assert_true(a != null and a.powered, "fixture: starting Lumen A is powered")
+	_assert_true(rec.powered, "fixture: Rec Console is powered (spare supply)")
+	_assert_false(game.power_grid.brownout_active, "fixture: no brownout")
+	_assert_equal(_stale(game).size(), 0, "fixture: terrain matches lighting")
+	var revision: Variant = _revision(game)
+	var lit := _lit(game)
+	var signature: String = view._map_signature()
+	var terrain := view.hex_root.get_children()
+	var queued := _queued(view)
+	var topology := game.map_grid.topology_revision
+	for step in 2:
+		var label := "disable" if step == 0 else "re-enable"
+		_assert_true(game.toggle_building_enabled(rec.building_id), "player can %s the Rec Console" % label)
+		_assert_equal(rec.powered, step == 1, "%s: Rec Console powered state flips" % label)
+		_assert_true(a.powered, "%s: Lumen A stays powered" % label)
+		_assert_equal(game.map_grid.topology_revision, topology, "%s: topology is unchanged" % label)
+		_assert_equal(_revision(game), revision, "%s: coverage revision is unchanged" % label)
+		_assert_equal(_lit(game), lit, "%s: lit set is unchanged" % label)
+		_assert_equal(view._map_signature(), signature, "%s: map signature is unchanged" % label)
+		game._process(0.0)
+		_assert_true(view.hex_root.get_children() == terrain, "%s: terrain children are reused (no rebuild)" % label)
+		_assert_equal(_queued(view), queued, "%s: no terrain child queued for deletion" % label)
+		_assert_equal(_stale(game), [] as Array[Vector2i], "%s: no stale floor prism" % label)
 	_dispose(game)
 
 
