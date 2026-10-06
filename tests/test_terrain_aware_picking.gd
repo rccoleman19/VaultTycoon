@@ -41,6 +41,9 @@ func _run() -> void:
 	for zoom: float in WHEEL_ZOOMS:
 		_run_case("upper capsule selects that resident while paused at zoom %s" % zoom, _test_upper_capsule.bind(zoom))
 	_run_case("re-click on a selected co-located resident cycles on the drawn hex", _test_cycle)
+	_run_case("capsule clicks cycle three co-located residents in hex order", _test_cycle_three)
+	_run_case("capsule clicks cycle two residents and the Emergency Core", _test_cycle_with_fixture)
+	_run_case("clicking another resident's capsule switches directly", _test_direct_switch)
 	_run_case("lying resident picked by its rotated capsule", _test_lying)
 	_run_case("dead resident occludes but is not selectable", _test_dead)
 	_run_case("terrain in front of a capsule wins", _test_terrain_occludes)
@@ -407,6 +410,79 @@ func _test_cycle() -> void:
 	game.free()
 
 
+# Records each selection as R<resident id> or B<building id>.
+func _selection_label(game: VaultGame) -> String:
+	if game.selected_resident_id != -1:
+		return "R%d" % game.selected_resident_id
+	if game.selected_building_id != -1:
+		return "B%d" % game.selected_building_id
+	return "none"
+
+
+func _click_sequence(game: VaultGame, screen: Vector2, clicks: int) -> Array[String]:
+	var sequence: Array[String] = []
+	for _i: int in clicks:
+		_click(game, screen)
+		sequence.append(_selection_label(game))
+	return sequence
+
+
+func _test_cycle_three() -> void:
+	var game := _spawn_game(1.0)
+	var hex := Vector2i(22, 17)
+	_assert_equal(game.map_grid.get_tile(hex), MapGrid.Tile.FLOOR, "(22,17) is a floor hex")
+	var center := game.map_grid.cell_to_world(hex)
+	for resident_id: int in [1, 2, 3]:
+		game.get_resident_by_id(resident_id).position = center
+	game._sync_3d_play_view(true)
+	var proxy: MeshInstance3D = game.map_view_3d._resident_proxies[1]
+	var screen := _screen(game, Vector3(proxy.global_position.x, 4.0, proxy.global_position.z))
+	_clear_selection(game)
+	_assert_equal(_click_sequence(game, screen, 4), ["R1", "R2", "R3", "R1"], "four capsule clicks walk the hex order and wrap")
+	game.free()
+
+
+func _test_cycle_with_fixture() -> void:
+	var game := _spawn_game(1.0)
+	var hex := Vector2i(24, 15)
+	var core := game.get_building_at(hex)
+	_assert_true(core != null and core.is_emergency_core, "the Emergency Core stands on (24,15)")
+	if core == null:
+		game.free()
+		return
+	var spot := game.map_grid.cell_to_world(hex) + Vector2(0.0, 7.0)
+	_assert_equal(game.map_grid.world_to_cell(spot), hex, "centre + (0,7) is still drawn in (24,15)")
+	for resident_id: int in [1, 2]:
+		game.get_resident_by_id(resident_id).position = spot
+	game._sync_3d_play_view(true)
+	var proxy: MeshInstance3D = game.map_view_3d._resident_proxies[1]
+	var screen := _screen(game, Vector3(proxy.global_position.x, 9.0, proxy.global_position.z))
+	_clear_selection(game)
+	var core_label := "B%d" % core.building_id
+	_assert_equal(_click_sequence(game, screen, 4), ["R1", "R2", core_label, "R1"], "capsule clicks reach the fixture, then wrap")
+	game.free()
+
+
+func _test_direct_switch() -> void:
+	var game := _spawn_game(1.0)
+	var view := game.map_view_3d
+	if not view.has_method("pick_resident_id"):
+		_fail("pick_resident_id", "MapView3D.pick_resident_id is missing")
+		_assertion_count += 1
+		game.free()
+		return
+	var ari: VaultResident = game.get_resident_by_id(1)
+	var bo_proxy: MeshInstance3D = view._resident_proxies[2]
+	var screen := _screen(game, Vector3(bo_proxy.global_position.x, 6.5, bo_proxy.global_position.z))
+	var only_ari: Array[VaultResident] = [ari]
+	_assert_equal(view.call("pick_resident_id", screen, only_ari), -1, "Ari's capsule is not under the cursor")
+	_assert_equal(view.call("pick_resident_id", screen, game.residents), 2, "Bo's capsule is under the cursor")
+	game.select_resident(1)
+	_click(game, screen)
+	_assert_equal(game.selected_resident_id, 2, "clicking Bo with Ari selected selects Bo")
+	game.free()
+
+
 func _test_lying() -> void:
 	var game := _spawn_game(1.0)
 	var ari: VaultResident = game.get_resident_by_id(1)
@@ -420,6 +496,19 @@ func _test_lying() -> void:
 		var point := proxy.global_position + proxy.global_transform.basis.y.normalized() * offset
 		_click(game, _screen(game, point))
 		_assert_equal(game.selected_resident_id, 1, "lying capsule offset %.1f selects Ari" % offset)
+	var view := game.map_view_3d
+	if not view.has_method("pick_resident_id"):
+		_fail("pick_resident_id", "MapView3D.pick_resident_id is missing")
+		_assertion_count += 1
+		game.free()
+		return
+	var axis := proxy.global_transform.basis.y.normalized()
+	for offset: float in [-5.5, 0.0, 5.5]:
+		var screen := _screen(game, proxy.global_position + axis * offset)
+		_assert_equal(view.call("pick_resident_id", screen, game.residents), 1, "rotated capsule offset %.1f picks Ari" % offset)
+	for rise: float in [6.0, 9.0]:
+		var air := _screen(game, proxy.global_position + Vector3(0.0, rise, 0.0))
+		_assert_equal(view.call("pick_resident_id", air, game.residents), -1, "air %.1f above the lying capsule (upright pill space) picks nobody" % rise)
 	game.free()
 
 

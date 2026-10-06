@@ -1109,7 +1109,12 @@ func issue_order_at_screen(screen_pos: Vector2) -> bool:
 	if active_tool == "select" and not (ended or tutorial_open or player_orders.is_help_open()):
 		var hit := get_resident_by_id(map_view_3d.pick_resident_id(screen_pos, residents))
 		if hit != null:
-			if hit.alive and hit.resident_id != selected_resident_id:
+			var current := get_resident_by_id(selected_resident_id)
+			var current_under_cursor := false
+			if current != null and current.alive:
+				var only_current: Array[VaultResident] = [current]
+				current_under_cursor = current == hit or map_view_3d.pick_resident_id(screen_pos, only_current) == current.resident_id
+			if hit.alive and not current_under_cursor:
 				select_resident(hit.resident_id)
 				return true
 			# Re-clicking the selected resident (or clicking a body) resolves on
