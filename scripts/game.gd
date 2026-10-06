@@ -118,6 +118,7 @@ func new_game(show_tutorial := false) -> void:
 	ended = false
 	outcome = ""
 	active_tool = "select"
+	map_grid.preview_tool = active_tool
 	selected_resident_id = -1
 	selected_building_id = -1
 	selected_breach = false
@@ -670,6 +671,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	selected_breach = false
 	breach_system.queue_redraw()
 	active_tool = "select"
+	map_grid.preview_tool = active_tool
 	_simulation_accumulator = 0.0
 	player_orders.show_breach_warning(
 		breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged
