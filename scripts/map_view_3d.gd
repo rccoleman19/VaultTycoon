@@ -518,8 +518,14 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 			continue
 		live_buildings[building.building_id] = true
 		var proxy: Node3D = _building_proxies.get(building.building_id)
+		# Ids restart with each save and New Game, so a cached id can now be another kind.
+		if is_instance_valid(proxy) and int(proxy.get_meta("fixture_kind", -1)) != int(building.kind):
+			fixture_root.remove_child(proxy)
+			proxy.free()
+			proxy = null
 		if proxy == null or not is_instance_valid(proxy):
 			proxy = _make_building_proxy(building.kind)
+			proxy.set_meta("fixture_kind", int(building.kind))
 			fixture_root.add_child(proxy)
 			_building_proxies[building.building_id] = proxy
 		var center := MapGrid.offset_cell_to_world(building.cell)
