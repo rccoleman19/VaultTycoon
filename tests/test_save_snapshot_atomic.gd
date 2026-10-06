@@ -39,6 +39,13 @@ func _run() -> void:
 	_run_case("legacy snapshot without optional sections still loads with defaults", _test_legacy_optional)
 	_run_case("short camera arrays stay ignored, including their value types", _test_short_camera)
 	_run_case("non-array list entries stay skipped as before", _test_skipped_entries)
+	# Hardening (PR #83 review follow-up): nested nulls, int32/non-finite edges,
+	# skipped supply entries, and an unread camera suffix.
+	for entry: Array in _hardening_rejected_cases():
+		_run_case("rejects %s and keeps the live wing" % entry[0], _test_rejected.bind(entry[1]))
+	_run_case("int32 boundary values still load", _test_int32_bounds_accepted)
+	_run_case("non-array and short supply entries stay skipped", _test_skipped_supplies)
+	_run_case("camera values after the first three stay unread", _test_camera_suffix)
 	if _failed_case_count > 0:
 		printerr("SAVE SNAPSHOT ATOMIC FAILED CASES: %d" % _failed_case_count)
 	print("SAVE SNAPSHOT ATOMIC TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
@@ -126,6 +133,45 @@ func _malformed_cases() -> Array:
 		["resident drafted string", func(s): s.residents[0].drafted = "x"],
 		["resident work_priorities array", func(s): s.residents[0].work_priorities = []],
 		["resident forced_order array", func(s): s.residents[0].forced_order = []],
+	]
+
+
+func _hardening_rejected_cases() -> Array:
+	return [
+		["nested null food.meals", func(s): s.food.meals = null],
+		["nested null food.salvage", func(s): s.food.salvage = null],
+		["nested null oxygen.oxygen", func(s): s.oxygen.oxygen = null],
+		["nested null day.elapsed_seconds", func(s): s.day.elapsed_seconds = null],
+		["nested null day.completed", func(s): s.day.completed = null],
+		["nested null breach.phase", func(s): s.breach.phase = null],
+		["nested null next_building_id", func(s): s.next_building_id = null],
+		["nested null ended", func(s): s.ended = null],
+		["nested null outcome", func(s): s.outcome = null],
+		["nested null camera value", func(s): s.camera = [1, null, 1]],
+		["nested null map.cells entry", func(s): s.map.cells[0] = null],
+		["nested null map.dig_marks progress", func(s): s.map.dig_marks[0][2] = null],
+		["nested null jobs.supplies in_transit", func(s): s.jobs.supplies[0][4] = null],
+		["nested null jobs.rubble y", func(s): s.jobs.rubble = [[1, null, 3]]],
+		["jobs.supplies short entry dictionary", func(s): s.jobs.supplies.append([1, {}])],
+		["nested null building id", func(s): s.buildings[0].id = null],
+		["nested null building complete", func(s): s.buildings[0].complete = null],
+		["nested null building construction_left", func(s): s.buildings[0].construction_left = null],
+		["nested null building cell value", func(s): s.buildings[0].cell = [null, 1]],
+		["nested null resident name", func(s): s.residents[0].name = null],
+		["nested null resident alive", func(s): s.residents[0].alive = null],
+		["nested null resident bed_id", func(s): s.residents[0].bed_id = null],
+		["nested null resident position value", func(s): s.residents[0].position = [null, 0]],
+		["nested null resident needs.food", func(s): s.residents[0].needs.food = null],
+		["int32 overflow food.salvage 2147483648", func(s): s.food.salvage = 2147483648],
+		["int32 underflow food.meals -2147483649", func(s): s.food.meals = -2147483649],
+		["int32 overflow building id 2147483648", func(s): s.buildings[0].id = 2147483648],
+		["int32 underflow resident bed_id -2147483649", func(s): s.residents[0].bed_id = -2147483649],
+		["in-memory INF camera zoom", func(s): s.camera = [1.0, 2.0, INF]],
+		["in-memory NAN resident position", func(s): s.residents[0].position = [NAN, 0.0]],
+		# Without breach, so the breach/elapsed-time semantics cannot be what rejects it.
+		["in-memory INF day.elapsed_seconds without breach", func(s): s.erase("breach"); s.day.elapsed_seconds = INF],
+		["in-memory NAN building construction_left", func(s): s.buildings[0].construction_left = NAN],
+		["in-memory INF building delivered", func(s): s.buildings[0].delivered = INF],
 	]
 
 
@@ -335,6 +381,46 @@ func _test_skipped_entries() -> bool:
 	var result: Variant = live.apply_snapshot.call(snapshot)
 	_assert_equal(result, true, "skipped entries still load")
 	_assert_equal(JSON.stringify(live.create_snapshot()), _source_json, "skipped entries ignored")
+	return true
+
+
+func _test_int32_bounds_accepted() -> bool:
+	var live := _live_game()
+	var snapshot: Dictionary = _source.duplicate(true)
+	snapshot.food.salvage = 2147483647
+	var result: Variant = live.apply_snapshot.call(snapshot)
+	_assert_equal(result, true, "salvage at int32 max loads")
+	_assert_equal(live.food_system.salvage, 2147483647, "salvage keeps the int32 max value")
+	snapshot = _source.duplicate(true)
+	var blueprint_index: int = snapshot.buildings.size() - 1
+	snapshot.buildings[blueprint_index].delivered = -2147483648
+	result = live.apply_snapshot.call(snapshot)
+	_assert_equal(result, true, "building delivered at int32 min loads (no new range rule)")
+	_assert_equal(live.buildings[blueprint_index].delivered, -2147483648, "delivered keeps the int32 min value")
+	return true
+
+
+func _test_skipped_supplies() -> bool:
+	var snapshot: Dictionary = _source.duplicate(true)
+	var first: Array = snapshot.jobs.supplies[0]
+	snapshot.jobs.supplies.append("legacy")
+	snapshot.jobs.supplies.append(7)
+	snapshot.jobs.supplies.append(first.slice(0, 2))
+	var live := _live_game()
+	var result: Variant = live.apply_snapshot.call(snapshot)
+	_assert_equal(result, true, "non-array and short supply entries still load")
+	_assert_equal(JSON.stringify(live.create_snapshot()), _source_json, "skipped supply entries are ignored")
+	return true
+
+
+func _test_camera_suffix() -> bool:
+	var snapshot: Dictionary = _source.duplicate(true)
+	snapshot.camera = [1, 2, 3, "x"]
+	var live := _live_game()
+	var result: Variant = live.apply_snapshot.call(snapshot)
+	_assert_equal(result, true, "camera with an unread fourth value loads")
+	_assert_equal(live.world_camera.position, Vector2(1.0, 2.0), "camera position comes from the first two values")
+	_assert_equal(live.world_camera.zoom, Vector2.ONE * 1.8, "camera zoom comes from the third value (clamped)")
 	return true
 
 
