@@ -196,6 +196,7 @@ GODOT_BIN=/absolute/path/to/godot scripts/check.sh
 
 The script uses an isolated temporary user-data directory and runs every checked suite: headless editor import, core gameplay, mood/recreation, work priorities, breach-modal speed keys, medical care, stockpile zones, food hauling, lighting/darkness control (`tests/test_lighting_darkness.gd`), manual draft/forced orders, and a five-frame main-scene boot. A successful run ends with `All Vault Tycoon headless checks passed.`
 
+New Next/salvage guidance tests go in focused suites such as `tests/test_salvage_guidance.gd`, not `tests/test_survival_next.gd`, so each headless suite stays well under the 120s per-suite timeout.
 ## Desktop exports
 
 Install the **Godot 4.7.2** export templates first: open **Editor → Manage Export Templates**, choose **Download and Install**, and verify the installed template version matches the editor. The checked-in `export_presets.cfg` defines unsigned development presets for Linux, macOS, and Windows.
