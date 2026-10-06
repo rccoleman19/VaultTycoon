@@ -40,6 +40,9 @@ const GROW_MEAL_OBSERVE := 30.0
 const DESIGNATE_HOLD := 20.0
 # Exactly 50.0s from post-designate start for Rec dig+place+finish (shed).
 const REC_HOLD := 50.0
+# Director-fixed bound: never widen after a failed run.
+const POWERED_REC_STAGE := 80.0
+const PLACE_MED := ["Next: YOU place a Med Bed · THEY treat", "Place a Med Bed so the injured can be treated.", "medical"]
 const REC_PLACE := ["Next: YOU place a Rec Console · THEY recover mood", "Place a Rec Console so crew can recover mood.", "rec"]
 const FINISH_REC := ["Next: YOU leave Haul + Craft on · THEY finish the Rec Console", "Keep Haul + Craft above OFF so crew supply and finish the Rec Console blueprint.", "select"]
 const CHARGE_FOR_REC := ["Next: YOU place a Charge Node · THEY power the Rec Console", "The grid lacks available power for the Rec Console. Place a Charge Node to add 7 power.", "generator"]
@@ -147,9 +150,40 @@ var _rec_dig_cell := Vector2i(-1, -1)
 var _rec_cell := Vector2i(-1, -1)
 var _rec_hold_active := false
 
+# Separate, live Next-driven second Charge stage; prior Rec endpoint is untouched.
+var _charge2: VaultBuilding
+var _powered_rec_active := false
+var _powered_rec_start := -1.0
+var _powered_rec_ticks := 0
+var _powered_rec_history: Array[String] = []
+var _powered_rec_last_tip: Array = []
+var _powered_rec_n_reads: Array[String] = []
+var _powered_rec_digs: Dictionary = {}
+var _powered_rec_completed: Dictionary = {}
+var _powered_rec_dig_progress := -1.0
+var _powered_rec_rubble_deposits: Array[String] = []
+var _charge2_tip_seen := -1.0
+var _charge2_placed := -1.0
+var _charge2_haul := -1.0
+var _charge2_first_delivery := -1.0
+var _charge2_last_delivery := -1.0
+var _charge2_delivered18 := -1.0
+var _charge2_accepted := 0
+var _charge2_deliveries: Array[String] = []
+var _charge2_craft_claim := -1.0
+var _charge2_crafted := false
+var _charge2_complete := -1.0
+var _powered_rec_power := -1.0
+var _powered_rec_baselines: Dictionary = {}
+var _powered_rec_sessions: Dictionary = {}
+var _powered_rec_resident := -1
+var _powered_rec_resident_name := ""
+var _powered_rec_recreating := -1.0
+var _powered_rec_session := -1.0
+
 
 func _run() -> void:
-	_run_case("Untouched Next-driven Dig + two opening bunks + Charge + crisis third bunk + powered Grow + Kitchen + Air to Day-7 tip and one O2 tick with natural seal by 80, then 30s Grow-derived meal observe, then Day-7 dig+zone designate hold 20s, then Rec place+finish shed to Charge-for-Rec", _walk)
+	_run_case("Untouched Next-driven Dig + two opening bunks + Charge + crisis third bunk + powered Grow + Kitchen + Air to Day-7 tip and one O2 tick with natural seal by 80, then 30s Grow-derived meal observe, then Day-7 dig+zone designate hold 20s, then Rec place+finish shed to Charge-for-Rec, then live Charge funding and powered Rec session", _walk)
 	print("FRESH WING AIR FINISH: %s — %d assertions, %d failures" % ["FAIL" if _failure_count else "PASS", _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -258,6 +292,7 @@ func _walk() -> void:
 				return
 			if not _failure_count:
 				print("fresh-wing rec-place PASS: Rec tip@%.1fs dig issued@%.1fs dig complete@%.1fs placed@%.1fs cell=%s first delivery@%.1fs delivered8@%.1fs complete@%.1fs Charge-for-Rec@%.1fs hold end=%.1fs; PWR supply=%d demand=%d served=%d shed=%d; Rec powered=%s; SEALED; not Day-7 victory; not powered mood recovery / not Rec@9/9; Charge not placed" % [_rec_tip_elapsed, _rec_dig_issued_elapsed, _rec_dig_complete_elapsed, _rec_placed_elapsed, _rec_cell, _rec_first_delivery_elapsed, _rec_delivered8_elapsed, _rec_complete_elapsed, _rec_charge_tip_elapsed, game.day_cycle.elapsed_seconds, game.power_grid.supply, game.power_grid.demand, game.power_grid.served, game.power_grid.shed_demand, _rec.powered if _rec != null else false])
+				_run_powered_rec(game, originals)
 			else:
 				_diagnostics(game)
 			_dispose(game)
@@ -508,7 +543,7 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 		return _stop(game, "post-seal path must stay SEALED")
 	if game.power_grid.brownout_active:
 		# Rec-only OPTIONAL shed is expected after Rec completes on 9-supply grid.
-		var rec_only_shed := _rec != null and _rec.complete and not _rec.powered and not _rec.manually_disabled and game.power_grid.is_building_shed(_rec.building_id) and game.power_grid.shed_demand == 1 and game.power_grid.shed_count == 1
+		var rec_only_shed := (_charge2 == null or not _charge2.complete) and _rec != null and _rec.complete and not _rec.powered and not _rec.manually_disabled and game.power_grid.is_building_shed(_rec.building_id) and game.power_grid.shed_demand == 1 and game.power_grid.shed_count == 1
 		if not rec_only_shed:
 			return _stop(game, "power shedding forbidden (non-Rec or multi-shed)")
 	if _kitchen != null and _kitchen.complete and (not _kitchen.powered or _kitchen.manually_disabled):
@@ -516,7 +551,10 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	if _air != null and _air.complete:
 		if not _air.powered or _air.manually_disabled:
 			return _stop(game, "completed Air must stay powered/enabled")
-		if _rec != null and _rec.complete:
+		if _charge2 != null and _charge2.complete:
+			if game.power_grid.supply != 16 or game.power_grid.demand != 10 or game.power_grid.served != 10 or game.power_grid.shed_count != 0 or game.power_grid.shed_demand != 0 or game.power_grid.brownout_active or not _rec.powered:
+				return _stop(game, "after Charge #2 complete require PWR 16/10/10, powered Rec, zero shed")
+		elif _rec != null and _rec.complete:
 			if game.power_grid.supply != 9 or game.power_grid.demand != 10 or game.power_grid.served != 9:
 				return _stop(game, "after Rec complete expect PWR supply=9 demand=10 served=9 (Rec shed)")
 		elif game.power_grid.supply != 9 or game.power_grid.demand != 9 or game.power_grid.served != 9:
@@ -540,8 +578,8 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	for starter in _starters:
 		if not game.buildings.has(starter) or not starter.complete or starter.manually_disabled or (starter.kind == VaultBuilding.Kind.LAMP and not starter.powered):
 			return _stop(game, "starter Core/Lumen/Bay not retained/enabled or Lumen unpowered")
-	var expected_buildings := _starters.size() + _bunks.size() + (1 if _charge != null else 0) + (1 if _grow != null else 0) + (1 if _kitchen != null else 0) + (1 if _air != null else 0) + (1 if _rec != null else 0)
-	if game.buildings.size() != expected_buildings or _bunks.size() > 3 or _charge_placements > 1 or _grow_placements > 1 or _kitchen_placements > 1 or _air_placements > 1 or _rec_placements > 1:
+	var expected_buildings := (1 if _charge2 != null else 0) + _starters.size() + _bunks.size() + (1 if _charge != null else 0) + (1 if _grow != null else 0) + (1 if _kitchen != null else 0) + (1 if _air != null else 0) + (1 if _rec != null else 0)
+	if game.buildings.size() != expected_buildings or _bunks.size() > 3 or _charge_placements != (2 if _charge2 != null else (1 if _charge != null else 0)) or _grow_placements > 1 or _kitchen_placements > 1 or _air_placements > 1 or _rec_placements > 1:
 		return _stop(game, "unexpected/duplicate construction")
 	if _third_bunk != null and (_grow == null or _third_bunk_elapsed < _grow_tip_elapsed or _bunks.size() != 3 or not game.buildings.has(_third_bunk)):
 		return _stop(game, "third bunk without prior Grow or missing third blueprint")
@@ -549,7 +587,7 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	for building in game.buildings:
 		if building.kind == VaultBuilding.Kind.GENERATOR and not building.is_emergency_core:
 			charges += 1
-	if charges != _charge_placements or (_charge != null and not game.buildings.has(_charge)):
+	if charges != _charge_placements or (_charge != null and not game.buildings.has(_charge)) or (_charge2 != null and (not game.buildings.has(_charge2) or _charge2 == _charge or _charge2.is_emergency_core)):
 		return _stop(game, "missing/duplicate non-Core Charge")
 	var grows := 0
 	var kitchens := 0
@@ -577,6 +615,8 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 		paid += bunk.delivered
 	if _charge != null:
 		paid += _charge.delivered
+	if _charge2 != null:
+		paid += _charge2.delivered
 	if _grow != null:
 		paid += _grow.delivered
 	if _kitchen != null:
@@ -591,7 +631,7 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 		if resident.current_job_type in [JobSystem.JobType.SUPPLY_BUILD, JobSystem.JobType.BUILD]:
 			var job: Dictionary = game.job_system._find_job(resident.current_job_id)
 			var building := game.get_building_by_id(int(job.get("building_id", -1)))
-			if building not in _bunks and building != _charge and building != _grow and building != _kitchen and building != _air and building != _rec:
+			if building not in _bunks and building != _charge and building != _grow and building != _kitchen and building != _air and building != _rec and building != _charge2:
 				return _stop(game, "supply/Craft targets unexpected building")
 			var work := "haul" if resident.current_job_type == JobSystem.JobType.SUPPLY_BUILD else "craft"
 			if resident.is_forced_job or resident.get_work_priority(work) <= 0:
@@ -635,10 +675,11 @@ func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	if _grow != null and _grow.delivered == 12:
 		# Opening digs are 12; Day-7 designate may add post-Air rubble (+3 each).
 		var extra_dig := 3 * maxi(0, _excavated.size() - 12)
+		var charge2_paid := (_charge2.delivered if _charge2 != null else 0) + _charge2_transit(game)
 		var rec_paid := (_rec.delivered if _rec != null else 0) + _rec_transit(game)
-		_assert_equal(_grow_residual(game) + (_third_bunk.delivered if _third_bunk != null else 0) + _third_bunk_transit(game) + (_kitchen.delivered if _kitchen != null else 0) + _kitchen_transit(game) + (_air.delivered if _air != null else 0) + _air_transit(game) + rec_paid, 38 + extra_dig, "Grow-supplied residual + Rec paid = 38 (+3 per post-Air dig)")
+		_assert_equal(_grow_residual(game) + (_third_bunk.delivered if _third_bunk != null else 0) + _third_bunk_transit(game) + (_kitchen.delivered if _kitchen != null else 0) + _kitchen_transit(game) + (_air.delivered if _air != null else 0) + _air_transit(game) + rec_paid + charge2_paid, 38 + extra_dig, "Grow-supplied residual + Rec + Charge #2 paid = 38 (+3 per post-Air dig)")
 		if _third_bunk != null and _third_bunk.delivered == 8 and _kitchen != null and _kitchen.delivered == 10:
-			_assert_equal(_grow_residual(game) + (_air.delivered if _air != null else 0) + _air_transit(game) + rec_paid, 20 + extra_dig, "third bunk/Kitchen paid + Rec: residual + Air + Rec = 20 (+3 per post-Air dig)")
+			_assert_equal(_grow_residual(game) + (_air.delivered if _air != null else 0) + _air_transit(game) + rec_paid + charge2_paid, 20 + extra_dig, "third bunk/Kitchen paid + Rec: residual + Air + Rec + Charge #2 = 20 (+3 per post-Air dig)")
 	return _failure_count == 0
 
 
@@ -800,6 +841,8 @@ func _observe_excavation(cell: Vector2i, amount: int, game: VaultGame) -> void:
 			working = true
 	_assert_true(working, "dig signal occurs during real undrafted Dig job")
 	_excavated[cell] = true
+	if _powered_rec_active and _powered_rec_digs.has(cell):
+		_powered_rec_completed[cell] = game.day_cycle.elapsed_seconds
 
 
 func _observe_inventory(game: VaultGame) -> void:
@@ -846,6 +889,9 @@ func _observe_inventory(game: VaultGame) -> void:
 			if resident.current_job_type == JobSystem.JobType.HAUL_RUBBLE and resident.job_phase == "deposit" and resident.carrying == 3 and increase == 3:
 				evidenced = true
 				_rubble_deliveries += 1
+				var rubble_job: Dictionary = game.job_system._find_job(resident.current_job_id)
+				if _powered_rec_active and _powered_rec_digs.has(rubble_job.get("target")) and resident.alive and not resident.drafted and not resident.is_forced_job and resident.get_work_priority("haul") > 0 and int(rubble_job.get("reserved_by", -1)) == resident.resident_id:
+					_powered_rec_rubble_deposits.append("%.1fs +%d cell=%s resident=%d" % [game.day_cycle.elapsed_seconds, increase, str(rubble_job.target), resident.resident_id])
 			elif resident.current_job_type in [JobSystem.JobType.SUPPLY_BUILD, JobSystem.JobType.SUPPLY_BREACH]:
 				# release_resident emits inventory_changed before clearing cargo.
 				var job: Dictionary = game.job_system._find_job(resident.current_job_id)
@@ -1114,6 +1160,250 @@ func _hold_rec_place(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	return _failure_count == 0
 
 
+func _charge2_transit(game: VaultGame) -> int:
+	return game.job_system.get_build_supply_in_transit(_charge2.building_id) if _charge2 != null else 0
+
+
+func _powered_rec_fund_tuple(game: VaultGame) -> Array:
+	var shortfall: int = game.player_orders._salvage_shortfall(VaultBuilding.Kind.GENERATOR)
+	var uncovered: int = shortfall - game.job_system.get_uncredited_rubble()
+	var tiles := ceili(float(uncovered) / 3.0) - game.map_grid.dig_marks.size() if uncovered > 0 else 0
+	return [
+		"Next: YOU mark %d rock [E] · THEY fund the Charge Node" % tiles if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the Charge Node",
+		"The Charge Node blueprint is %d salvage short. Each dug rock tile yields 3 salvage once hauled." % shortfall,
+		"dig" if tiles > 0 else "select",
+	]
+
+
+func _check_powered_rec_tip(game: VaultGame) -> bool:
+	var tip := _tip_tuple(game.player_orders._primary_next_step())
+	if tip != _powered_rec_last_tip:
+		_powered_rec_history.append("%.1fs stage+%.1fs %s" % [game.day_cycle.elapsed_seconds, game.day_cycle.elapsed_seconds - _powered_rec_start, str(tip)])
+		_powered_rec_last_tip = tip
+	var mood_risk := false
+	var rec_wanted := false
+	var injured := false
+	var needing_bunks := 0
+	var occupied: Dictionary = {}
+	for resident in game.residents:
+		if resident.alive:
+			mood_risk = mood_risk or resident.needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD
+			rec_wanted = rec_wanted or resident.needs.mood <= ResidentNeeds.RECREATION_SEEK_THRESHOLD
+			injured = injured or (resident.needs.health < 100.0 and resident.medical_bed_id < 0)
+		if resident.sleeping and resident.bed_id >= 0:
+			occupied[resident.bed_id] = true
+		elif resident.medical_bed_id >= 0 and resident.state == "Rest-Medical":
+			continue
+		elif resident.alive and not resident.drafted and (resident.needs.rest <= 28.0 or (resident.sleeping and resident.bed_id < 0)):
+			needing_bunks += 1
+	var free_bunks := 0
+	for bunk in _bunks:
+		if bunk.complete and not occupied.has(bunk.building_id):
+			free_bunks += 1
+	# Earlier critical-food branches are excluded by the food/rest and powered
+	# Kitchen guards. The retained completed Rec outranks medical/bunk crises.
+	var expected: Array = DAY7
+	if mood_risk and not _rec.powered:
+		if _charge2 == null:
+			expected = CHARGE_FOR_REC
+		elif game.player_orders._salvage_shortfall(VaultBuilding.Kind.GENERATOR) > 0:
+			expected = _powered_rec_fund_tuple(game)
+		else:
+			expected = FINISH_CHARGE
+	elif injured:
+		# No medical building is in the permitted building identities.
+		expected = PLACE_MED
+	elif needing_bunks > free_bunks:
+		# All three retained bunks are complete; no bunk-finish branch is live.
+		expected = PLACE_CRISIS
+	elif _charge2 != null and not _charge2.complete and game.player_orders._salvage_shortfall(VaultBuilding.Kind.GENERATOR) > 0:
+		expected = _powered_rec_fund_tuple(game)
+	elif rec_wanted and not _rec.powered:
+		expected = CHARGE_FOR_REC if _charge2 == null else FINISH_CHARGE
+	_assert_equal(tip, expected, "Powered Rec exact live priority/phase tuple")
+	if _failure_count:
+		_diagnostics(game)
+		return false
+	return true
+
+
+func _check_powered_rec_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
+	_assert_false(game.ended, "Powered Rec every tick: game not ended")
+	_assert_false(game.day_cycle.completed, "Powered Rec every tick: no Day-7 victory")
+	if _failure_count or not _check_state(game, originals):
+		return false
+	if not _rec.complete or _rec.manually_disabled or not _charge.complete or _charge.manually_disabled:
+		return _stop(game, "Powered Rec retains enabled completed Rec and first Charge")
+	for bunk in _bunks:
+		if not bunk.complete:
+			return _stop(game, "Powered Rec retains all three complete bunks")
+	if _charge2 == null or not _charge2.complete:
+		if not game.power_grid.brownout_active or game.power_grid.shed_count != 1 or game.power_grid.shed_demand != 1 or not game.power_grid.is_building_shed(_rec.building_id):
+			return _stop(game, "Powered Rec before Charge #2 completes requires exactly Rec-only shed")
+	elif _charge2.manually_disabled:
+		return _stop(game, "Charge #2 must stay enabled")
+	return _check_powered_rec_tip(game)
+
+
+func _observe_powered_rec_jobs(game: VaultGame, originals: Array[VaultResident]) -> void:
+	for resident in originals:
+		var job: Dictionary = game.job_system._find_job(resident.current_job_id)
+		var ordinary := resident.alive and not resident.drafted and not resident.is_forced_job and int(job.get("reserved_by", -1)) == resident.resident_id and not bool(job.get("done", true))
+		if ordinary and resident.current_job_type == JobSystem.JobType.DIG and resident.get_work_priority("dig") > 0 and _powered_rec_digs.has(job.get("target")) and float(game.map_grid.dig_progress.get(job.get("target"), 0.0)) > 0.0 and _powered_rec_dig_progress < 0.0:
+			_powered_rec_dig_progress = game.day_cycle.elapsed_seconds
+		if ordinary and _charge2 != null and int(job.get("building_id", -1)) == _charge2.building_id and job.get("target") == _charge2.cell:
+			if resident.current_job_type == JobSystem.JobType.SUPPLY_BUILD and resident.get_work_priority("haul") > 0 and resident.carrying > 0 and resident.carrying == int(job.get("in_transit", 0)) and _charge2_haul < 0.0:
+				_charge2_haul = game.day_cycle.elapsed_seconds
+			if resident.current_job_type == JobSystem.JobType.BUILD and resident.get_work_priority("craft") > 0 and _charge2.delivered == 18 and _charge2_craft_claim < 0.0:
+				_charge2_craft_claim = game.day_cycle.elapsed_seconds
+		_powered_rec_sessions[resident.resident_id] = resident.recreation_sessions
+		if _powered_rec_resident < 0 and resident.recreation_id == _rec.building_id and game.job_system.is_actively_recreating(resident):
+			_powered_rec_resident = resident.resident_id
+			_powered_rec_resident_name = resident.resident_name
+			_powered_rec_recreating = game.day_cycle.elapsed_seconds
+		if resident.resident_id == _powered_rec_resident and _powered_rec_session < 0.0 and game.day_cycle.elapsed_seconds > _powered_rec_recreating and resident.recreation_sessions > int(_powered_rec_baselines[resident.resident_id]):
+			_powered_rec_session = game.day_cycle.elapsed_seconds
+
+
+func _run_powered_rec(game: VaultGame, originals: Array[VaultResident]) -> bool:
+	print("Powered Rec entry: prior assertions=%d elapsed=%.1fs" % [_assertion_count, game.day_cycle.elapsed_seconds])
+	_powered_rec_start = game.day_cycle.elapsed_seconds
+	_powered_rec_active = true
+	for resident in originals:
+		_powered_rec_baselines[resident.resident_id] = resident.recreation_sessions
+	var ok: bool = _drive_powered_rec(game, originals)
+	_powered_rec_active = false
+	print("Powered Rec stage: %s; bound=%.1fs ticks=%d/800 start=%.1fs end=%.1fs; CHARGE_FOR_REC seen@%.1fs place@%.1fs; live time:N=%s digs issued=%d completed=%d completion times=%s; first supply@%.1fs last supply@%.1fs delivered18@%.1fs accepted=%d complete@%.1fs; PWR=%d/%d/%d powered@%.1fs; original=%s(%d) recreating@%.1fs sessions=%d->%d latch@%.1fs" % ["PASS" if ok else "FAIL", POWERED_REC_STAGE, _powered_rec_ticks, _powered_rec_start, game.day_cycle.elapsed_seconds, _charge2_tip_seen, _charge2_placed, str(_powered_rec_n_reads), _powered_rec_digs.size(), _powered_rec_completed.size(), str(_powered_rec_completed), _charge2_first_delivery, _charge2_last_delivery, _charge2_delivered18, _charge2_accepted, _charge2_complete, game.power_grid.supply, game.power_grid.demand, game.power_grid.served, _powered_rec_power, _powered_rec_resident_name, _powered_rec_resident, _powered_rec_recreating, int(_powered_rec_baselines.get(_powered_rec_resident, -1)), int(_powered_rec_sessions.get(_powered_rec_resident, -1)), _powered_rec_session])
+	if not ok:
+		_diagnostics(game)
+	return ok
+
+
+func _drive_powered_rec(game: VaultGame, originals: Array[VaultResident]) -> bool:
+	_assert_equal(int(round(POWERED_REC_STAGE / VaultGame.SIMULATION_TICK)), 800, "fixed 80.0s Powered Rec bound is 800 integer ticks")
+	if not _check_powered_rec_state(game, originals):
+		return false
+	while _powered_rec_ticks < int(round(POWERED_REC_STAGE / VaultGame.SIMULATION_TICK)):
+		var tip := _tip_tuple(game.player_orders._primary_next_step())
+		var tool_before: String = game.active_tool
+		if _charge2 == null:
+			if tip == CHARGE_FOR_REC:
+				_charge2_tip_seen = game.day_cycle.elapsed_seconds
+				var cell := _pick_rec_cell(game, originals)
+				if cell == Vector2i(-1, -1) or not game.lighting_system.is_cell_lit(cell) or not game.map_grid.is_walkable(cell) or game.get_building_at(cell) != null:
+					return _stop(game, "no reachable lit empty floor for live Charge-for-Rec")
+				if not game.place_blueprint(VaultBuilding.Kind.GENERATOR, cell):
+					return _stop(game, "live Charge-for-Rec placement rejected")
+				_charge2 = game.get_building_at(cell)
+				_charge_placements += 1
+				_charge2_placed = game.day_cycle.elapsed_seconds
+				_assert_true(_charge2 != null and not _charge2.complete and _charge2.get_cost() == 18, "Charge #2 placed live, incomplete, cost 18")
+				if _failure_count or not _check_powered_rec_state(game, originals):
+					return false
+			elif _powered_rec_ticks >= int(round(20.0 / VaultGame.SIMULATION_TICK)):
+				return _stop(game, "no fresh live CHARGE_FOR_REC tuple within first 20s of Powered Rec stage")
+		# Re-read after placement and on every later tick. N comes only from
+		# this exact live mark tuple; no salvage-based designation fallback.
+		tip = _tip_tuple(game.player_orders._primary_next_step())
+		if _charge2 != null and not _charge2.complete and str(tip[0]).begins_with("Next: YOU mark "):
+			if tip != _powered_rec_fund_tuple(game) or tip[2] != "dig":
+				return _stop(game, "Powered Rec mark action lacks exact live fund tuple")
+			var n := int(str(tip[0]).get_slice(" ", 3))
+			_powered_rec_n_reads.append("%.1fs:N=%d" % [game.day_cycle.elapsed_seconds, n])
+			if n <= 0 or _powered_rec_digs.size() + n > 8:
+				return _stop(game, "live N=%d would violate positive N / total stage dig cap 8" % n)
+			for _dig in n:
+				var cell := _pick_rec_dig_cell(game, originals)
+				if cell == Vector2i(-1, -1):
+					return _stop(game, "no reachable connected rock for live N")
+				game.set_tool("dig")
+				var accepted := game.issue_order(cell)
+				game.set_tool(tool_before)
+				if not accepted or not game.map_grid.dig_marks.has(cell):
+					return _stop(game, "Powered Rec ordinary dig order rejected at %s" % cell)
+				_designated[cell] = true
+				_powered_rec_digs[cell] = game.day_cycle.elapsed_seconds
+		_assert_equal(game.active_tool, tool_before, "Powered Rec player actions restore prior tool")
+		if not _check_powered_rec_state(game, originals) or not _check_intermediate_drain(game, originals):
+			return false
+		_observe_powered_rec_jobs(game, originals)
+		var delivered_before := _charge2.delivered if _charge2 != null else 0
+		var work_before := _charge2.construction_left if _charge2 != null else 0.0
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		_powered_rec_ticks += 1
+		if _charge2 != null:
+			var accepted := _charge2.delivered - delivered_before
+			if accepted < 0:
+				return _stop(game, "Charge #2 accepted delivery regressed")
+			if accepted > 0:
+				_charge2_accepted += accepted
+				if _charge2_first_delivery < 0.0:
+					_charge2_first_delivery = game.day_cycle.elapsed_seconds
+				_charge2_last_delivery = game.day_cycle.elapsed_seconds
+				if _charge2.delivered == 18:
+					_charge2_delivered18 = game.day_cycle.elapsed_seconds
+				_charge2_deliveries.append("%.1fs +%d delivered=%d" % [game.day_cycle.elapsed_seconds, accepted, _charge2.delivered])
+			if _charge2_craft_claim >= 0.0 and _charge2.delivered == 18 and _charge2.construction_left < work_before:
+				_charge2_crafted = true
+			if _charge2.complete and _charge2_complete < 0.0:
+				_charge2_complete = game.day_cycle.elapsed_seconds
+			if _charge2.complete and _rec.powered and game.power_grid.supply == 16 and game.power_grid.demand == 10 and game.power_grid.served == 10 and _powered_rec_power < 0.0:
+				_powered_rec_power = game.day_cycle.elapsed_seconds
+		_observe_powered_rec_jobs(game, originals)
+		if not _check_powered_rec_state(game, originals):
+			return false
+	_assert_approximately(game.day_cycle.elapsed_seconds, _powered_rec_start + POWERED_REC_STAGE, 0.00001, "exactly 80.0s Powered Rec stage")
+	_assert_true(_charge2_placed >= _powered_rec_start and _charge2_placed <= _powered_rec_start + 20.0, "Charge #2 under fresh live tuple within first 20s")
+	_assert_equal(_charge_placements, 2, "exactly two player Charge placements, no third")
+	_assert_true(not _powered_rec_n_reads.is_empty() and _powered_rec_digs.size() > 0 and _powered_rec_digs.size() <= 8, "live N read and stage dig count in 1..8")
+	_assert_true(_powered_rec_dig_progress >= _powered_rec_start and not _powered_rec_completed.is_empty(), "ordinary stage-specific Dig progress and completions")
+	_assert_true(not _powered_rec_rubble_deposits.is_empty(), "ordinary stage-specific rubble stock deposits")
+	_assert_equal(_charge2_accepted, 18, "accepted delivery increases total exactly 18, excluding refunds/pickups")
+	_assert_true(_charge2_haul >= _charge2_placed and _charge2_first_delivery >= _charge2_placed and _charge2_last_delivery >= _charge2_first_delivery, "Charge #2-specific ordinary Haul and accepted supply")
+	_assert_true(_charge2_craft_claim >= _charge2_last_delivery and _charge2_crafted, "Charge #2 ordinary Craft claim then real work reduction")
+	_assert_true(_charge2 != null and _charge2.complete and _charge2.delivered == 18 and _charge2.construction_left <= 0.0, "Charge #2 complete with real delivered 18")
+	_assert_true(_powered_rec_power >= _charge2_complete and _charge2_complete >= _charge2_craft_claim, "Charge #2 completion powers Rec at 16/10/10")
+	_assert_true(_powered_rec_resident >= 0 and _powered_rec_recreating >= _powered_rec_power and _powered_rec_session > _powered_rec_recreating, "same original active on retained Rec then real recreation_sessions increment")
+	_assert_true(game.breach_system.is_sealed() and _open_count == 0 and not game.breach_system.serialize().open_emitted, "Powered Rec retains natural SEALED and zero OPEN")
+	return _failure_count == 0
+
+
+func _powered_rec_phase(game: VaultGame) -> String:
+	if _charge2 == null:
+		return "waiting for live Charge-for-Rec"
+	if _charge2.complete:
+		return "Charge complete / powered Rec"
+	if game.player_orders._salvage_shortfall(VaultBuilding.Kind.GENERATOR) > 0:
+		return "Charge short"
+	return "Charge funded / unfinished"
+
+
+func _powered_rec_diagnostics(game: VaultGame) -> void:
+	printerr("Powered Rec diagnostics: elapsed=%.1fs stage+%.1fs ticks=%d tip history=%s live N=%s digs=%s completed=%s progress@%.1fs rubble deposits=%s; salvage=%d rubble=%d marks=%s; Charge #2 delivered=%d transit=%d complete=%s work=%.3f; PWR=%d/%d/%d shed count=%d demand=%d" % [game.day_cycle.elapsed_seconds, game.day_cycle.elapsed_seconds - _powered_rec_start, _powered_rec_ticks, str(_powered_rec_history), str(_powered_rec_n_reads), str(_powered_rec_digs), str(_powered_rec_completed), _powered_rec_dig_progress, str(_powered_rec_rubble_deposits), game.food_system.salvage, _uncredited_rubble(game), str(game.map_grid.dig_marks), _charge2.delivered if _charge2 != null else 0, _charge2_transit(game), _charge2.complete if _charge2 != null else false, _charge2.construction_left if _charge2 != null else -1.0, game.power_grid.supply, game.power_grid.demand, game.power_grid.served, game.power_grid.shed_count, game.power_grid.shed_demand])
+	for resident in game.residents:
+		var bed := game.get_building_by_id(resident.bed_id)
+		var in_bed := bed != null and bed.complete and resident.get_cell(game.map_grid) == bed.cell
+		var wake_rest := 86.0 if resident.bed_id >= 0 else 44.0
+		var sleep_remaining := maxf(0.0, wake_rest - resident.needs.rest) * DayCycle.SECONDS_PER_DAY / (96.0 if in_bed else 48.0) if resident.sleeping else 0.0
+		printerr("Powered Rec sleep original=%d remaining estimate at current recovery rate=%.2fs (no stored sleep timer)" % [resident.resident_id, sleep_remaining])
+		printerr("Powered Rec original=%d mood=%.3f rest=%.3f sleeping=%s bed=%d wake-rest=%d stress-break-left=%.3fs recreating=%s active=%s console=%d sessions=%d baseline=%d state=%s job=%s" % [resident.resident_id, resident.needs.mood, resident.needs.rest, resident.sleeping, resident.bed_id, 86 if resident.bed_id >= 0 else 44, resident.stress_break_left, resident.recreating, game.job_system.is_actively_recreating(resident), resident.recreation_id, resident.recreation_sessions, int(_powered_rec_baselines.get(resident.resident_id, -1)), resident.state, str(game.job_system._find_job(resident.current_job_id))])
+	var extra_dig := 3 * maxi(0, _excavated.size() - 12)
+	var charge2_paid := (_charge2.delivered if _charge2 != null else 0) + _charge2_transit(game)
+	var rec_paid := _rec.delivered + _rec_transit(game)
+	var residual20 := _grow_residual(game) + _air.delivered + _air_transit(game) + rec_paid + charge2_paid
+	var residual38 := residual20 + _third_bunk.delivered + _third_bunk_transit(game) + _kitchen.delivered + _kitchen_transit(game)
+	printerr("Powered Rec phase=%s accepted=%d batches=%s residual38=%d expected=%d residual20=%d expected=%d" % [_powered_rec_phase(game), _charge2_accepted, str(_charge2_deliveries), residual38, 38 + extra_dig, residual20, 20 + extra_dig])
+	var paid := game.breach_system.patch_delivered
+	for building in game.buildings:
+		if building not in _starters:
+			paid += building.delivered
+	for resident in game.residents:
+		if resident.current_job_type in [JobSystem.JobType.SUPPLY_BUILD, JobSystem.JobType.SUPPLY_BREACH]:
+			paid += resident.carrying
+	printerr("Powered Rec whole ledger observed=%d expected=%d paid=%d excavated=%d" % [game.food_system.salvage + _uncredited_rubble(game) + paid, 48 + 3 * _excavated.size(), paid, _excavated.size()])
+	printerr("Powered Rec jobs=%s" % str(game.job_system.jobs))
+
+
 func _is_day7_designate_allowlisted(step: Dictionary) -> bool:
 	# Documented allow-list: Rec / bunk-finish / bunk-place / Med appear without acting.
 	var text := str(step.get("text", ""))
@@ -1286,6 +1576,8 @@ func _stop(game: VaultGame, reason: String) -> bool:
 
 
 func _diagnostics(game: VaultGame) -> void:
+	if _powered_rec_start >= 0.0:
+		_powered_rec_diagnostics(game)
 	printerr("fresh-wing stocked-meal proof: elapsed=%.1fs timings=%s raw=%d meals=%d pending Kitchen=%d Kitchen cargo jobs=%s meal stock deltas=%s" % [game.day_cycle.elapsed_seconds, str(_meal_proof), game.food_system.raw_food, game.food_system.meals, game.job_system.get_pending_meals_at(KITCHEN_CELL), str(_kitchen_meal_jobs), str(_meal_stock_deltas)])
 	printerr("fresh-wing grow-derived-meal: harvest@%.1fs count=%d; HAUL_RAW=%s; meal credits=%d timings=%s; pending raw@Grow=%d" % [_grow_harvest_elapsed, _grow_harvest_count, str(_haul_raw_proof), _meal_credit_count, str(_meal_credit_timings), game.job_system.get_pending_raw_food_at(GROW_CELL)])
 	printerr("fresh-wing day7-designate: issued@%.1fs dig=%s zone=%s; progress@%.1fs complete@%.1fs haul@%.1fs; tip_left=%s; salvage pre=%d now=%d" % [_designate_issued_elapsed, _designate_dig_cell, _designate_zone_cell, _designate_dig_progress_elapsed, _designate_dig_complete_elapsed, _designate_haul_deposit_elapsed, _designate_tip_left, _designate_pre_salvage, game.food_system.salvage])
