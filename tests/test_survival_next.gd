@@ -2241,6 +2241,8 @@ func _test_salvage_supplied_charge_with_reserve() -> void:
 		_assert_equal(shortfall, sample.shortfall, "only unfunded Charge contributes remaining cost")
 		_assert_equal(tiles, sample.tiles, "mixed Charge recovery tile count")
 		if sample.salvage < BreachSystem.PATCH_COST:
+			# Guard premise: nothing delivered or in transit, so the patch stays 4 short.
+			_assert_equal([game.breach_system.patch_delivered, game.job_system.get_breach_supply_in_transit()], [0, 0], "hatch has 0 delivered and 0 in transit under the guard")
 			_assert_step(game, HATCH_SHORT_2_NEXT, "dig", HATCH_SHORT_4_HELP)
 		else:
 			_assert_salvage_tip(game, shortfall, tiles)

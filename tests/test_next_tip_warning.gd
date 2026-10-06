@@ -11,9 +11,16 @@ const ENABLE_HAUL := ["Next: YOU enable Haul [P] · THEY patch hatch", "Open PRI
 const ENABLE_CRAFT := ["Next: YOU enable Craft [P] · THEY patch hatch", "Open PRIORITIES [P] and set Craft above OFF for an undrafted resident so crew auto-respond to the hatch.", "select"]
 const PATCH_SHORT_1 := ["Next: YOU mark 1 rock [E] · THEY fund the hatch patch", "The hatch patch is 2 salvage short. Each dug rock tile yields 3 salvage once hauled.", "dig"]
 const PATCH_SHORT_COVERED := ["Next: YOU leave Dig + Haul on · THEY fund the hatch patch", "The hatch patch is 2 salvage short. Each dug rock tile yields 3 salvage once hauled.", "select"]
+const PATCH_SHORT_COVERED_NO_DIG := ["Next: YOU leave Haul on · THEY fund the hatch patch", "The hatch patch is 2 salvage short. Each dug rock tile yields 3 salvage once hauled.", "select"]
 const ENABLE_DIG := ["Next: YOU enable Dig [P] · THEY fund the hatch patch", "The hatch patch is 2 salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage.", "select"]
 const PLACE_BUNKS := ["Next: YOU place bunks · THEY craft", "Place bunks so tired undrafted crew have a bed.", "bed"]
 const PATCH_SHORT_TRANSIT := ["Next: YOU mark 1 rock [E] · THEY fund the hatch patch", "The hatch patch is 1 salvage short. Each dug rock tile yields 3 salvage once hauled.", "dig"]
+const LOCK_HELP := "Acknowledge the hatch warning first (RESUME RESPONSE, FOCUS HATCH or Space); R and P stay locked until then. "
+const UNDRAFT_LOCKED := ["Next: YOU acknowledge warning · then undraft crew [R]", LOCK_HELP + "Drafted crew never answer the hatch. Select a drafted resident and press R to undraft.", "select"]
+const ENABLE_BOTH_LOCKED := ["Next: YOU acknowledge warning · then enable Haul + Craft [P]", LOCK_HELP + "Open PRIORITIES [P] and set Haul + Craft above OFF for an undrafted resident so crew auto-respond to the hatch.", "select"]
+const ENABLE_DIG_LOCKED := ["Next: YOU acknowledge warning · then enable Dig [P]", LOCK_HELP + "The hatch patch is 2 salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage.", "select"]
+const LOSS_LINE := "WING LOST // no residents remain"
+const CARRIER_WALK_TICKS := 200
 
 
 func _run() -> void:
@@ -29,6 +36,9 @@ func _run() -> void:
 	_run_case("forced responder is not counted as coverage", _test_forced_not_counted)
 	_run_case("DORMANT and SEALED never take the blocker branch", _test_dormant_and_sealed)
 	_run_case("HUD walk shows the blocker from WARNING through OPEN, then clears", _test_hud_walk)
+	_run_case("unacknowledged WARNING asks to acknowledge before R or P", _test_unacknowledged_warning)
+	_run_case("a real carrier switched OFF is released and Next asks for Haul", _test_carrier_switched_off)
+	_run_case("a real wipe shows the loss line instead of a Next tip", _test_loss_screen)
 	print("NEXT TIP WARNING TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
 
@@ -140,8 +150,10 @@ func _test_drafted_and_dead() -> void:
 		game.residents[index].drafted = false
 		game.residents[index].alive = false
 	_assert_tuple(game, ENABLE_HAUL, "dead crew with Haul on do not count")
+	game.residents[0].drafted = true
+	_assert_tuple(game, UNDRAFT, "the last living resident drafted asks to undraft")
 	game.residents[0].alive = false
-	_assert_tuple(game, UNDRAFT, "no living undrafted crew left")
+	_assert_equal(game.player_orders._breach_blocker_step(), {}, "no living crew left: no undraft blocker")
 	_dispose(game)
 
 
@@ -166,7 +178,42 @@ func _test_salvage_short() -> void:
 	_assert_tuple(game, PATCH_SHORT_TRANSIT, "stock 1 + delivered 1 + transit 1 is 1 short")
 	supply["in_transit"] = 2
 	_assert_tuple(game, DIG, "stock 1 + delivered 1 + transit 2 covers the patch")
+	# Delivered and in-transit vary independently, so neither can stand in for the other.
+	_set_supply(game, supply, 2, 1, 0)
+	_assert_tuple(game, PATCH_SHORT_TRANSIT, "delivered 2 + transit 1 + stock 0 is 1 short")
+	_set_supply(game, supply, 0, 2, 1)
+	_assert_tuple(game, PATCH_SHORT_TRANSIT, "delivered 0 + transit 2 + stock 1 is 1 short")
+	_set_supply(game, supply, 3, 0, 0)
+	_assert_tuple(game, PATCH_SHORT_TRANSIT, "delivered 3 + transit 0 + stock 0 is 1 short")
+	var combos := 0
+	var mismatches: Array[String] = []
+	for delivered in range(0, BreachSystem.PATCH_COST):
+		for transit in range(0, BreachSystem.PATCH_COST - delivered + 1):
+			for stock in range(0, 7):
+				combos += 1
+				_set_supply(game, supply, delivered, transit, stock)
+				var short := maxi(0, BreachSystem.PATCH_COST - delivered - transit - stock)
+				var blocker: Dictionary = game.player_orders._breach_blocker_step()
+				var actual: Array = [] if blocker.is_empty() else [blocker.text, blocker.help, blocker.tool]
+				var expected: Array = []
+				if short > 0:
+					expected = [
+						"Next: YOU mark %d rock [E] · THEY fund the hatch patch" % ceili(float(short) / 3.0),
+						"The hatch patch is %d salvage short. Each dug rock tile yields 3 salvage once hauled." % short,
+						"dig",
+					]
+				var scheduler_short: bool = game.job_system._job_priority(JobSystem.JobType.DIG) == 3
+				if actual != expected or scheduler_short != (short > 0):
+					mismatches.append("d%d t%d s%d: %s scheduler_short=%s" % [delivered, transit, stock, str(actual), str(scheduler_short)])
+	_assert_equal(combos, 98, "sweep covers every delivered/transit/stock combo")
+	_assert_equal(mismatches, [] as Array[String], "tip shortfall matches PATCH_COST - delivered - transit - stock and the scheduler")
 	_dispose(game)
+
+
+func _set_supply(game: VaultGame, supply: Dictionary, delivered: int, transit: int, stock: int) -> void:
+	game.breach_system.patch_delivered = delivered
+	supply["in_transit"] = transit
+	game.food_system.salvage = stock
 
 
 func _test_dig_off_short() -> void:
@@ -178,7 +225,9 @@ func _test_dig_off_short() -> void:
 	game.job_system.queue_rubble(Vector2i(18, 11), 1)
 	_assert_tuple(game, ENABLE_DIG, "1 rubble does not cover a 2 shortfall")
 	game.job_system.queue_rubble(Vector2i(19, 11), 1)
-	_assert_tuple(game, PATCH_SHORT_COVERED, "2 rubble covers the shortfall without Dig")
+	_assert_tuple(game, PATCH_SHORT_COVERED_NO_DIG, "2 rubble covers the shortfall without Dig: leave Haul on")
+	game.residents[1].set_work_priority("dig", VaultResident.DEFAULT_WORK_PRIORITY)
+	_assert_tuple(game, PATCH_SHORT_COVERED, "with a digger the covered tip names Dig + Haul")
 	_dispose(game)
 
 
@@ -264,5 +313,107 @@ func _test_hud_walk() -> void:
 	_set_all(game, "haul", VaultResident.DEFAULT_WORK_PRIORITY)
 	_set_all(game, "craft", VaultResident.DEFAULT_WORK_PRIORITY)
 	game.player_orders.refresh()
-	_assert_true(game.player_orders.objective_label.text != ENABLE_BOTH[0], "enabling Haul + Craft clears the blocker from the HUD")
+	_assert_equal(game.player_orders.objective_label.text, DIG[0], "enabling Haul + Craft clears the blocker from the HUD")
+	_assert_tuple(game, DIG, "exact tip after re-enabling")
+	_dispose(game)
+
+
+func _test_unacknowledged_warning() -> void:
+	var game := _healthy()
+	_set_all(game, "haul", VaultResident.PRIORITY_DISABLED)
+	_set_all(game, "craft", VaultResident.PRIORITY_DISABLED)
+	# Real path, left unacknowledged: one tick across 60 s raises the modal.
+	game.day_cycle.elapsed_seconds = BreachSystem.WARNING_AT_SECONDS - TICK
+	game.step_simulation(TICK)
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.WARNING, "real hatch WARNING")
+	_assert_false(game.breach_system.warning_acknowledged, "warning starts unacknowledged")
+	_assert_true(game.player_orders.breach_warning_panel.visible, "warning modal is visible")
+	_assert_tuple(game, ENABLE_BOTH_LOCKED, "unacknowledged: acknowledge before enabling Haul + Craft")
+	game.player_orders.toggle_work_priorities()
+	_assert_false(game.player_orders.is_work_priorities_open(), "P is refused while the warning is unacknowledged")
+	_set_all(game, "haul", VaultResident.DEFAULT_WORK_PRIORITY)
+	_set_all(game, "craft", VaultResident.DEFAULT_WORK_PRIORITY)
+	game.food_system.salvage = 2
+	_set_all(game, "dig", VaultResident.PRIORITY_DISABLED)
+	_assert_tuple(game, ENABLE_DIG_LOCKED, "unacknowledged: acknowledge before enabling Dig")
+	_set_all(game, "dig", VaultResident.DEFAULT_WORK_PRIORITY)
+	_assert_tuple(game, PATCH_SHORT_1, "marking rock is not locked by the modal")
+	for resident: VaultResident in game.residents:
+		resident.drafted = true
+	_assert_tuple(game, UNDRAFT_LOCKED, "unacknowledged: acknowledge before undrafting")
+	var ari: VaultResident = game.residents[0]
+	game.select_resident(ari.resident_id)
+	var r_key := InputEventKey.new()
+	r_key.physical_keycode = KEY_R
+	r_key.pressed = true
+	game._unhandled_input(r_key)
+	_assert_true(ari.drafted, "R is refused while the warning is unacknowledged")
+	game.toggle_pause()
+	_assert_true(game.breach_system.warning_acknowledged, "Space (pause key) acknowledges the warning")
+	_assert_false(game.player_orders.breach_warning_panel.visible, "acknowledging closes the modal")
+	_assert_tuple(game, UNDRAFT, "acknowledged: plain undraft tip")
+	# Acknowledging focuses the hatch and clears the selection; reselect, then R.
+	game.select_resident(ari.resident_id)
+	game._unhandled_input(r_key)
+	_assert_false(ari.drafted, "R undrafts once the warning is acknowledged")
+	_assert_tuple(game, PATCH_SHORT_1, "undrafted crew move Next on to the salvage shortfall")
+	# OPEN never locks R or P, even if a loaded snapshot carries an unacknowledged flag.
+	_open(game)
+	game.breach_system.warning_acknowledged = false
+	for resident: VaultResident in game.residents:
+		resident.drafted = true
+	_assert_tuple(game, UNDRAFT, "OPEN keeps the plain undraft tip")
+	_assert_false(game.toggle_resident_draft(ari.resident_id), "R undrafts in OPEN regardless of the flag")
+	_dispose(game)
+
+
+func _test_carrier_switched_off() -> void:
+	var game := _healthy()
+	var carrier: VaultResident = game.residents[0]
+	for index in range(1, game.residents.size()):
+		game.residents[index].set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+	_warn(game)
+	var picked := false
+	for _tick in CARRIER_WALK_TICKS:
+		game.step_simulation(TICK)
+		if carrier.current_job_type == JobSystem.JobType.SUPPLY_BREACH and game.job_system.get_breach_supply_in_transit() > 0:
+			picked = true
+			break
+	_assert_true(picked, "the only Haul resident picks up hatch salvage")
+	_assert_false(carrier.is_forced_job, "the carry is automatic, not forced")
+	var transit := game.job_system.get_breach_supply_in_transit()
+	var stock := game.food_system.salvage
+	var supply: Dictionary = {}
+	for job: Dictionary in game.job_system.jobs:
+		if int(job.type) == JobSystem.JobType.SUPPLY_BREACH and not bool(job.get("done", false)):
+			supply = job
+	_assert_equal([carrier.carrying, int(supply.get("reserved_by", -1))], [transit, carrier.resident_id], "the carrier holds the hatch salvage and the supply job")
+	_assert_equal(game.breach_system.patch_delivered + transit, BreachSystem.PATCH_COST, "the carry covers the whole patch")
+	_assert_equal(game.player_orders._breach_blocker_step(), {}, "a carry in flight covers the patch: no blocker")
+	_assert_equal(game.cycle_work_priority(carrier.resident_id, "haul"), VaultResident.PRIORITY_LOWEST, "player cycles Haul 3 -> 4")
+	_assert_equal(game.cycle_work_priority(carrier.resident_id, "haul"), VaultResident.PRIORITY_DISABLED, "player cycles Haul 4 -> OFF")
+	_assert_equal(game.job_system.get_breach_supply_in_transit(), 0, "switching Haul OFF releases the carry")
+	_assert_equal(game.food_system.salvage, stock + transit, "the released carry returns to stock")
+	_assert_equal(carrier.current_job_id, -1, "the carrier holds no job")
+	_assert_equal([carrier.carrying, int(supply.reserved_by)], [0, -1], "no cargo and no reservation remain")
+	_assert_tuple(game, ENABLE_HAUL, "nobody left on Haul: enable Haul")
+	_dispose(game)
+
+
+func _test_loss_screen() -> void:
+	var game := _healthy()
+	_set_all(game, "haul", VaultResident.PRIORITY_DISABLED)
+	_set_all(game, "craft", VaultResident.PRIORITY_DISABLED)
+	_warn(game)
+	_open(game)
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, ENABLE_BOTH[0], "OPEN blocker before the wipe")
+	for resident: VaultResident in game.residents:
+		resident.kill()
+	_assert_true(game.ended and game.outcome == "loss", "a real wipe ends the shift as a loss")
+	_assert_true(game.player_orders.outcome_panel.visible, "WING LOST panel shown")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, LOSS_LINE, "loss screen shows the outcome, not a Next tip")
+	_assert_equal(game.player_orders.objective_label.get_theme_color("font_color"), Color("ef6860"), "loss line uses the red outcome colour")
+	_assert_equal(game.player_orders._breach_blocker_step(), {}, "no living crew: no hatch blocker")
 	_dispose(game)

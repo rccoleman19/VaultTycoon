@@ -986,16 +986,24 @@ func _breach_blocker_step() -> Dictionary:
 	if not breach.is_response_active():
 		return {}
 	var undrafted := false
+	var drafted := false
 	for resident: VaultResident in game.residents:
-		if resident.alive and not resident.drafted:
+		if not resident.alive:
+			continue
+		if resident.drafted:
+			drafted = true
+		else:
 			undrafted = true
 			break
 	if not undrafted:
-		return {
-			"text": "Next: YOU undraft crew [R] · THEY respond to hatch",
-			"help": "Drafted crew never answer the hatch. Select a drafted resident and press R to undraft.",
-			"tool": "select",
-		}
+		if not drafted:
+			# Nobody is alive (the loss screen): there is no hatch advice to give.
+			return {}
+		return _hatch_key_step(
+			"undraft crew [R]",
+			"respond to hatch",
+			"Drafted crew never answer the hatch. Select a drafted resident and press R to undraft.",
+		)
 	var missing: Array[String] = []
 	if breach.needs_supply() and not _has_eligible_worker("haul"):
 		missing.append("Haul")
@@ -1003,11 +1011,11 @@ func _breach_blocker_step() -> Dictionary:
 		missing.append("Craft")
 	if not missing.is_empty():
 		var names := " + ".join(missing)
-		return {
-			"text": "Next: YOU enable %s [P] · THEY patch hatch" % names,
-			"help": "Open PRIORITIES [P] and set %s above OFF for an undrafted resident so crew auto-respond to the hatch." % names,
-			"tool": "select",
-		}
+		return _hatch_key_step(
+			"enable %s [P]" % names,
+			"patch hatch",
+			"Open PRIORITIES [P] and set %s above OFF for an undrafted resident so crew auto-respond to the hatch." % names,
+		)
 	var shortfall := maxi(
 		0,
 		BreachSystem.PATCH_COST
@@ -1016,19 +1024,39 @@ func _breach_blocker_step() -> Dictionary:
 			- game.food_system.salvage,
 	)
 	if shortfall > 0:
-		if shortfall > game.job_system.get_uncredited_rubble() and not _has_eligible_worker("dig"):
-			return {
-				"text": "Next: YOU enable Dig [P] · THEY fund the hatch patch",
-				"help": "The hatch patch is %d salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage." % shortfall,
-				"tool": "select",
-			}
+		var has_digger := _has_eligible_worker("dig")
+		if shortfall > game.job_system.get_uncredited_rubble() and not has_digger:
+			return _hatch_key_step(
+				"enable Dig [P]",
+				"fund the hatch patch",
+				"The hatch patch is %d salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage." % shortfall,
+			)
 		var tiles := _salvage_dig_tiles(shortfall)
+		var covered := "Next: YOU leave Dig + Haul on · THEY fund the hatch patch" if has_digger else "Next: YOU leave Haul on · THEY fund the hatch patch"
 		return {
-			"text": "Next: YOU mark %d rock [E] · THEY fund the hatch patch" % tiles if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the hatch patch",
+			"text": "Next: YOU mark %d rock [E] · THEY fund the hatch patch" % tiles if tiles > 0 else covered,
 			"help": "The hatch patch is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [shortfall, DIG_SALVAGE_YIELD],
 			"tool": "dig" if tiles > 0 else "select",
 		}
 	return {}
+
+
+func _hatch_key_step(action: String, they: String, help: String) -> Dictionary:
+	# R (draft) and P (priorities) are refused while the WARNING modal is
+	# unacknowledged (game.toggle_resident_draft, show_work_priorities), so name
+	# the acknowledgement first. OPEN never locks them.
+	var breach := game.breach_system
+	if breach.phase == BreachSystem.Phase.WARNING and not breach.warning_acknowledged:
+		return {
+			"text": "Next: YOU acknowledge warning · then %s" % action,
+			"help": "Acknowledge the hatch warning first (RESUME RESPONSE, FOCUS HATCH or Space); R and P stay locked until then. %s" % help,
+			"tool": "select",
+		}
+	return {
+		"text": "Next: YOU %s · THEY %s" % [action, they],
+		"help": help,
+		"tool": "select",
+	}
 
 
 func _primary_next_step() -> Dictionary:
@@ -1420,6 +1448,12 @@ func _refresh_objective() -> void:
 		if not game.oxygen_system.is_breathable():
 			blockers.append("RESTORE O2 TO 15%")
 		objective_label.text = "VICTORY PENDING // %s" % " + ".join(blockers)
+		objective_label.add_theme_color_override("font_color", Color("ef6860"))
+		_expand_details_on_urgency()
+		return
+	if game.ended and game.outcome == "loss":
+		# The WING LOST panel is up and no crew remain: show the outcome, not a Next tip.
+		objective_label.text = "WING LOST // no residents remain"
 		objective_label.add_theme_color_override("font_color", Color("ef6860"))
 		_expand_details_on_urgency()
 		return
