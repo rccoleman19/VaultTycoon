@@ -404,3 +404,4 @@ circuits, spatial gas cells, doors, surface play, caravans, factions, research,
 mods, multiplayer, IAP, ads, analytics, final art/audio, or mobile work.
 
 When a Charge Node blueprint is short of salvage, Next tells you how many more rock tiles to mark with Dig, or to leave Dig + Haul on when queued work covers it. The tip accounts for shared stock, hatch patch reserves, deliveries, and cargo already on its way. Unfinished blueprint inspectors show the same per-kind shortfall alongside salvage and assembly progress.
+Before the Day-7 hold tip, Next gives the same salvage guidance for the oldest unfinished, unsupplied non-core blueprint whose kind is short of salvage; funded builds keep the Day-7 tip.

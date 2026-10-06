@@ -942,10 +942,16 @@ func _charge_finish_step() -> Dictionary:
 			"help": "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.",
 			"tool": "select",
 		}
+	return _fund_blueprint_step(VaultBuilding.Kind.GENERATOR)
+
+
+func _fund_blueprint_step(kind: int) -> Dictionary:
+	var shortfall := _salvage_shortfall(kind)
 	var tiles := _salvage_dig_tiles(shortfall)
+	var kind_name: String = VaultBuilding.KIND_NAMES[kind]
 	return {
-		"text": "Next: YOU mark %d rock [E] · THEY fund the Charge Node" % tiles if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the Charge Node",
-		"help": "The Charge Node blueprint is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [shortfall, DIG_SALVAGE_YIELD],
+		"text": "Next: YOU mark %d rock [E] · THEY fund the %s" % [tiles, kind_name] if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the %s" % kind_name,
+		"help": "The %s blueprint is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [kind_name, shortfall, DIG_SALVAGE_YIELD],
 		"tool": "dig" if tiles > 0 else "select",
 	}
 
@@ -1314,6 +1320,16 @@ func _primary_next_step() -> Dictionary:
 			"tool": "select",
 		}
 	if not game.day_cycle.completed:
+		var oldest_short_blueprint: VaultBuilding = null
+		for building: VaultBuilding in game.buildings:
+			if building.complete or building.is_emergency_core or building.is_supplied():
+				continue
+			if _salvage_shortfall(building.kind) <= 0:
+				continue
+			if oldest_short_blueprint == null or building.building_id < oldest_short_blueprint.building_id:
+				oldest_short_blueprint = building
+		if oldest_short_blueprint != null:
+			return _fund_blueprint_step(oldest_short_blueprint.kind)
 		return {
 			"text": "Next: YOU designate needs · THEY hold Day 7",
 			"help": "Keep designating dig/build/stockpile. Defaults keep food, power, and air running.",
