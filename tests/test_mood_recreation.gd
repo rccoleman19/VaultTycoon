@@ -451,7 +451,7 @@ func _test_survival_interruptions_and_fallback() -> void:
 	_assert_approximately(resident.stress_break_left, 7.0, 0.0001, "critical mood begins the seven-second fallback break")
 	game.job_system.advance(7.0)
 	_assert_approximately(resident.stress_break_left, 0.0, 0.0001, "fallback break ends after seven seconds")
-	_assert_approximately(resident.needs.mood, 17.0, 0.0001, "fallback break grants only eight mood")
+	_assert_approximately(resident.needs.mood, 25.0, 0.0001, "fallback break grants sixteen mood")
 
 	var severe_needs := ResidentNeeds.new()
 	severe_needs.food = 100.0
