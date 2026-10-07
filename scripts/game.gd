@@ -895,7 +895,8 @@ func _select_at(cell: Vector2i) -> bool:
 	var building := get_building_at(cell)
 	var residents_at_cell: Array[VaultResident] = []
 	for resident: VaultResident in residents:
-		if resident.alive and resident.get_cell(map_grid) == cell:
+		# The drawn hex, not sim occupancy (which stays put until a step arrives).
+		if resident.alive and map_grid.world_to_cell(resident.position) == cell:
 			residents_at_cell.append(resident)
 	if not residents_at_cell.is_empty():
 		for index in residents_at_cell.size():
@@ -1028,7 +1029,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			set_tool("select")
 			return
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT and mouse_event.pressed:
-			issue_order(_pick_cell_from_screen())
+			issue_order_at_screen(get_viewport().get_mouse_position())
 	if event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
 		if _dragging_camera:
@@ -1099,6 +1100,28 @@ func _sync_3d_play_view(force_rebuild := false) -> void:
 	map_view_3d.rebuild_map(force_rebuild)
 	map_view_3d.apply_camera_focus(world_camera.position, world_camera.zoom.x)
 	map_view_3d.sync_actors(residents, buildings, true, job_system.jobs, breach_system.phase, breach_system.patch_work_left)
+
+
+## Left click: the select tool first takes a drawn resident capsule in front of
+## the terrain; every other tool, and a select click that misses, uses the
+## terrain-aware hex. Simulation occupancy is never read or changed here.
+func issue_order_at_screen(screen_pos: Vector2) -> bool:
+	if active_tool == "select" and not (ended or tutorial_open or player_orders.is_help_open()):
+		var hit := get_resident_by_id(map_view_3d.pick_resident_id(screen_pos, residents))
+		if hit != null:
+			var current := get_resident_by_id(selected_resident_id)
+			var current_under_cursor := false
+			if current != null and current.alive and map_grid.world_to_cell(current.position) == map_grid.world_to_cell(hit.position):
+				var only_current: Array[VaultResident] = [current]
+				current_under_cursor = current == hit or map_view_3d.pick_resident_id(screen_pos, only_current) == current.resident_id
+			if hit.alive and not current_under_cursor:
+				select_resident(hit.resident_id)
+				return true
+			# Re-clicking the selected resident (or clicking a body) resolves on
+			# the drawn hex, keeping the cycle through co-located residents and
+			# the fixture there.
+			return _select_at(map_grid.world_to_cell(hit.position))
+	return issue_order(map_view_3d.pick_cell(screen_pos))
 
 
 func _pick_cell_from_screen() -> Vector2i:
