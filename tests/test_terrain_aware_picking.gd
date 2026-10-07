@@ -50,6 +50,16 @@ func _run() -> void:
 	_run_case("terrain in front of a capsule wins", _test_terrain_occludes)
 	_run_case("dig and build tools ignore residents", _test_tools_ignore_residents)
 	_run_case("drafted right-click uses the terrain-aware hex", _test_right_click)
+	for zoom: float in EDGE_ZOOMS:
+		_run_case("starting fixture tops and fronts pick their own hex at zoom %s" % zoom, _test_fixture_parts.bind(zoom))
+	_run_case("every fixture kind's tops and fronts pick its own hex", _test_fixture_kinds)
+	_run_case("a build click on a fixture top does not build behind it", _test_fixture_build_click)
+	_run_case("a fixture in front of a capsule hides it", _test_fixture_occludes_capsule)
+	_run_case("terrain in front of a fixture wins", _test_terrain_occludes_fixture)
+	_run_case("a blueprint picks at its drawn scale", _test_blueprint_scale)
+	_run_case("cylinder parts pick as drawn cylinders, not their boxes", _test_cylinder_not_box)
+	for phase: int in [BreachSystem.Phase.DORMANT, BreachSystem.Phase.WARNING, BreachSystem.Phase.OPEN]:
+		_run_case("hatch hex click order: capsule first, then the hatch (%s)" % BreachSystem.Phase.keys()[phase], _test_hatch_click_order.bind(phase))
 	print("TERRAIN AWARE PICKING TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
 
@@ -639,6 +649,269 @@ func _test_right_click() -> void:
 	_click(game, _screen(game, Vector3(point.x, MapView3D.FLOOR_HEIGHT, point.y)), MOUSE_BUTTON_RIGHT)
 	var ari: VaultResident = game.get_resident_by_id(1)
 	_assert_equal(ari.manual_destination, target, "drafted move goes to the floor hex under the cursor")
+	game.free()
+
+
+# Residents wait on (18,12), behind every starting fixture and off their rays.
+func _park_residents(game: VaultGame) -> void:
+	for resident: VaultResident in game.residents:
+		resident.position = game.map_grid.cell_to_world(Vector2i(18, 12))
+	game._sync_3d_play_view(true)
+
+
+# The top-face and camera-facing (+Z) face centres of every drawn part.
+func _part_samples(proxy: Node3D) -> Array:
+	var samples := []
+	for part: MeshInstance3D in proxy.get_children():
+		var box := part.mesh.get_aabb()
+		samples.append(["%s top" % part.name, part.global_transform * (box.get_center() + Vector3(0.0, box.size.y * 0.5, 0.0))])
+		samples.append(["%s front" % part.name, part.global_transform * (box.get_center() + Vector3(0.0, 0.0, box.size.z * 0.5))])
+	return samples
+
+
+func _highest_top(proxy: Node3D) -> Vector3:
+	var best := Vector3(0.0, -INF, 0.0)
+	for sample: Array in _part_samples(proxy):
+		if String(sample[0]).ends_with(" top") and sample[1].y > best.y:
+			best = sample[1]
+	return best
+
+
+func _capsule_on_ray(game: VaultGame, screen: Vector2, resident: VaultResident) -> bool:
+	var view := game.map_view_3d
+	var proxy: MeshInstance3D = view._resident_proxies[resident.resident_id]
+	var to_local := proxy.global_transform.affine_inverse()
+	return view._ray_capsule(to_local * view.camera_3d.project_ray_origin(screen), to_local.basis * view.camera_3d.project_ray_normal(screen)) < INF
+
+
+func _test_fixture_parts(zoom: float) -> void:
+	var game := _spawn_game(zoom)
+	_park_residents(game)
+	_assert_equal(game.buildings.size(), 3, "starting layout has the Core, the Lumen and the Salvage Bay")
+	for building: VaultBuilding in game.buildings:
+		_focus(game, zoom, building.cell)
+		var proxy: Node3D = game.map_view_3d._building_proxies[building.building_id]
+		for sample: Array in _part_samples(proxy):
+			var screen := _screen(game, sample[1])
+			var label := "%s %s y %.2f" % [building.get_display_name(), sample[0], sample[1].y]
+			_assert_equal(game.map_view_3d.pick_cell(screen), building.cell, label)
+			_clear_selection(game)
+			_click(game, screen)
+			_assert_equal(_selection_label(game), "B%d" % building.building_id, "select click on %s" % label)
+	game.free()
+
+
+func _test_fixture_kinds() -> void:
+	var cell := Vector2i(25, 14)
+	for kind: int in VaultBuilding.Kind.values():
+		var game := _spawn_game(1.0)
+		_focus(game, 1.0, cell)
+		_park_residents(game)
+		game._spawn_starting_fixture(kind, cell, false)
+		game._sync_3d_play_view(true)
+		var building: VaultBuilding = game.get_building_at(cell)
+		var proxy: Node3D = game.map_view_3d._building_proxies[building.building_id]
+		var kind_name: String = VaultBuilding.Kind.keys()[kind]
+		# Picking skips hexes the ray never nears, so every part must stay in its hex.
+		var reach := 0.0
+		for part: MeshInstance3D in proxy.get_children():
+			var box := part.mesh.get_aabb()
+			for corner: int in 8:
+				var point: Vector3 = part.global_transform * box.get_endpoint(corner)
+				reach = maxf(reach, Vector2(point.x, point.z).distance_to(game.map_grid.cell_to_world(cell)))
+		_assert_true(reach <= MapGrid.HEX_SIZE, "%s is drawn inside its hex (reach %.2f)" % [kind_name, reach])
+		for sample: Array in _part_samples(proxy):
+			_assert_equal(game.map_view_3d.pick_cell(_screen(game, sample[1])), cell, "%s %s y %.2f" % [kind_name, sample[0], sample[1].y])
+		_clear_selection(game)
+		_click(game, _screen(game, _highest_top(proxy)))
+		_assert_equal(_selection_label(game), "B%d" % building.building_id, "select click on the %s's highest top" % kind_name)
+		game.free()
+
+
+func _test_fixture_build_click() -> void:
+	var game := _spawn_game(1.0)
+	_park_residents(game)
+	var lumen := game.get_building_at(Vector2i(22, 14))
+	_assert_true(lumen != null and lumen.kind == VaultBuilding.Kind.LAMP, "the Lumen stands on (22,14)")
+	if lumen == null:
+		game.free()
+		return
+	var screen := _screen(game, _highest_top(game.map_view_3d._building_proxies[lumen.building_id]))
+	game.set_tool("bed")
+	var before := game.buildings.size()
+	_move(screen)
+	_assert_equal(game.map_grid.hover_cell, lumen.cell, "hovering the Lumen's top shows the Lumen's hex")
+	_click(game, screen)
+	_assert_equal(game.buildings.size(), before, "a bed click on the Lumen's top places nothing behind it")
+	game.free()
+
+
+# Ari stands behind the Lumen on its hex; Bo, selected, shares the hex off the ray.
+# A click on the Lumen's face is a click on the Lumen: no capsule hit, so the hex
+# cycle moves on from Bo to the Lumen instead of jumping to hidden Ari.
+func _test_fixture_occludes_capsule() -> void:
+	var game := _spawn_game(1.0)
+	var view := game.map_view_3d
+	var hex := Vector2i(22, 14)
+	var lumen := game.get_building_at(hex)
+	var center := game.map_grid.cell_to_world(hex)
+	var ari: VaultResident = game.get_resident_by_id(1)
+	var bo: VaultResident = game.get_resident_by_id(2)
+	_park_residents(game)
+	ari.position = center + Vector2(0.0, -6.0)
+	bo.position = center + Vector2(9.0, 0.0)
+	_focus(game, 1.0, hex)
+	_assert_equal(game.map_grid.world_to_cell(ari.position), hex, "Ari is drawn on the Lumen's hex")
+	_assert_equal(game.map_grid.world_to_cell(bo.position), hex, "Bo is drawn on the Lumen's hex")
+	var proxy: Node3D = view._building_proxies[lumen.building_id]
+	var hidden := 0
+	for sample: Array in _part_samples(proxy):
+		var screen := _screen(game, sample[1])
+		if not _capsule_on_ray(game, screen, ari) or _capsule_on_ray(game, screen, bo):
+			continue
+		hidden += 1
+		_assert_equal(view.call("pick_resident_id", screen, game.residents), -1, "Lumen %s hides Ari behind it" % sample[0])
+		_assert_equal(view.pick_cell(screen), hex, "Lumen %s picks the Lumen's hex" % sample[0])
+		game.select_resident(2)
+		_click(game, screen)
+		_assert_equal(_selection_label(game), "B%d" % lumen.building_id, "Lumen %s with Bo selected selects the Lumen, not hidden Ari" % sample[0])
+	_assert_true(hidden >= 3, "at least three Lumen faces lie in front of Ari (got %d)" % hidden)
+	var head := _screen(game, Vector3(ari.position.x, 12.0, ari.position.y))
+	_assert_equal(view.call("pick_resident_id", head, game.residents), 1, "Ari's head above the Lumen is still pickable")
+	game.free()
+
+
+# A bed on a floor hex whose camera-side neighbours are rock: low points on its
+# front face that the rock hides pick the rock.
+func _test_terrain_occludes_fixture() -> void:
+	var game := _spawn_game(1.0)
+	var view := game.map_view_3d
+	var cell := Vector2i(-1, -1)
+	for candidate: Vector2i in game.map_grid.get_floor_cells():
+		if candidate == BreachSystem.HATCH_CELL or game.get_building_at(candidate) != null:
+			continue
+		var front := 0
+		var rock := 0
+		for neighbor: Vector2i in game.map_grid.get_neighbors(candidate):
+			if game.map_grid.cell_to_world(neighbor).y > game.map_grid.cell_to_world(candidate).y:
+				front += 1
+				if game.map_grid.get_tile(neighbor) == MapGrid.Tile.ROCK:
+					rock += 1
+		if front == 2 and rock == 2:
+			cell = candidate
+			break
+	_assert_true(cell != Vector2i(-1, -1), "a floor hex with rock on both camera-side neighbours exists")
+	if cell == Vector2i(-1, -1):
+		game.free()
+		return
+	_park_residents(game)
+	game._spawn_starting_fixture(VaultBuilding.Kind.BED, cell, false)
+	_focus(game, 1.0, cell)
+	var proxy: Node3D = view._building_proxies[game.get_building_at(cell).building_id]
+	var foot: MeshInstance3D = proxy.get_node("Foot")
+	var box := foot.mesh.get_aabb()
+	var hidden := 0
+	for x: float in [-3.5, 0.0, 3.5]:
+		for y: float in [-0.6, 0.0]:
+			var point: Vector3 = foot.global_transform * Vector3(x, y, box.end.z)
+			var screen := _screen(game, point)
+			var from := view.camera_3d.project_ray_origin(screen)
+			var terrain: Dictionary = view._pick_terrain(from, view.camera_3d.project_ray_normal(screen))
+			if terrain.get("t", INF) >= from.distance_to(point) - 0.01:
+				continue
+			hidden += 1
+			_assert_equal(game.map_grid.get_tile(terrain.cell), MapGrid.Tile.ROCK, "bed foot (%.1f, %.1f) is behind a rock" % [x, y])
+			_assert_equal(view.pick_cell(screen), terrain.cell, "bed foot (%.1f, %.1f) behind the rock picks the rock" % [x, y])
+	_assert_true(hidden >= 2, "at least two bed-foot points are hidden by rock (got %d)" % hidden)
+	game.free()
+
+
+# Blueprints are drawn at 0.5..1.0 scale; the air where the finished Lumen would be
+# is not the blueprint.
+func _test_blueprint_scale() -> void:
+	var game := _spawn_game(1.0)
+	var cell := Vector2i(25, 14)
+	_focus(game, 1.0, cell)
+	_park_residents(game)
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.LAMP, cell), "Lumen blueprint placed on (25,14)")
+	game._sync_3d_play_view(true)
+	var view := game.map_view_3d
+	var proxy: Node3D = view._building_proxies[game.get_building_at(cell).building_id]
+	_assert_true(absf(proxy.scale.x - 0.5) < 0.0001, "an undelivered blueprint is drawn at half scale")
+	var cap: MeshInstance3D = proxy.get_node("GuardCap")
+	var drawn_top := cap.global_transform * Vector3(0.0, 0.25, 0.0)
+	_assert_equal(view.pick_cell(_screen(game, drawn_top)), cell, "the drawn half-scale cap top picks the blueprint")
+	var full_top := Vector3(drawn_top.x, MapView3D.FLOOR_HEIGHT + 10.3, cap.global_position.z)
+	var screen := _screen(game, full_top)
+	var from := view.camera_3d.project_ray_origin(screen)
+	var terrain: Dictionary = view._pick_terrain(from, view.camera_3d.project_ray_normal(screen))
+	_assert_true(terrain.get("cell", cell) != cell, "the full-size cap top is over another hex's terrain")
+	_assert_equal(view.pick_cell(screen), terrain.get("cell", cell), "air where a finished Lumen's cap would be picks the terrain behind")
+	game.free()
+
+
+# The hatch disc (CylinderMesh r 5) is alone near its back-right box corner: a ray
+# through that corner, outside the drawn disc, hits no fixture or hatch.
+func _test_cylinder_not_box() -> void:
+	var game := _spawn_game(1.0)
+	var view := game.map_view_3d
+	if not view.has_method("_pick_fixture"):
+		_fail("_pick_fixture", "MapView3D._pick_fixture is missing")
+		_assertion_count += 1
+		game.free()
+		return
+	_park_residents(game)
+	_focus(game, 1.0, BreachSystem.HATCH_CELL)
+	var disc: MeshInstance3D = view._hatch_proxy
+	var corner: Vector3 = disc.global_transform * Vector3(4.6, 1.5, -4.6)
+	_assert_true(disc.mesh.get_aabb().grow(0.001).has_point(disc.global_transform.affine_inverse() * corner), "the probe point is inside the disc's box")
+	var screen := _screen(game, corner)
+	var hit: Dictionary = view.call("_pick_fixture", view.camera_3d.project_ray_origin(screen), view.camera_3d.project_ray_normal(screen))
+	_assert_true(hit.is_empty(), "a ray through the disc's box corner misses the drawn disc (got %s)" % hit)
+	var rim: Vector3 = disc.global_transform * Vector3(3.2, 1.5, -3.2)
+	var rim_screen := _screen(game, rim)
+	var rim_hit: Dictionary = view.call("_pick_fixture", view.camera_3d.project_ray_origin(rim_screen), view.camera_3d.project_ray_normal(rim_screen))
+	_assert_equal(rim_hit.get("cell", Vector2i(-1, -1)), BreachSystem.HATCH_CELL, "a ray through the disc top inside its rim hits the hatch")
+	game.free()
+
+
+# Pinned at #84: a capsule under the cursor wins on the hatch hex; during a breach,
+# re-clicking that selected capsule moves on to the hatch, and a click on the hatch
+# hex off every capsule opens the hatch. Dormant, it is an ordinary hex (Bo).
+# New: the drawn hatch disc hides a standing resident's feet like any fixture.
+func _test_hatch_click_order(phase: int) -> void:
+	var game := _spawn_game(1.0)
+	var view := game.map_view_3d
+	var hatch := BreachSystem.HATCH_CELL
+	var center := game.map_grid.cell_to_world(hatch)
+	_park_residents(game)
+	var bo: VaultResident = game.get_resident_by_id(2)
+	bo.position = center
+	game.breach_system.phase = phase
+	_focus(game, 1.0, hatch)
+	var breach := phase != BreachSystem.Phase.DORMANT
+	var proxy: MeshInstance3D = view._resident_proxies[2]
+	var capsule := _screen(game, proxy.global_position + Vector3(0.0, 6.5, 0.0))
+	_assert_capsule_hit(game, capsule, "Bo on the hatch")
+	_clear_selection(game)
+	var got: Array[String] = []
+	for _i: int in 3:
+		_click(game, capsule)
+		got.append("HATCH" if game.selected_breach else _selection_label(game))
+	_assert_equal(got, ["R2", "HATCH" if breach else "R2", "R2"], "three capsule clicks on the hatch hex")
+	var floor_screen := _screen(game, Vector3(center.x - 7.0, MapView3D.FLOOR_HEIGHT, center.y - 5.0))
+	_assert_true(not _capsule_on_ray(game, floor_screen, bo), "the hatch-hex floor point is off Bo's capsule")
+	_assert_equal(view.pick_cell(floor_screen), hatch, "the floor point is on the hatch hex")
+	_clear_selection(game)
+	_click(game, floor_screen)
+	_assert_equal("HATCH" if game.selected_breach else _selection_label(game), "HATCH" if breach else "R2", "a hatch-hex floor click off every capsule")
+	var disc := _screen(game, Vector3(center.x, 3.5, center.y + 4.5))
+	_assert_true(_capsule_on_ray(game, disc, bo), "Bo's feet lie behind the hatch disc front on the ray")
+	_assert_equal(view.call("pick_resident_id", disc, game.residents), -1, "the hatch disc hides Bo's feet")
+	_assert_equal(view.pick_cell(disc), hatch, "the hatch disc picks the hatch hex")
+	_clear_selection(game)
+	_click(game, disc)
+	_assert_equal("HATCH" if game.selected_breach else _selection_label(game), "HATCH" if breach else "R2", "a click on the hatch disc in front of Bo's feet")
 	game.free()
 
 
