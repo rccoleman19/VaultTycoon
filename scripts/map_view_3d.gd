@@ -435,9 +435,16 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 			stale_prop.queue_free()
 		_rubble_props.erase(id)
 	var live_food: Dictionary = {}
+	var building_at: Dictionary = {}
 	for job: Dictionary in jobs:
 		if int(job.type) not in [JobSystem.JobType.HAUL_MEAL, JobSystem.JobType.HAUL_RAW_FOOD] or bool(job.done):
 			continue
+		if live_food.is_empty():
+			# First pending food this sync: map each cell to its first building once
+			# instead of scanning every building for every box.
+			for building: VaultBuilding in buildings:
+				if is_instance_valid(building) and not building_at.has(building.cell):
+					building_at[building.cell] = building
 		live_food[job.id] = true
 		var prop: MeshInstance3D = _food_props.get(job.id)
 		var food_color := Color("c46a3a") if int(job.type) == JobSystem.JobType.HAUL_MEAL else Color("74b76c")
@@ -452,18 +459,17 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 		# Job ids restart on load, so a cached box can now belong to the other food type.
 		(prop.material_override as StandardMaterial3D).albedo_color = food_color
 		var center := MapGrid.offset_cell_to_world(job.target)
-		prop.position = Vector3(center.x, 0.7, center.y)
-		for building: VaultBuilding in buildings:
-			if is_instance_valid(building) and building.cell == job.target:
-				prop.position = Vector3(center.x, FLOOR_HEIGHT + 0.7, center.y + _food_source_front_offset(building.kind))
-				break
+		var source: VaultBuilding = building_at.get(job.target)
+		var front := _food_source_front_offset(source.kind) if source != null else 0.0
+		# Every food box rests on the floor top (half its 1.4 height above FLOOR_HEIGHT).
+		prop.position = Vector3(center.x, FLOOR_HEIGHT + 0.7, center.y + front)
 		for resident: VaultResident in residents:
 			if (
 				is_instance_valid(resident) and resident.alive
 				and resident.current_job_id == int(job.id)
 				and resident.job_phase == "deposit" and resident.carrying > 0
 			):
-				prop.position = Vector3(resident.position.x + 4.6, 0.7, resident.position.y)
+				prop.position = Vector3(resident.position.x + 4.6, FLOOR_HEIGHT + 0.7, resident.position.y)
 				break
 	for id: Variant in _food_props.keys():
 		if live_food.has(id):

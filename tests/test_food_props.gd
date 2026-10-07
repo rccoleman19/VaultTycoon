@@ -33,6 +33,11 @@ const FRONT_BY_KIND := {
 # One chamber floor cell per kind for the placed-fixture pin (no two adjacent).
 const KIND_CELLS := [Vector2i(18, 12), Vector2i(20, 12), Vector2i(22, 12), Vector2i(24, 12), Vector2i(26, 12), Vector2i(18, 15), Vector2i(20, 15), Vector2i(22, 15), Vector2i(26, 15)]
 const POSITION_TOLERANCE := 0.001
+# food-box-polish: every box rests on the floor top, FLOOR_HEIGHT + half its 1.4 height.
+const BOX_Y := MapView3D.FLOOR_HEIGHT + 0.7
+const CARRY_CELL := Vector2i(22, 16)
+const SHARED_CELL_A := Vector2i(18, 15)
+const SHARED_CELL_B := Vector2i(26, 15)
 const MIN_SOUTH_VISIBLE := 0.8
 
 
@@ -40,12 +45,14 @@ func _run() -> void:
 	_run_case("Grow harvest waits in front of the Grow Tray", _test_grow_output_in_front)
 	_run_case("cooked meals wait in front of the Nutrient Station", _test_kitchen_output_in_front)
 	_run_case("every fixture kind puts its food 1.5 past its own front face", _test_all_fixture_fronts)
-	_run_case("bare-floor and carried food keep their positions (control)", _test_floor_and_carried_control)
+	_run_case("bare-floor and carried food rest on the floor top", _test_floor_and_carried_control)
 	_run_case("pending food follows whatever fixture occupies its source", _test_removed_producer)
 	_run_case("save and load recolour reused food props", _test_load_recolours)
 	_run_case("south-row and east-column food stays in sight past camera-side rock", _test_south_row_in_sight)
 	_run_case("every fixture assembly and live proxy has meshed parts", _test_fixture_parts_nonempty)
 	_run_case("food boxes keep one material object across syncs and a load", _test_material_identity)
+	_run_case("food boxes rest on the rendered floor top in every state", _test_boxes_on_floor_top)
+	_run_case("food finds its source by cell each sync, first fixture on a cell wins", _test_source_lookup_by_cell)
 	print("")
 	print("FOOD PROPS TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	_remove_test_save(SAVE_PATH)
@@ -228,7 +235,7 @@ func _test_floor_and_carried_control() -> void:
 	game._sync_3d_play_view()
 	var bare := _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, BARE_CELL)
 	var center := MapGrid.offset_cell_to_world(BARE_CELL)
-	_assert_equal(_position(_prop(game, bare)), Vector3(center.x, 0.7, center.y), "bare-floor food keeps y 0.7")
+	_assert_equal(_position(_prop(game, bare)), Vector3(center.x, BOX_Y, center.y), "bare-floor food rests on the floor top")
 	var grow_job := _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, GROW_CELL)
 	var carrier: VaultResident = game.residents[0] if not game.residents.is_empty() else null
 	if not is_instance_valid(carrier):
@@ -241,7 +248,7 @@ func _test_floor_and_carried_control() -> void:
 	carrier.job_phase = "deposit"
 	carrier.carrying = 2
 	game._sync_3d_play_view()
-	_assert_equal(_position(_prop(game, grow_job)), Vector3(carrier.position.x + 4.6, 0.7, carrier.position.y), "carried food stays beside the pill")
+	_assert_equal(_position(_prop(game, grow_job)), Vector3(carrier.position.x + 4.6, BOX_Y, carrier.position.y), "carried food stays beside the pill on the floor top")
 	_dispose(game)
 
 
@@ -255,7 +262,7 @@ func _test_removed_producer() -> void:
 	_assert_false(job.is_empty(), "pending raw food outlives its producer")
 	game._sync_3d_play_view()
 	var center := MapGrid.offset_cell_to_world(GROW_CELL)
-	_assert_equal(_position(_prop(game, job)), Vector3(center.x, 0.7, center.y), "orphaned food returns to the bare-floor centre")
+	_assert_equal(_position(_prop(game, job)), Vector3(center.x, BOX_Y, center.y), "orphaned food returns to the bare-floor centre, on the floor top")
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.LAMP, GROW_CELL), "a Lumen blueprint is placed on the source cell")
 	game._sync_3d_play_view()
 	_assert_position(_position(_prop(game, job)), _front_position(GROW_CELL, VaultBuilding.Kind.LAMP), "an unfinished fixture on the source also moves the food in front (Lumen front)")
@@ -441,4 +448,84 @@ func _test_material_identity() -> void:
 	_assert_equal(_color(loaded_meal_box), MEAL_COLOR, "loaded meal box recoloured in place to orange")
 	_assert_equal(_color(loaded_raw_box), RAW_COLOR, "loaded raw box recoloured in place to green")
 	_remove_test_save(SAVE_PATH)
+	_dispose(game)
+
+
+# Top of the rendered floor prism under a world point (NAN when none is found).
+func _floor_top(view: MapView3D, grid: MapGrid, point: Vector3) -> float:
+	var center := grid.cell_to_world(grid.world_to_cell(Vector2(point.x, point.z)))
+	for child: Node in view.hex_root.get_children():
+		var prism := child as MeshInstance3D
+		if prism == null or prism.is_queued_for_deletion() or not (prism.mesh is CylinderMesh):
+			continue
+		if absf(prism.position.x - center.x) <= POSITION_TOLERANCE and absf(prism.position.z - center.y) <= POSITION_TOLERANCE:
+			return prism.position.y + prism.scale.y * (prism.mesh as CylinderMesh).height * 0.5
+	return NAN
+
+
+func _assert_on_floor(game: VaultGame, prop: MeshInstance3D, label: String) -> void:
+	var position := _position(prop)
+	var bottom := position.y - BOX_SIZE.y * 0.5
+	var top := _floor_top(game.map_view_3d, game.map_grid, position)
+	_assert_true(absf(bottom - top) <= POSITION_TOLERANCE, "%s box bottom (%.3f) rests on the rendered floor top (%.3f)" % [label, bottom, top])
+
+
+func _test_boxes_on_floor_top() -> void:
+	var game := _producer_game()
+	game.job_system.queue_meals(KITCHEN_CELL, FoodSystem.COOK_OUTPUT)
+	game.food_system.advance(FoodSystem.GROW_SECONDS, game.buildings)
+	game.job_system.queue_raw_food(BARE_CELL, 1)
+	game._sync_3d_play_view()
+	var meal := _food_job(game, JobSystem.JobType.HAUL_MEAL, KITCHEN_CELL)
+	var raw := _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, GROW_CELL)
+	var bare := _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, BARE_CELL)
+	_assert_true(not meal.is_empty() and not raw.is_empty() and not bare.is_empty() and game.get_building_at(BARE_CELL) == null, "fixture: meal and raw food at their sources, raw food on bare floor")
+	_assert_on_floor(game, _prop(game, raw), "pending raw food at the Grow Tray")
+	_assert_on_floor(game, _prop(game, meal), "pending meal at the Nutrient Station")
+	_assert_on_floor(game, _prop(game, bare), "bare-floor raw food")
+	var source_y := _position(_prop(game, meal)).y
+	var carrier: VaultResident = game.residents[0] if not game.residents.is_empty() else null
+	if not is_instance_valid(carrier):
+		_assert_true(false, "fixture: carrier exists")
+		_dispose(game)
+		return
+	carrier.position = game.map_grid.cell_to_world(CARRY_CELL)
+	carrier.current_job_id = int(meal.get("id", -1))
+	carrier.current_job_type = int(meal.get("type", -1))
+	carrier.carrying_kind = "meal"
+	carrier.job_phase = "deposit"
+	carrier.carrying = FoodSystem.COOK_OUTPUT
+	game._sync_3d_play_view()
+	var carried := _prop(game, meal)
+	_assert_true(game.map_grid.is_walkable(game.map_grid.world_to_cell(Vector2(carrier.position.x + 4.6, carrier.position.y))), "fixture: the carried box is over walkable floor")
+	_assert_position(_position(carried), Vector3(carrier.position.x + 4.6, source_y, carrier.position.y), "picking up a meal moves it beside the pill without changing its height")
+	_assert_on_floor(game, carried, "carried meal")
+	_dispose(game)
+
+
+# Equivalence with the old per-box scan of every building: the first live fixture
+# on a cell (in building order) is the source, and the lookup is rebuilt every
+# sync. Two fixtures never share a cell in play (place_blueprint refuses), so the
+# shared cells below are test-only.
+func _test_source_lookup_by_cell() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.user_paused = true
+	for cell: Vector2i in [SHARED_CELL_A, SHARED_CELL_B, BARE_CELL]:
+		_assert_true(game.map_grid.is_walkable(cell) and game.get_building_at(cell) == null, "fixture: %s starts as empty floor" % str(cell))
+	_add_completed_building(game, VaultBuilding.Kind.LAMP, SHARED_CELL_A)
+	_add_completed_building(game, VaultBuilding.Kind.BED, SHARED_CELL_A)
+	_add_completed_building(game, VaultBuilding.Kind.BED, SHARED_CELL_B)
+	_add_completed_building(game, VaultBuilding.Kind.LAMP, SHARED_CELL_B)
+	for cell: Vector2i in [SHARED_CELL_A, SHARED_CELL_B, BARE_CELL]:
+		game.job_system.queue_raw_food(cell, 1)
+	game._sync_3d_play_view()
+	_assert_position(_position(_prop(game, _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, SHARED_CELL_A))), _front_position(SHARED_CELL_A, VaultBuilding.Kind.LAMP), "Lumen added first on a shared cell is the source (4.2)")
+	_assert_position(_position(_prop(game, _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, SHARED_CELL_B))), _front_position(SHARED_CELL_B, VaultBuilding.Kind.BED), "Bunk added first on a shared cell is the source (9.0)")
+	var bare_center := MapGrid.offset_cell_to_world(BARE_CELL)
+	var bare_job := _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, BARE_CELL)
+	_assert_position(_position(_prop(game, bare_job)), Vector3(bare_center.x, BOX_Y, bare_center.y), "food on a cell without a fixture stays at the bare centre")
+	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, BARE_CELL)
+	game._sync_3d_play_view()
+	_assert_position(_position(_prop(game, bare_job)), _front_position(BARE_CELL, VaultBuilding.Kind.GROW_TRAY), "a fixture added between syncs becomes the source on the next sync")
 	_dispose(game)
