@@ -829,9 +829,14 @@ func refresh() -> void:
 	pause_button.text = "RESUME" if game.user_paused else "PAUSE"
 	var active_help := game.status_message if game.status_message_left > 0.0 else game._tool_help(game.active_tool)
 	var step: Dictionary = _primary_next_step()
+	var tool_label := game.active_tool.to_upper()
 	if game.status_message_left <= 0.0 and game.active_tool == "select":
 		var select_help := "Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job."
-		if not game.tutorial_open and not game.ended:
+		if game.ended:
+			# Outcome panel is up: point at the panel actions, not drafting help for a dead/finished wing.
+			tool_label = "SHIFT ENDED"
+			active_help = "LOAD LAST CHECKPOINT or NEW WING"
+		elif not game.tutorial_open:
 			var next_help := str(step.get("help", "")).strip_edges()
 			if not next_help.is_empty():
 				active_help = "%s %s" % [next_help, select_help]
@@ -839,7 +844,7 @@ func refresh() -> void:
 				active_help = select_help
 		else:
 			active_help = select_help
-	tool_status.text = "%s // %s" % [game.active_tool.to_upper(), active_help]
+	tool_status.text = "%s // %s" % [tool_label, active_help]
 	var suggested := str(step.get("tool", ""))
 	_open_suggested_tab(suggested)
 	for key: String in command_buttons:
