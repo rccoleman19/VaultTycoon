@@ -1249,12 +1249,32 @@ func _has_allowed_worker(type: int) -> bool:
 	return false
 
 
+# DETAILS status and the Next tip both ask this every frame, paused or not.
+# The answer is a pure function of the map tiles and the cells of the residents
+# eligible for this type (the type only matters through that set), so the BFS reruns only when that input changes: a dug tunnel, a
+# move, an undraft, a death or a work toggle is seen on the very same call.
+var hatch_path_searches := 0
+var _hatch_path_key: Array = []
+var _hatch_path_cells: Array[int] = []
+var _hatch_path_value := false
+
+
 func _has_worker_path(type: int) -> bool:
+	var key: Array = [map_grid.get_instance_id()]
 	for resident: VaultResident in game.residents:
 		if resident.alive and not resident.drafted and _resident_allows(resident, type):
-			if not map_grid.find_path(resident.get_cell(map_grid), BreachSystem.HATCH_CELL).is_empty():
-				return true
-	return false
+			key.append(resident.get_cell(map_grid))
+	if key == _hatch_path_key and map_grid.cells == _hatch_path_cells:
+		return _hatch_path_value
+	hatch_path_searches += 1
+	_hatch_path_value = false
+	for index in range(1, key.size()):
+		if not map_grid.find_path(key[index], BreachSystem.HATCH_CELL).is_empty():
+			_hatch_path_value = true
+			break
+	_hatch_path_key = key
+	_hatch_path_cells = map_grid.cells.duplicate()
+	return _hatch_path_value
 
 
 func _has_reserved_job(type: int) -> bool:
