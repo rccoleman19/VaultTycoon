@@ -822,13 +822,15 @@ func refresh() -> void:
 	resource_label.tooltip_text = "Stored inventory; values in parentheses are produced food still awaiting Haul delivery."
 	command_buttons.zone.text = "ZONE %d" % game.map_grid.stockpile_cells.size()
 	command_buttons.zone.tooltip_text = "Stockpile: %d cells. Salvage, raw food, and meals prefer reachable zones; otherwise Salvage Bay / chamber center. Click/drag to paint; CANCEL [X] clears." % game.map_grid.stockpile_cells.size()
-	_refresh_objective()
+	var step: Dictionary = _refresh_objective()
 	power_label.text = game.power_grid.get_status_text()
 	power_label.add_theme_color_override("font_color", Color("ef6860") if game.power_grid.brownout_active else Color("75d4b4"))
 	_refresh_power_detail()
 	pause_button.text = "RESUME" if game.user_paused else "PAUSE"
 	var active_help := game.status_message if game.status_message_left > 0.0 else game._tool_help(game.active_tool)
-	var step: Dictionary = _primary_next_step()
+	if step.is_empty():
+		# The objective showed an outcome line; the help still follows Next.
+		step = _primary_next_step()
 	if game.status_message_left <= 0.0 and game.active_tool == "select":
 		var select_help := "Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job."
 		if not game.tutorial_open and not game.ended:
@@ -928,7 +930,11 @@ func _salvage_shortfall(kind: int) -> int:
 
 
 func _salvage_dig_tiles(shortfall: int) -> int:
-	var after_rubble := shortfall - game.job_system.get_uncredited_rubble()
+	return _dig_tiles_after_rubble(shortfall, game.job_system.get_uncredited_rubble())
+
+
+func _dig_tiles_after_rubble(shortfall: int, rubble: int) -> int:
+	var after_rubble := shortfall - rubble
 	if after_rubble <= 0:
 		return 0
 	return ceili(float(after_rubble) / DIG_SALVAGE_YIELD) - game.map_grid.dig_marks.size()
@@ -979,7 +985,99 @@ func _fund_blueprint_step(kind: int) -> Dictionary:
 	}
 
 
+func _breach_blocker_step() -> Dictionary:
+	# During WARNING/OPEN, name what stops the automatic patch before any other tip.
+	# A covered response keeps the ordinary tips; sealing ends this branch.
+	var breach := game.breach_system
+	if not breach.is_response_active():
+		return {}
+	var undrafted := false
+	var drafted := false
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			continue
+		if resident.drafted:
+			drafted = true
+		else:
+			undrafted = true
+			break
+	if not undrafted:
+		if not drafted:
+			# Nobody is alive (the loss screen): there is no hatch advice to give.
+			return {}
+		return _hatch_key_step(
+			"undraft crew [R]",
+			"respond to hatch",
+			"Drafted crew never answer the hatch. Select a drafted resident and press R to undraft.",
+		)
+	var missing: Array[String] = []
+	if breach.needs_supply() and not _has_eligible_worker("haul"):
+		missing.append("Haul")
+	if not _has_eligible_worker("craft"):
+		missing.append("Craft")
+	if not missing.is_empty():
+		var names := " + ".join(missing)
+		return _hatch_key_step(
+			"enable %s [P]" % names,
+			"patch hatch",
+			"Open PRIORITIES [P] and set %s above OFF for an undrafted resident so crew auto-respond to the hatch." % names,
+		)
+	if not game.job_system.has_hatch_worker_path():
+		# Same check as DETAILS "NO PATH TO HATCH". DIG [E] is never locked by the modal.
+		return {
+			"text": "Next: YOU mark a tunnel to the hatch [E] · THEY dig it out",
+			"help": "No undrafted %s crew can walk to the hatch. Mark rock with DIG [E] to connect them to the hatch; crew with Dig above OFF dig it out." % ("Haul" if breach.needs_supply() else "Craft"),
+			"tool": "dig",
+		}
+	var shortfall := maxi(
+		0,
+		BreachSystem.PATCH_COST
+			- breach.patch_delivered
+			- game.job_system.get_breach_supply_in_transit()
+			- game.food_system.salvage,
+	)
+	if shortfall > 0:
+		# Only rubble a Haul resident can reach (the scheduler's test) funds the patch.
+		var rubble := game.job_system.get_uncredited_rubble(true, shortfall)
+		var has_digger := _has_eligible_worker("dig")
+		if shortfall > rubble and not has_digger:
+			return _hatch_key_step(
+				"enable Dig [P]",
+				"fund the hatch patch",
+				"The hatch patch is %d salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage." % shortfall,
+			)
+		var tiles := _dig_tiles_after_rubble(shortfall, rubble)
+		var covered := "Next: YOU leave Dig + Haul on · THEY fund the hatch patch" if has_digger else "Next: YOU leave Haul on · THEY fund the hatch patch"
+		return {
+			"text": "Next: YOU mark %d rock [E] · THEY fund the hatch patch" % tiles if tiles > 0 else covered,
+			"help": "The hatch patch is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [shortfall, DIG_SALVAGE_YIELD],
+			"tool": "dig" if tiles > 0 else "select",
+		}
+	return {}
+
+
+func _hatch_key_step(action: String, they: String, help: String) -> Dictionary:
+	# R (draft) and P (priorities) are refused while the WARNING modal is
+	# unacknowledged (game.toggle_resident_draft, show_work_priorities), so name
+	# the acknowledgement first. OPEN never locks them.
+	var breach := game.breach_system
+	if breach.phase == BreachSystem.Phase.WARNING and not breach.warning_acknowledged:
+		return {
+			"text": "Next: YOU acknowledge warning · then %s" % action,
+			"help": "Acknowledge the hatch warning first (RESUME RESPONSE, FOCUS HATCH or Space); R and P stay locked until then. %s" % help,
+			"tool": "select",
+		}
+	return {
+		"text": "Next: YOU %s · THEY %s" % [action, they],
+		"help": help,
+		"tool": "select",
+	}
+
+
 func _primary_next_step() -> Dictionary:
+	var breach_blocker := _breach_blocker_step()
+	if not breach_blocker.is_empty():
+		return breach_blocker
 	var critical_resident := false
 	var mood_break_risk := false
 	var rec_wanted := false
@@ -1357,7 +1455,8 @@ func _primary_next_step() -> Dictionary:
 	}
 
 
-func _refresh_objective() -> void:
+# Returns the Next step it showed ({} for an outcome line) so refresh() reuses it.
+func _refresh_objective() -> Dictionary:
 	if game.day_cycle.completed and not game.ended:
 		var blockers: Array[String] = []
 		if not game.breach_system.is_sealed():
@@ -1367,11 +1466,18 @@ func _refresh_objective() -> void:
 		objective_label.text = "VICTORY PENDING // %s" % " + ".join(blockers)
 		objective_label.add_theme_color_override("font_color", Color("ef6860"))
 		_expand_details_on_urgency()
-		return
+		return {}
+	if game.ended and game.outcome == "loss":
+		# The WING LOST panel is up and no crew remain: show the outcome, not a Next tip.
+		objective_label.text = "WING LOST // no residents remain"
+		objective_label.add_theme_color_override("font_color", Color("ef6860"))
+		_expand_details_on_urgency()
+		return {}
 	var step: Dictionary = _primary_next_step()
 	objective_label.text = str(step.get("text", "NEXT // Survive"))
 	objective_label.add_theme_color_override("font_color", Color("efc56b"))
 	_expand_details_on_urgency()
+	return step
 
 
 func _expand_details_on_urgency() -> void:
