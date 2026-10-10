@@ -1,11 +1,20 @@
 extends "res://tests/test_runner.gd"
 
+const FLOOR_SLEEPER_KINDS := [
+	VaultBuilding.Kind.BED, VaultBuilding.Kind.LAMP, VaultBuilding.Kind.GENERATOR,
+	VaultBuilding.Kind.GROW_TRAY, VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.STOCKPILE,
+	VaultBuilding.Kind.AIR_RECYCLER, VaultBuilding.Kind.RECREATION_CONSOLE, VaultBuilding.Kind.MEDICAL_BED,
+]
+const FLOOR_SLEEPER_CELL := Vector2i(20, 12)
+
 
 func _run() -> void:
 	_test_fixture_palettes()
 	_test_remaining_fixture_palettes()
 	_test_medical_capsule_pose()
 	_test_sleeping_capsule_pose()
+	_test_floor_sleeper_clears_every_fixture()
+	_test_floor_sleeper_pose_controls()
 	await _test_build_ghost()
 	await _test_build_ghost_validity()
 	await _test_assembly_cleanup()
@@ -395,3 +404,102 @@ func _assert_hover_material(view: MapView3D, cell: Vector2i, expected: StandardM
 			_assert_true(child.material_override == expected, label)
 			return
 	_assert_true(false, "%s: hover prism missing" % label)
+
+
+# Collapse a resident through the real survival handler on a fixture cell.
+func _floor_sleeper_collapse_on(kind: int, start_offset: Vector2, complete := true) -> Array:
+	var game := _spawn_game()
+	game.begin_shift()
+	var building := _add_completed_building(game, kind, FLOOR_SLEEPER_CELL)
+	building.complete = complete
+	if not complete:
+		building.delivered = 0
+		building.construction_left = building.get_build_time()
+	var resident: VaultResident = game.residents[0]
+	resident.position = game.map_grid.cell_to_world(FLOOR_SLEEPER_CELL) + start_offset
+	resident.clear_path()
+	resident.needs.food = 100.0
+	resident.needs.rest = 0.0
+	for _tick in 120:
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		resident.needs.rest = minf(resident.needs.rest, 1.0)
+		if resident.sleeping and resident.position.distance_to(game.map_grid.cell_to_world(FLOOR_SLEEPER_CELL)) < 0.01:
+			break
+	return [game, building, resident]
+
+
+func _floor_sleeper_capsule_gap(a: Vector3, b: Vector3, r: float, box: AABB) -> float:
+	var best := INF
+	for i in 401:
+		var p := a.lerp(b, float(i) / 400.0)
+		var q := Vector3(clampf(p.x, box.position.x, box.end.x), clampf(p.y, box.position.y, box.end.y), clampf(p.z, box.position.z, box.end.z))
+		best = minf(best, p.distance_to(q))
+	return best - r
+
+
+func _floor_sleeper_inside_hex(p: Vector2, center: Vector2) -> bool:
+	var d := (p - center).abs()
+	return d.x <= MapGrid.TILE_SIZE * 0.5 - 0.09 and d.x * 0.5 + d.y * sqrt(3.0) / 2.0 <= MapGrid.TILE_SIZE * 0.5 - 0.09
+
+
+func _test_floor_sleeper_clears_every_fixture() -> void:
+	for kind: int in FLOOR_SLEEPER_KINDS:
+		for start: Vector2 in [Vector2.ZERO, Vector2(-4, 0), Vector2(4, 2)]:
+			# A finished bunk would be slept in, so the bunk case collapses beside a blueprint bunk.
+			var got := _floor_sleeper_collapse_on(kind, start, kind != VaultBuilding.Kind.BED)
+			var game: VaultGame = got[0]
+			var building: VaultBuilding = got[1]
+			var resident: VaultResident = got[2]
+			var label := "%s from %s" % [VaultBuilding.Kind.keys()[kind], start]
+			_assert_true(resident.sleeping and resident.bed_id < 0, "%s collapses on the floor" % label)
+			_assert_equal(resident.get_cell(game.map_grid), FLOOR_SLEEPER_CELL, "%s stays on the fixture cell" % label)
+			var view := game.get_node("MapView3D") as MapView3D
+			view.sync_actors(game.residents, game.buildings, false, game.job_system.jobs)
+			var proxy: MeshInstance3D = view._resident_proxies[resident.resident_id]
+			var fixture: Node3D = view._building_proxies[building.building_id]
+			_assert_true(proxy.rotation.is_equal_approx(Vector3(PI / 2, 0, 0)), "%s lies down" % label)
+			_assert_approximately(proxy.position.y, MapView3D.COLONIST_RADIUS, 0.0001, "%s lies at the old height" % label)
+			var axis := proxy.global_transform.basis.y.normalized()
+			var half := MapView3D.COLONIST_HEIGHT * 0.5 - MapView3D.COLONIST_RADIUS
+			var a := proxy.position - axis * half
+			var e := proxy.position + axis * half
+			var worst := INF
+			for part: MeshInstance3D in fixture.get_children():
+				var pb := part.mesh.get_aabb()
+				var s := fixture.scale.x
+				worst = minf(worst, _floor_sleeper_capsule_gap(a, e, MapView3D.COLONIST_RADIUS, AABB(fixture.position + (part.position + pb.position) * s, pb.size * s)))
+			_assert_true(worst >= 0.25, "%s clears its fixture (gap %.3f)" % [label, worst])
+			var center := MapGrid.offset_cell_to_world(FLOOR_SLEEPER_CELL)
+			var r := MapView3D.COLONIST_RADIUS
+			for p: Vector3 in [a + Vector3(r, 0, 0), a + Vector3(-r, 0, 0), e + Vector3(r, 0, 0), e + Vector3(-r, 0, 0), a - axis * r, e + axis * r]:
+				_assert_true(_floor_sleeper_inside_hex(Vector2(p.x, p.z), center), "%s stays inside its own hex at %s" % [label, p])
+			_dispose(game)
+
+
+func _test_floor_sleeper_pose_controls() -> void:
+	var got := _floor_sleeper_collapse_on(VaultBuilding.Kind.KITCHEN, Vector2.ZERO)
+	var game: VaultGame = got[0]
+	var building: VaultBuilding = got[1]
+	var resident: VaultResident = got[2]
+	var view := game.get_node("MapView3D") as MapView3D
+	var center := MapGrid.offset_cell_to_world(FLOOR_SLEEPER_CELL)
+	var sync := func() -> MeshInstance3D:
+		view.sync_actors(game.residents, game.buildings, false, game.job_system.jobs)
+		return view._resident_proxies[resident.resident_id]
+	var side := Vector3(center.x + 8.7, MapView3D.COLONIST_RADIUS, center.y)
+	_assert_true(sync.call().position.is_equal_approx(side), "fixture cell sleeper lies at +8.7 X")
+	resident.position = center + Vector2(-5, 3)
+	_assert_true(sync.call().position.is_equal_approx(side), "off-centre sleeper on the cell uses the same fixed side")
+	building.complete = false
+	_assert_true(sync.call().position.is_equal_approx(side), "a blueprint fixture also displaces the sleeper")
+	building.cell = FLOOR_SLEEPER_CELL + Vector2i(1, 0)
+	resident.position = center
+	_assert_true(sync.call().position.is_equal_approx(Vector3(center.x, MapView3D.COLONIST_RADIUS, center.y)), "a fixture on the neighbour cell leaves the pose unchanged")
+	game.buildings.erase(building)
+	_assert_true(sync.call().position.is_equal_approx(Vector3(center.x, MapView3D.COLONIST_RADIUS, center.y)), "no fixture: pose unchanged")
+	building.cell = FLOOR_SLEEPER_CELL
+	game.buildings.append(building)
+	resident.sleeping = false
+	_assert_true(sync.call().position.is_equal_approx(Vector3(center.x, MapView3D.COLONIST_HEIGHT * 0.5, center.y)), "an awake resident on a fixture cell stands at their position")
+	_assert_equal(sync.call().rotation, Vector3.ZERO, "an awake resident stays upright")
+	_dispose(game)
