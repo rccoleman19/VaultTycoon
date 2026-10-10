@@ -1360,8 +1360,9 @@ func _primary_next_step() -> Dictionary:
 func _refresh_objective() -> void:
 	if game.ended and game.outcome == "win":
 		# The SEAL STABILIZED panel is up: report the result, not a Next tip.
+		# Short like #90's "WING LOST // no residents remain" so it fits one line.
 		var survivors := game.get_alive_count()
-		objective_label.text = "SEAL STABILIZED // %d resident%s survived" % [survivors, "" if survivors == 1 else "s"]
+		objective_label.text = "SEALED // %d resident%s survived" % [survivors, "" if survivors == 1 else "s"]
 		objective_label.add_theme_color_override("font_color", Color("75d4b4"))
 		_expand_details_on_urgency()
 		return

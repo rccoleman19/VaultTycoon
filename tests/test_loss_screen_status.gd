@@ -80,10 +80,27 @@ func _managed_wing() -> VaultGame:
 	return game
 
 
+func _fits_one_line(label: Label) -> bool:
+	# Rail text width at 1280x720: RIGHT_PANEL_WIDTH minus the panel style and margin insets.
+	var budget := VaultGame.RIGHT_PANEL_WIDTH
+	var node := label.get_parent()
+	while node != null:
+		if node is MarginContainer:
+			budget -= node.get_theme_constant("margin_left") + node.get_theme_constant("margin_right")
+		elif node is PanelContainer:
+			budget -= node.get_theme_stylebox("panel").get_minimum_size().x
+			break
+		node = node.get_parent()
+	var font := label.get_theme_font("font")
+	var width := font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, label.get_theme_font_size("font_size")).x
+	return width <= budget
+
+
 func _assert_win_texts(game: VaultGame, survivors: int, label: String) -> void:
 	var orders := game.player_orders
 	var noun := "resident" if survivors == 1 else "residents"
-	_assert_equal(orders.objective_label.text, "SEAL STABILIZED // %d %s survived" % [survivors, noun], "%s: Next reports the win" % label)
+	_assert_equal(orders.objective_label.text, "SEALED // %d %s survived" % [survivors, noun], "%s: Next reports the win" % label)
+	_assert_true(_fits_one_line(orders.objective_label), "%s: win line fits one line in the right rail" % label)
 	_assert_equal(orders.objective_label.get_theme_color("font_color"), GREEN, "%s: win line uses the outcome green" % label)
 	_assert_equal(orders.alert_label.text, WIN_ALERT, "%s: alert line is the win outcome" % label)
 	_assert_equal(orders.alert_label.get_theme_color("font_color"), GREEN, "%s: win alert uses the outcome green" % label)
@@ -118,7 +135,7 @@ func _test_real_wipe_open() -> void:
 	_assert_equal(orders.alert_label.text, LOSS_ALERT, "alert line is the loss outcome")
 	_assert_equal(orders.alert_label.get_theme_color("font_color"), RED, "loss alert uses the outcome red")
 	_assert_false("NO COOK ENABLED" in orders.alert_label.text, "no cook advice for a dead crew")
-	_assert_false(orders.objective_label.text.begins_with("SEAL STABILIZED"), "a loss never reads as the win line")
+	_assert_false(orders.objective_label.text.begins_with("SEALED //"), "a loss never reads as the win line")
 	_assert_equal(orders.breach_label.text, _open_breach_text(game, RESPONSE_ENDED), "DETAILS keeps the final hatch numbers and ends the response")
 	_assert_true(game.selected_breach, "hatch inspector still selected")
 	_assert_equal(orders.inspector_title.text, "MAINTENANCE HATCH", "hatch inspector shown")
