@@ -14,6 +14,9 @@ const CAMERA_SIDE := 30.0
 const HEX_MESH_YAW_DEGREES := 0.0
 const COLONIST_RADIUS := 2.4
 const COLONIST_HEIGHT := 13.0
+## Every fixture stays within |x| <= 6.0 of its cell centre, so a capsule lying along Z at
+## 8.7 clears it by 0.3 and still ends inside its own hex (|x| <= 11.1 < 12, |z| <= 6.5 < 6.93).
+const FLOOR_SLEEPER_SIDE_OFFSET := 8.7
 const BUNK_MATTRESS_TOP := 3.90
 const MEDICAL_MATTRESS_TOP := 4.40
 
@@ -476,6 +479,15 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 		if resident.sleeping and resident.bed_id < 0:
 			proxy.rotation = Vector3(PI / 2, 0, 0)
 			proxy.position.y = COLONIST_RADIUS
+			# A floor sleeper on a fixture's cell lies beside it on the +X side (a fixed side, so
+			# settling onto the cell centre never flips the pose).
+			var cell := _world_to_offset_cell(pos)
+			for building: VaultBuilding in buildings:
+				if is_instance_valid(building) and building.cell == cell:
+					var cell_center := MapGrid.offset_cell_to_world(cell)
+					proxy.position.x = cell_center.x + FLOOR_SLEEPER_SIDE_OFFSET
+					proxy.position.z = cell_center.y
+					break
 		elif resident.sleeping and resident.state == "Sleeping":
 			for building: VaultBuilding in buildings:
 				if building.building_id != resident.bed_id or not building.complete or building.kind != VaultBuilding.Kind.BED:
@@ -568,6 +580,12 @@ func _make_colonist_proxy() -> MeshInstance3D:
 	proxy.mesh = capsule
 	proxy.material_override = _mat_colonist
 	return proxy
+
+
+static func _world_to_offset_cell(world: Vector2) -> Vector2i:
+	var q := (sqrt(3.0) / 3.0 * world.x - 1.0 / 3.0 * world.y) / MapGrid.HEX_SIZE
+	var r := (2.0 / 3.0 * world.y) / MapGrid.HEX_SIZE
+	return MapGrid._axial_round_to_oddr(q, r)
 
 
 ## Fixture geometry is authored upward from the foot; each instance owns its materials.
