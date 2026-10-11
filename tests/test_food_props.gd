@@ -52,6 +52,14 @@ const EVEN_SW := Vector2i(19, 15)
 const ODD_SOURCE := Vector2i(26, 13)
 const ODD_SE := Vector2i(27, 14)
 const ODD_SW := Vector2i(26, 14)
+# Chamber west edge (even row): SW diagonal is outside CHAMBER = ROCK.
+# Chamber east edge (odd row): SE diagonal is outside CHAMBER = ROCK.
+const WEST_EDGE_SOURCE := Vector2i(17, 12)
+const WEST_EDGE_SE := Vector2i(17, 13)
+const WEST_EDGE_SW_ROCK := Vector2i(16, 13)
+const EAST_EDGE_SOURCE := Vector2i(28, 13)
+const EAST_EDGE_SW := Vector2i(28, 14)
+const EAST_EDGE_SE_ROCK := Vector2i(29, 14)
 
 
 func _run() -> void:
@@ -69,6 +77,7 @@ func _run() -> void:
 	_run_case("a lone SE or SW neighbour pushes the box toward the free diagonal", _test_side_nudge_lone_diagonal)
 	_run_case("both, neither, or only non-diagonal neighbours keep the box centred", _test_side_nudge_centred)
 	_run_case("the side nudge follows neighbours added between syncs; bare food never nudges", _test_side_nudge_live)
+	_run_case("a free diagonal that is ROCK keeps the box centred", _test_side_nudge_rock_destination)
 	print("")
 	print("FOOD PROPS TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	_remove_test_save(SAVE_PATH)
@@ -635,3 +644,30 @@ func _test_side_nudge_live() -> void:
 	var bare_center := MapGrid.offset_cell_to_world(bare)
 	_assert_position(_position(_prop(game, _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, bare))), Vector3(bare_center.x, BOX_Y, bare_center.y), "bare-floor food with an SE neighbour stays at the bare centre")
 	_dispose(game)
+
+
+# Chamber-edge rock: a lone SE/SW building neighbour whose free diagonal is ROCK
+# must not slide the box into that rock. Buildings still block as today; only the
+# destination walkability gate is new (food-box-rock-nudge).
+func _test_side_nudge_rock_destination() -> void:
+	_assert_equal(MapGrid.CHAMBER, Rect2i(17, 11, 12, 10), "fixture: chamber is Rect2i(17,11,12,10)")
+	for row: Array in [
+		[VaultBuilding.Kind.GROW_TRAY, WEST_EDGE_SOURCE, WEST_EDGE_SE, WEST_EDGE_SW_ROCK, "west-edge Grow, SE building, SW rock -> centred"],
+		[VaultBuilding.Kind.KITCHEN, EAST_EDGE_SOURCE, EAST_EDGE_SW, EAST_EDGE_SE_ROCK, "east-edge Kitchen, SW building, SE rock -> centred"],
+	]:
+		var game := _spawn_game()
+		game.begin_shift()
+		game.user_paused = true
+		var source: Vector2i = row[1]
+		var neighbour: Vector2i = row[2]
+		var rock_cell: Vector2i = row[3]
+		_assert_true(game.map_grid.is_walkable(source) and game.get_building_at(source) == null, "fixture: %s starts as empty floor" % str(source))
+		_assert_true(game.map_grid.is_walkable(neighbour) and game.get_building_at(neighbour) == null, "fixture: %s starts as empty floor" % str(neighbour))
+		_assert_equal(game.map_grid.get_tile(rock_cell), MapGrid.Tile.ROCK, "fixture: %s is chamber-edge ROCK" % str(rock_cell))
+		_add_completed_building(game, row[0], source)
+		_add_completed_building(game, VaultBuilding.Kind.STOCKPILE, neighbour)
+		game.job_system.queue_raw_food(source, 1)
+		game._sync_3d_play_view()
+		var prop := _prop(game, _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, source))
+		_assert_position(_position(prop), _front_position(source, row[0]), row[4])
+		_dispose(game)

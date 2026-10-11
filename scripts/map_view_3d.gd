@@ -590,14 +590,19 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 
 ## Sideways shift for pending food at a source: toward the free camera-side
 ## diagonal when exactly one of the SE/SW neighbour cells holds a fixture.
+## The destination cell must be clear floor (not ROCK); otherwise stay centred.
 func _food_source_side_nudge(center: Vector2, building_at: Dictionary) -> float:
 	var row_down := MapGrid.HEX_SIZE * 1.5
 	var half_tile := MapGrid.TILE_SIZE * 0.5
-	var se := building_at.has(map_grid.world_to_cell(center + Vector2(half_tile, row_down)))
-	var sw := building_at.has(map_grid.world_to_cell(center + Vector2(-half_tile, row_down)))
+	var se_cell := map_grid.world_to_cell(center + Vector2(half_tile, row_down))
+	var sw_cell := map_grid.world_to_cell(center + Vector2(-half_tile, row_down))
+	var se := building_at.has(se_cell)
+	var sw := building_at.has(sw_cell)
 	if se == sw:
 		return 0.0
-	return -FOOD_SOURCE_NUDGE_WEST if se else FOOD_SOURCE_NUDGE_EAST
+	if se:
+		return -FOOD_SOURCE_NUDGE_WEST if map_grid.is_walkable(sw_cell) else 0.0
+	return FOOD_SOURCE_NUDGE_EAST if map_grid.is_walkable(se_cell) else 0.0
 
 
 ## How far toward the camera (+Z) pending food at this kind of source sits: the
