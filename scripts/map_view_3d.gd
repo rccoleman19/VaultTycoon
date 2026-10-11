@@ -16,6 +16,20 @@ const COLONIST_RADIUS := 2.4
 const COLONIST_HEIGHT := 13.0
 const BUNK_MATTRESS_TOP := 3.90
 const MEDICAL_MATTRESS_TOP := 4.40
+# Pending food at an occupied source waits on the floor toward the camera (+Z),
+# FOOD_SOURCE_FRONT_MARGIN (half the 2.4 box + a 0.3 gap) past that fixture's
+# front face, so camera-side rock hides as little of it as possible. Never
+# nearer than a resident on the cell allows, never past 9.0 (inside the hex).
+const FOOD_SOURCE_FRONT_MARGIN := 1.5
+const FOOD_SOURCE_MAX_OFFSET := 9.0
+# A fixture on the camera-side diagonal (SE or SW neighbour) hides part of that
+# box from many camera positions. With exactly one of the two occupied, the box
+# slides sideways toward the free diagonal: 7.5 west (past its own fixture's
+# flank, fixtures span |x| <= 6.0) or 4.0 east (enough for the SW case, and it
+# stays clear of a floor sleeper lying beside the fixture at +8.7). Both or
+# neither occupied: it stays centred.
+const FOOD_SOURCE_NUDGE_WEST := 7.5
+const FOOD_SOURCE_NUDGE_EAST := 4.0
 
 var map_grid: MapGrid
 var lighting_system: LightingSystem
@@ -34,6 +48,7 @@ var _build_ghost: Node3D
 var _build_ghost_kind := -1
 var _rubble_props: Dictionary = {}
 var _food_props: Dictionary = {}
+var _food_front_offsets: Dictionary = {}
 var _hatch_proxy: MeshInstance3D
 var _shared_hex_mesh: CylinderMesh
 var _mat_rock: StandardMaterial3D
@@ -428,28 +443,42 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 			stale_prop.queue_free()
 		_rubble_props.erase(id)
 	var live_food: Dictionary = {}
+	var building_at: Dictionary = {}
 	for job: Dictionary in jobs:
 		if int(job.type) not in [JobSystem.JobType.HAUL_MEAL, JobSystem.JobType.HAUL_RAW_FOOD] or bool(job.done):
 			continue
+		if live_food.is_empty():
+			# First pending food this sync: map each cell to its first building once
+			# instead of scanning every building for every box.
+			for building: VaultBuilding in buildings:
+				if is_instance_valid(building) and not building_at.has(building.cell):
+					building_at[building.cell] = building
 		live_food[job.id] = true
 		var prop: MeshInstance3D = _food_props.get(job.id)
+		var food_color := Color("c46a3a") if int(job.type) == JobSystem.JobType.HAUL_MEAL else Color("74b76c")
 		if prop == null or not is_instance_valid(prop):
 			prop = MeshInstance3D.new()
 			var box := BoxMesh.new()
 			box.size = Vector3(2.4, 1.4, 2.4)
 			prop.mesh = box
-			prop.material_override = _make_mat(Color("c46a3a") if int(job.type) == JobSystem.JobType.HAUL_MEAL else Color("74b76c"))
+			prop.material_override = _make_mat(food_color)
 			prop_root.add_child(prop)
 			_food_props[job.id] = prop
+		# Job ids restart on load, so a cached box can now belong to the other food type.
+		(prop.material_override as StandardMaterial3D).albedo_color = food_color
 		var center := MapGrid.offset_cell_to_world(job.target)
-		prop.position = Vector3(center.x, 0.7, center.y)
+		var source: VaultBuilding = building_at.get(job.target)
+		var front := _food_source_front_offset(source.kind) if source != null else 0.0
+		var side := _food_source_side_nudge(center, building_at) if source != null else 0.0
+		# Every food box rests on the floor top (half its 1.4 height above FLOOR_HEIGHT).
+		prop.position = Vector3(center.x + side, FLOOR_HEIGHT + 0.7, center.y + front)
 		for resident: VaultResident in residents:
 			if (
 				is_instance_valid(resident) and resident.alive
 				and resident.current_job_id == int(job.id)
 				and resident.job_phase == "deposit" and resident.carrying > 0
 			):
-				prop.position = Vector3(resident.position.x + 4.6, 0.7, resident.position.y)
+				prop.position = Vector3(resident.position.x + 4.6, FLOOR_HEIGHT + 0.7, resident.position.y)
 				break
 	for id: Variant in _food_props.keys():
 		if live_food.has(id):
@@ -557,6 +586,40 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 		_hatch_proxy.visible = true
 	elif _hatch_proxy != null and is_instance_valid(_hatch_proxy):
 		_hatch_proxy.visible = false
+
+
+## Sideways shift for pending food at a source: toward the free camera-side
+## diagonal when exactly one of the SE/SW neighbour cells holds a fixture.
+## The destination cell must be clear floor (not ROCK); otherwise stay centred.
+func _food_source_side_nudge(center: Vector2, building_at: Dictionary) -> float:
+	var row_down := MapGrid.HEX_SIZE * 1.5
+	var half_tile := MapGrid.TILE_SIZE * 0.5
+	var se_cell := map_grid.world_to_cell(center + Vector2(half_tile, row_down))
+	var sw_cell := map_grid.world_to_cell(center + Vector2(-half_tile, row_down))
+	var se := building_at.has(se_cell)
+	var sw := building_at.has(sw_cell)
+	if se == sw:
+		return 0.0
+	if se:
+		return -FOOD_SOURCE_NUDGE_WEST if map_grid.is_walkable(sw_cell) else 0.0
+	return FOOD_SOURCE_NUDGE_EAST if map_grid.is_walkable(se_cell) else 0.0
+
+
+## How far toward the camera (+Z) pending food at this kind of source sits: the
+## scale-1 fixture's front face + margin, measured once per kind from the same
+## assembly `_make_building_proxy` builds (its parts are direct, unrotated,
+## unscaled children). A kind without parts only clears a standing resident.
+func _food_source_front_offset(kind: int) -> float:
+	if _food_front_offsets.has(kind):
+		return _food_front_offsets[kind]
+	var front := COLONIST_RADIUS
+	var assembly := _make_building_proxy(kind)
+	for part: MeshInstance3D in assembly.get_children():
+		front = maxf(front, part.position.z + part.mesh.get_aabb().end.z)
+	assembly.free()
+	var offset := minf(front + FOOD_SOURCE_FRONT_MARGIN, FOOD_SOURCE_MAX_OFFSET)
+	_food_front_offsets[kind] = offset
+	return offset
 
 
 ## Colonists/NPCs: one CapsuleMesh pill only — no body art, no multi-mesh humanoids.
