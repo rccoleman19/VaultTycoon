@@ -39,6 +39,19 @@ const CARRY_CELL := Vector2i(22, 16)
 const SHARED_CELL_A := Vector2i(18, 15)
 const SHARED_CELL_B := Vector2i(26, 15)
 const MIN_SOUTH_VISIBLE := 0.8
+# food-box-occlusion: with exactly one camera-side diagonal (SE/SW) neighbour
+# occupied, the box slides toward the free diagonal: 7.5 west, 4.0 east. Odd-r offset:
+# even row y -> SE (x, y+1), SW (x-1, y+1); odd row -> SE (x+1, y+1), SW (x, y+1).
+const NUDGE_WEST := 7.5
+const NUDGE_EAST := 4.0
+# PR #95 lays a floor sleeper on a fixture's cell along Z at x = centre + 8.7 (radius 2.4).
+const SLEEPER_INNER_X := 8.7 - 2.4
+const EVEN_SOURCE := Vector2i(20, 14)
+const EVEN_SE := Vector2i(20, 15)
+const EVEN_SW := Vector2i(19, 15)
+const ODD_SOURCE := Vector2i(26, 13)
+const ODD_SE := Vector2i(27, 14)
+const ODD_SW := Vector2i(26, 14)
 
 
 func _run() -> void:
@@ -53,6 +66,9 @@ func _run() -> void:
 	_run_case("food boxes keep one material object across syncs and a load", _test_material_identity)
 	_run_case("food boxes rest on the rendered floor top in every state", _test_boxes_on_floor_top)
 	_run_case("food finds its source by cell each sync, first fixture on a cell wins", _test_source_lookup_by_cell)
+	_run_case("a lone SE or SW neighbour pushes the box toward the free diagonal", _test_side_nudge_lone_diagonal)
+	_run_case("both, neither, or only non-diagonal neighbours keep the box centred", _test_side_nudge_centred)
+	_run_case("the side nudge follows neighbours added between syncs; bare food never nudges", _test_side_nudge_live)
 	print("")
 	print("FOOD PROPS TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	_remove_test_save(SAVE_PATH)
@@ -528,4 +544,94 @@ func _test_source_lookup_by_cell() -> void:
 	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, BARE_CELL)
 	game._sync_3d_play_view()
 	_assert_position(_position(_prop(game, bare_job)), _front_position(BARE_CELL, VaultBuilding.Kind.GROW_TRAY), "a fixture added between syncs becomes the source on the next sync")
+	_dispose(game)
+
+
+func _nudge_game(source_kind: int, source: Vector2i, neighbours: Array) -> VaultGame:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.user_paused = true
+	for cell: Vector2i in [source] + neighbours:
+		_assert_true(game.map_grid.is_walkable(cell) and game.get_building_at(cell) == null, "fixture: %s starts as empty floor" % str(cell))
+	_add_completed_building(game, source_kind, source)
+	for cell: Vector2i in neighbours:
+		_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, cell)
+	game.job_system.queue_raw_food(source, 1)
+	game._sync_3d_play_view()
+	return game
+
+
+func _nudged_position(cell: Vector2i, kind: int, side: float) -> Vector3:
+	return _front_position(cell, kind) + Vector3(side, 0.0, 0.0)
+
+
+# The nudged box clears every part of its own fixture and of each neighbour
+# proxy, and its footprint stays inside the source hex.
+func _assert_nudged_clear(game: VaultGame, prop: MeshInstance3D, source: Vector2i, label: String) -> void:
+	_assert_true(is_instance_valid(prop), "%s prop exists" % label)
+	if not is_instance_valid(prop):
+		return
+	var prop_box := AABB(prop.position - BOX_SIZE * 0.5, BOX_SIZE)
+	for building: VaultBuilding in game.buildings:
+		var proxy: Node3D = game.map_view_3d._building_proxies.get(building.building_id)
+		if not is_instance_valid(proxy):
+			_assert_true(false, "%s proxy exists for %s" % [label, str(building.cell)])
+			continue
+		for part: MeshInstance3D in proxy.get_children():
+			var bounds := part.mesh.get_aabb()
+			bounds = AABB(proxy.position + (part.position + bounds.position) * proxy.scale, bounds.size * proxy.scale)
+			_assert_false(bounds.grow(-0.001).intersects(prop_box), "%s clears %s part %s" % [label, str(building.cell), part.name])
+	for corner: Vector2 in [Vector2(prop_box.position.x, prop_box.position.z), Vector2(prop_box.end.x, prop_box.position.z), Vector2(prop_box.position.x, prop_box.end.z), Vector2(prop_box.end.x, prop_box.end.z)]:
+		_assert_equal(game.map_grid.world_to_cell(corner), source, "%s footprint corner stays in the source hex" % label)
+
+
+func _test_side_nudge_lone_diagonal() -> void:
+	for row: Array in [
+		[VaultBuilding.Kind.GROW_TRAY, EVEN_SOURCE, EVEN_SE, -NUDGE_WEST, "even-row Grow, SE neighbour -> west"],
+		[VaultBuilding.Kind.GROW_TRAY, EVEN_SOURCE, EVEN_SW, NUDGE_EAST, "even-row Grow, SW neighbour -> east"],
+		[VaultBuilding.Kind.KITCHEN, ODD_SOURCE, ODD_SE, -NUDGE_WEST, "odd-row Kitchen, SE neighbour -> west"],
+		[VaultBuilding.Kind.KITCHEN, ODD_SOURCE, ODD_SW, NUDGE_EAST, "odd-row Kitchen, SW neighbour -> east"],
+	]:
+		var game := _nudge_game(row[0], row[1], [row[2]])
+		var prop := _prop(game, _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, row[1]))
+		_assert_position(_position(prop), _nudged_position(row[1], row[0], row[3]), row[4])
+		_assert_nudged_clear(game, prop, row[1], row[4])
+		var source_x := MapGrid.offset_cell_to_world(row[1]).x
+		_assert_true(_position(prop).x + BOX_SIZE.x * 0.5 < source_x + SLEEPER_INNER_X, "%s stays clear of a floor sleeper beside the fixture" % row[4])
+		_dispose(game)
+
+
+func _test_side_nudge_centred() -> void:
+	var even_row := EVEN_SOURCE.y
+	for row: Array in [
+		[VaultBuilding.Kind.GROW_TRAY, EVEN_SOURCE, [EVEN_SE, EVEN_SW], "even-row Grow, both diagonals"],
+		[VaultBuilding.Kind.KITCHEN, ODD_SOURCE, [ODD_SE, ODD_SW], "odd-row Kitchen, both diagonals"],
+		[VaultBuilding.Kind.GROW_TRAY, EVEN_SOURCE, [Vector2i(21, even_row), Vector2i(19, even_row), Vector2i(19, even_row - 1), Vector2i(20, even_row - 1)], "even-row Grow, E/W/NW/NE only"],
+		[VaultBuilding.Kind.KITCHEN, ODD_SOURCE, [ODD_SW + Vector2i(-1, 0), ODD_SE + Vector2i(1, 0)], "odd-row Kitchen, cells just past both diagonals"],
+	]:
+		var game := _nudge_game(row[0], row[1], row[2])
+		var prop := _prop(game, _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, row[1]))
+		_assert_position(_position(prop), _front_position(row[1], row[0]), "%s keeps the box centred" % row[3])
+		_dispose(game)
+
+
+func _test_side_nudge_live() -> void:
+	var game := _nudge_game(VaultBuilding.Kind.GROW_TRAY, EVEN_SOURCE, [])
+	var job := _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, EVEN_SOURCE)
+	_assert_position(_position(_prop(game, job)), _front_position(EVEN_SOURCE, VaultBuilding.Kind.GROW_TRAY), "no neighbours: centred")
+	_add_completed_building(game, VaultBuilding.Kind.STOCKPILE, EVEN_SE)
+	game._sync_3d_play_view()
+	_assert_position(_position(_prop(game, job)), _nudged_position(EVEN_SOURCE, VaultBuilding.Kind.GROW_TRAY, -NUDGE_WEST), "an SE neighbour added between syncs nudges west on the next sync")
+	_add_completed_building(game, VaultBuilding.Kind.STOCKPILE, EVEN_SW)
+	game._sync_3d_play_view()
+	_assert_position(_position(_prop(game, job)), _front_position(EVEN_SOURCE, VaultBuilding.Kind.GROW_TRAY), "adding the SW neighbour too recentres it")
+	_dispose(game)
+	game = _nudge_game(VaultBuilding.Kind.GROW_TRAY, EVEN_SOURCE, [])
+	var bare := Vector2i(20, 17)
+	_add_completed_building(game, VaultBuilding.Kind.STOCKPILE, Vector2i(21, 18))
+	_assert_true(game.map_grid.is_walkable(bare) and game.get_building_at(bare) == null, "fixture: bare cell %s is empty floor" % str(bare))
+	game.job_system.queue_raw_food(bare, 1)
+	game._sync_3d_play_view()
+	var bare_center := MapGrid.offset_cell_to_world(bare)
+	_assert_position(_position(_prop(game, _food_job(game, JobSystem.JobType.HAUL_RAW_FOOD, bare))), Vector3(bare_center.x, BOX_Y, bare_center.y), "bare-floor food with an SE neighbour stays at the bare centre")
 	_dispose(game)

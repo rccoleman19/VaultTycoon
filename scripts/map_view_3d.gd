@@ -22,6 +22,14 @@ const MEDICAL_MATTRESS_TOP := 4.40
 # nearer than a resident on the cell allows, never past 9.0 (inside the hex).
 const FOOD_SOURCE_FRONT_MARGIN := 1.5
 const FOOD_SOURCE_MAX_OFFSET := 9.0
+# A fixture on the camera-side diagonal (SE or SW neighbour) hides part of that
+# box from many camera positions. With exactly one of the two occupied, the box
+# slides sideways toward the free diagonal: 7.5 west (past its own fixture's
+# flank, fixtures span |x| <= 6.0) or 4.0 east (enough for the SW case, and it
+# stays clear of a floor sleeper lying beside the fixture at +8.7). Both or
+# neither occupied: it stays centred.
+const FOOD_SOURCE_NUDGE_WEST := 7.5
+const FOOD_SOURCE_NUDGE_EAST := 4.0
 
 var map_grid: MapGrid
 var lighting_system: LightingSystem
@@ -461,8 +469,9 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 		var center := MapGrid.offset_cell_to_world(job.target)
 		var source: VaultBuilding = building_at.get(job.target)
 		var front := _food_source_front_offset(source.kind) if source != null else 0.0
+		var side := _food_source_side_nudge(center, building_at) if source != null else 0.0
 		# Every food box rests on the floor top (half its 1.4 height above FLOOR_HEIGHT).
-		prop.position = Vector3(center.x, FLOOR_HEIGHT + 0.7, center.y + front)
+		prop.position = Vector3(center.x + side, FLOOR_HEIGHT + 0.7, center.y + front)
 		for resident: VaultResident in residents:
 			if (
 				is_instance_valid(resident) and resident.alive
@@ -577,6 +586,18 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 		_hatch_proxy.visible = true
 	elif _hatch_proxy != null and is_instance_valid(_hatch_proxy):
 		_hatch_proxy.visible = false
+
+
+## Sideways shift for pending food at a source: toward the free camera-side
+## diagonal when exactly one of the SE/SW neighbour cells holds a fixture.
+func _food_source_side_nudge(center: Vector2, building_at: Dictionary) -> float:
+	var row_down := MapGrid.HEX_SIZE * 1.5
+	var half_tile := MapGrid.TILE_SIZE * 0.5
+	var se := building_at.has(map_grid.world_to_cell(center + Vector2(half_tile, row_down)))
+	var sw := building_at.has(map_grid.world_to_cell(center + Vector2(-half_tile, row_down)))
+	if se == sw:
+		return 0.0
+	return -FOOD_SOURCE_NUDGE_WEST if se else FOOD_SOURCE_NUDGE_EAST
 
 
 ## How far toward the camera (+Z) pending food at this kind of source sits: the
