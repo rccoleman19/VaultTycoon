@@ -48,6 +48,7 @@ run_godot_check survival-next --script res://tests/test_survival_next.gd
 run_godot_check fixture-props --script res://tests/test_fixture_props.gd
 run_godot_check open-suggested-tab --script res://tests/test_open_suggested_tab.gd
 run_godot_check stockpile-zones --script res://tests/test_stockpile_zones.gd
+run_godot_check oxygen-forecast --script res://tests/test_oxygen_forecast.gd
 run_godot_check food-hauling --script res://tests/test_food_hauling.gd
 run_godot_check food-loop-playthrough --script res://tests/test_food_loop_playthrough.gd
 run_godot_check air-loop-playthrough --script res://tests/test_air_loop_playthrough.gd
