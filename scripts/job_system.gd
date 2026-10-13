@@ -481,7 +481,15 @@ func get_breach_salvage_reserve() -> int:
 	return _breach_salvage_reserve()
 
 
-func get_uncredited_rubble() -> int:
+# The NO PATH TO HATCH test from get_breach_response_status for the current
+# patch stage: Haul crew while supplying, Craft crew once supplied.
+func has_hatch_worker_path() -> bool:
+	return _has_worker_path(JobType.SUPPLY_BREACH if breach.needs_supply() else JobType.PATCH_BREACH)
+
+
+# reachable_only keeps rubble a Haul resident can reach; enough >= 0 stops
+# counting once that much is found (callers only compare against it).
+func get_uncredited_rubble(reachable_only := false, enough := -1) -> int:
 	var amount := 0
 	var carriers: Dictionary = {}
 	for resident: VaultResident in game.residents:
@@ -489,10 +497,22 @@ func get_uncredited_rubble() -> int:
 			amount += resident.carrying
 			carriers[resident.current_job_id] = true
 	for job: Dictionary in jobs:
+		if enough >= 0 and amount >= enough:
+			break
 		# Rubble amount stays populated during carry; count its carrier only once.
 		if int(job.type) == JobType.HAUL_RUBBLE and not bool(job.done) and not carriers.has(int(job.id)):
+			if reachable_only and not _has_rubble_hauler(job):
+				continue
 			amount += int(job.amount)
 	return amount
+
+
+# Same test the scheduler uses before a Haul resident claims a rubble job.
+func _has_rubble_hauler(job: Dictionary) -> bool:
+	for resident: VaultResident in game.residents:
+		if resident.alive and _resident_allows(resident, JobType.HAUL_RUBBLE) and _job_available(resident, job):
+			return true
+	return false
 
 
 func get_build_supply_in_transit(building_id: int) -> int:
@@ -1229,12 +1249,32 @@ func _has_allowed_worker(type: int) -> bool:
 	return false
 
 
+# DETAILS status and the Next tip both ask this every frame, paused or not.
+# The answer is a pure function of the map tiles and the cells of the residents
+# eligible for this type (the type only matters through that set), so the BFS reruns only when that input changes: a dug tunnel, a
+# move, an undraft, a death or a work toggle is seen on the very same call.
+var hatch_path_searches := 0
+var _hatch_path_key: Array = []
+var _hatch_path_cells: Array[int] = []
+var _hatch_path_value := false
+
+
 func _has_worker_path(type: int) -> bool:
+	var key: Array = [map_grid.get_instance_id()]
 	for resident: VaultResident in game.residents:
 		if resident.alive and not resident.drafted and _resident_allows(resident, type):
-			if not map_grid.find_path(resident.get_cell(map_grid), BreachSystem.HATCH_CELL).is_empty():
-				return true
-	return false
+			key.append(resident.get_cell(map_grid))
+	if key == _hatch_path_key and map_grid.cells == _hatch_path_cells:
+		return _hatch_path_value
+	hatch_path_searches += 1
+	_hatch_path_value = false
+	for index in range(1, key.size()):
+		if not map_grid.find_path(key[index], BreachSystem.HATCH_CELL).is_empty():
+			_hatch_path_value = true
+			break
+	_hatch_path_key = key
+	_hatch_path_cells = map_grid.cells.duplicate()
+	return _hatch_path_value
 
 
 func _has_reserved_job(type: int) -> bool:

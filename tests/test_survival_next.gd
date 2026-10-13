@@ -7,6 +7,8 @@ const ENABLE_AIR_HELP := "Select a completed Air Recycler and click ENABLE so it
 const PLACE_AIR := "Next: YOU place Air Recycler · THEY craft it"
 const PLACE_AIR_HELP := "Designate AIR $14 and keep it powered (3). Craft auto-builds the blueprint."
 const DIG_NEXT := "Next: YOU mark rock [E] · THEY dig on Dig defaults"
+const HATCH_SHORT_2_NEXT := "Next: YOU mark 2 rock [E] · THEY fund the hatch patch"
+const HATCH_SHORT_4_HELP := "The hatch patch is 4 salvage short. Each dug rock tile yields 3 salvage once hauled."
 const KITCHEN_NEXT := "Next: YOU place a Nutrient Station · THEY cook"
 const FINISH_NUTRIENT_NEXT := "Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station"
 const FINISH_NUTRIENT_HELP := "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint."
@@ -2214,7 +2216,8 @@ func _test_salvage_supplied_charge_with_reserve() -> void:
 	_assert_true(reserve > 0, "real unsupplied hatch reserves salvage")
 	_assert_equal(reserve, 4, "hatch reserve amount")
 	_assert_equal(game.food_system.salvage, 0, "supplied Charge has no shared stock")
-	_assert_step(game, FINISH_CHARGE_NEXT, "select", FINISH_CHARGE_HELP)
+	# Stock 0 leaves the active patch 4 short, so Next names the hatch first.
+	_assert_step(game, HATCH_SHORT_2_NEXT, "dig", HATCH_SHORT_4_HELP)
 	game.select_building(charge.building_id)
 	var supplied_original := "Blueprint · Salvage 18/18\nAssembly remaining: %.1fs" % charge.construction_left
 	game.player_orders._refresh_inspector()
@@ -2237,7 +2240,12 @@ func _test_salvage_supplied_charge_with_reserve() -> void:
 		_assert_equal(spendable, sample.spendable, "mixed Charge spendable stock includes hatch reserve")
 		_assert_equal(shortfall, sample.shortfall, "only unfunded Charge contributes remaining cost")
 		_assert_equal(tiles, sample.tiles, "mixed Charge recovery tile count")
-		_assert_salvage_tip(game, shortfall, tiles)
+		if sample.salvage < BreachSystem.PATCH_COST:
+			# Guard premise: nothing delivered or in transit, so the patch stays 4 short.
+			_assert_equal([game.breach_system.patch_delivered, game.job_system.get_breach_supply_in_transit()], [0, 0], "hatch has 0 delivered and 0 in transit under the guard")
+			_assert_step(game, HATCH_SHORT_2_NEXT, "dig", HATCH_SHORT_4_HELP)
+		else:
+			_assert_salvage_tip(game, shortfall, tiles)
 		game.select_building(unfunded.building_id)
 		game.player_orders._refresh_inspector()
 		_assert_equal(game.player_orders.inspector_state.text, unfunded_original + "\nShort %d salvage (shared stock) · dig %d more rock" % [shortfall, tiles], "unfunded Charge inspector includes exact shared shortage")
