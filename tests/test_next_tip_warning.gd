@@ -1,7 +1,8 @@
 extends "res://tests/test_runner.gd"
 # During an active hatch response (WARNING or OPEN), Next names what blocks the
-# automatic patch before any other tip. A covered response keeps the ordinary
-# tip, and sealing (or DORMANT) never takes the blocker branch.
+# automatic patch before any other tip. A covered response keeps survival tips
+# but shows watch hatch instead of build-order tips, and sealing (or DORMANT)
+# never takes the blocker branch.
 
 const TICK := VaultGame.SIMULATION_TICK
 const DIG := ["Next: YOU mark rock [E] · THEY dig on Dig defaults", "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional.", "dig"]
@@ -15,6 +16,7 @@ const PATCH_SHORT_COVERED_NO_DIG := ["Next: YOU leave Haul on · THEY fund the h
 const ENABLE_DIG := ["Next: YOU enable Dig [P] · THEY fund the hatch patch", "The hatch patch is 2 salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage.", "select"]
 const PLACE_BUNKS := ["Next: YOU place bunks · THEY craft", "Place bunks so tired undrafted crew have a bed.", "bed"]
 const PATCH_SHORT_TRANSIT := ["Next: YOU mark 1 rock [E] · THEY fund the hatch patch", "The hatch patch is 1 salvage short. Each dug rock tile yields 3 salvage once hauled.", "dig"]
+const WATCH := ["Next: YOU watch hatch · THEY auto-patch", "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft.", "select"]
 const LOCK_HELP := "Acknowledge the hatch warning first (RESUME RESPONSE, FOCUS HATCH or Space); R and P stay locked until then. "
 const UNDRAFT_LOCKED := ["Next: YOU acknowledge warning · then undraft crew [R]", LOCK_HELP + "Drafted crew never answer the hatch. Select a drafted resident and press R to undraft.", "select"]
 const ENABLE_BOTH_LOCKED := ["Next: YOU acknowledge warning · then enable Haul + Craft [P]", LOCK_HELP + "Open PRIORITIES [P] and set Haul + Craft above OFF for an undrafted resident so crew auto-respond to the hatch.", "select"]
@@ -37,7 +39,7 @@ const CARRIER_WALK_TICKS := 200
 
 
 func _run() -> void:
-	_run_case("covered WARNING and OPEN keep the ordinary tip", _test_covered)
+	_run_case("covered WARNING and OPEN point at the hatch", _test_covered)
 	_run_case("Haul and Craft OFF name both during WARNING and OPEN", _test_both_off)
 	_run_case("Haul OFF or Craft OFF names that category", _test_single_off)
 	_run_case("supplied patch needs Craft only", _test_supplied)
@@ -106,9 +108,9 @@ func _test_covered() -> void:
 	var game := _healthy()
 	_assert_tuple(game, DIG, "DORMANT ordinary tip")
 	_warn(game)
-	_assert_tuple(game, DIG, "covered WARNING keeps the ordinary tip")
+	_assert_tuple(game, WATCH, "covered WARNING points at the hatch")
 	_open(game)
-	_assert_tuple(game, DIG, "covered OPEN keeps the ordinary tip")
+	_assert_tuple(game, WATCH, "covered OPEN points at the hatch")
 	_dispose(game)
 
 
@@ -122,7 +124,7 @@ func _test_both_off() -> void:
 	_assert_tuple(game, ENABLE_BOTH, "OPEN with Haul + Craft OFF")
 	game.residents[2].set_work_priority("haul", 4)
 	game.residents[3].set_work_priority("craft", 4)
-	_assert_tuple(game, DIG, "one Haul and one Craft above OFF clears the blocker")
+	_assert_tuple(game, WATCH, "one Haul and one Craft above OFF: covered, watch hatch")
 	_dispose(game)
 
 
@@ -146,7 +148,7 @@ func _test_supplied() -> void:
 	_warn(game)
 	_assert_equal(game.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "patch fully supplied")
 	_set_all(game, "haul", VaultResident.PRIORITY_DISABLED)
-	_assert_tuple(game, DIG, "supplied patch: Haul OFF no longer blocks")
+	_assert_tuple(game, WATCH, "supplied patch: Haul OFF no longer blocks, watch hatch")
 	_set_all(game, "craft", VaultResident.PRIORITY_DISABLED)
 	_assert_tuple(game, ENABLE_CRAFT, "supplied patch: Craft OFF blocks alone")
 	_dispose(game)
@@ -159,7 +161,7 @@ func _test_drafted_and_dead() -> void:
 		resident.drafted = true
 	_assert_tuple(game, UNDRAFT, "all living crew drafted")
 	game.residents[0].drafted = false
-	_assert_tuple(game, DIG, "one undrafted resident with defaults clears the blocker")
+	_assert_tuple(game, WATCH, "one undrafted resident with defaults: covered, watch hatch")
 	game.residents[0].set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
 	_assert_tuple(game, ENABLE_HAUL, "drafted crew with Haul on do not count")
 	for index in range(1, game.residents.size()):
@@ -193,7 +195,7 @@ func _test_salvage_short() -> void:
 	supply["in_transit"] = 1
 	_assert_tuple(game, PATCH_SHORT_TRANSIT, "stock 1 + delivered 1 + transit 1 is 1 short")
 	supply["in_transit"] = 2
-	_assert_tuple(game, DIG, "stock 1 + delivered 1 + transit 2 covers the patch")
+	_assert_tuple(game, WATCH, "stock 1 + delivered 1 + transit 2 covers the patch: watch hatch")
 	# Delivered and in-transit vary independently, so neither can stand in for the other.
 	_set_supply(game, supply, 2, 1, 0)
 	_assert_tuple(game, PATCH_SHORT_TRANSIT, "delivered 2 + transit 1 + stock 0 is 1 short")
@@ -329,8 +331,8 @@ func _test_hud_walk() -> void:
 	_set_all(game, "haul", VaultResident.DEFAULT_WORK_PRIORITY)
 	_set_all(game, "craft", VaultResident.DEFAULT_WORK_PRIORITY)
 	game.player_orders.refresh()
-	_assert_equal(game.player_orders.objective_label.text, DIG[0], "enabling Haul + Craft clears the blocker from the HUD")
-	_assert_tuple(game, DIG, "exact tip after re-enabling")
+	_assert_equal(game.player_orders.objective_label.text, WATCH[0], "enabling Haul + Craft swaps the blocker for watch hatch on the HUD")
+	_assert_tuple(game, WATCH, "exact tip after re-enabling is watch hatch")
 	_dispose(game)
 
 

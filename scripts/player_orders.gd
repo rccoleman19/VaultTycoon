@@ -987,7 +987,8 @@ func _fund_blueprint_step(kind: int) -> Dictionary:
 
 func _breach_blocker_step() -> Dictionary:
 	# During WARNING/OPEN, name what stops the automatic patch before any other tip.
-	# A covered response keeps the ordinary tips; sealing ends this branch.
+	# A covered response returns {} here; _primary_next_step then shows survival
+	# tips first and watch hatch instead of build-order tips. Sealing ends this branch.
 	var breach := game.breach_system
 	if not breach.is_response_active():
 		return {}
@@ -1272,6 +1273,14 @@ func _primary_next_step() -> Dictionary:
 				"tool": "select",
 				"help": "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food.",
 			}
+	if game.breach_system.is_response_active():
+		# Covered WARNING/OPEN (the blocker step found nothing missing): survival
+		# tips above still win, but no build-order tip until the hatch seals.
+		return {
+			"text": "Next: YOU watch hatch · THEY auto-patch",
+			"help": "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft.",
+			"tool": "select",
+		}
 	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
 	var floor_count := game.map_grid.get_floor_cells().size()
 	var dig_marks := game.map_grid.dig_marks.size()
