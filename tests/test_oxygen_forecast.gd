@@ -24,6 +24,8 @@ func _run() -> void:
 	_run_case("exactly at critical while falling shows no forecast", _test_at_line)
 	_run_case("steady rate shows no forecast", _test_steady)
 	_run_case("live simulation ticks the countdown down", _test_live)
+	_run_case("lost wing drops the breathable forecast", _test_ended_loss)
+	_run_case("won wing drops the critical forecast", _test_ended_win)
 	print("OXYGEN FORECAST TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
 
@@ -137,6 +139,25 @@ func _test_live() -> void:
 	game.player_orders.refresh()
 	var later: String = game.player_orders.oxygen_label.text.get_slice("\n", 2)
 	_assert_equal(later, "CRITICAL IN 04:16", "ten simulated seconds later")
+	_free(game)
+
+
+func _test_ended_loss() -> void:
+	var game := _spawn_game()
+	var before := _stage(game, 10.0, 1, false)
+	_assert_equal(before.get_slice("\n", 2), "BREATHABLE IN 00:11", "paused live wing keeps its forecast")
+	game._finish_loss()
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.oxygen_label.text, "O2 10% · +0.48%/s\nUSE 0.32 · RECYCLE 0.80", "lost wing keeps only the final readout")
+	_free(game)
+
+
+func _test_ended_win() -> void:
+	var game := _spawn_game()
+	_stage(game, 50.0, 1, true)
+	game._finish_win()
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.oxygen_label.text, "O2 50% · -2.02%/s\nUSE 0.32 · RECYCLE 0.80 · LEAK 2.5", "won wing keeps only the final readout")
 	_free(game)
 
 
