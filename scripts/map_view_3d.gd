@@ -54,6 +54,7 @@ var _mat_colonist_break: StandardMaterial3D
 var _mat_colonist_selected: StandardMaterial3D
 var _mat_colonist_dead: StandardMaterial3D
 var _mat_hatch: StandardMaterial3D
+var _breach_alarm: OmniLight3D
 
 
 func _ready() -> void:
@@ -92,6 +93,35 @@ func setup(grid: MapGrid, lighting: LightingSystem = null) -> void:
 	lighting_system = lighting
 	_ensure_materials()
 	rebuild_map(true)
+
+
+## Presentation only: a pulsing beacon over the hatch while a breach is live. It never feeds Lumen coverage.
+## WARNING pulses amber at 1 Hz, OPEN pulses red at 2 Hz; patch progress quiets it to half strength.
+static func breach_alarm_energy(phase: BreachSystem.Phase, patch_work_left: float, seconds: float) -> float:
+	if phase != BreachSystem.Phase.WARNING and phase != BreachSystem.Phase.OPEN:
+		return 0.0
+	var hz := 1.0 if phase == BreachSystem.Phase.WARNING else 2.0
+	var peak := 1.8 if phase == BreachSystem.Phase.WARNING else 3.0
+	var progress := clampf(1.0 - patch_work_left / BreachSystem.PATCH_WORK_SECONDS, 0.0, 1.0)
+	var wave := 0.5 + 0.5 * sin(TAU * hz * seconds)
+	return peak * (0.35 + 0.65 * wave) * (1.0 - 0.5 * progress)
+
+
+func _sync_breach_alarm(phase: BreachSystem.Phase, patch_work_left: float, seconds: float) -> void:
+	var energy := breach_alarm_energy(phase, patch_work_left, seconds)
+	if _breach_alarm == null or not is_instance_valid(_breach_alarm):
+		if energy <= 0.0:
+			return
+		_breach_alarm = OmniLight3D.new()
+		_breach_alarm.name = "BreachAlarm"
+		_breach_alarm.omni_range = 72.0
+		_breach_alarm.omni_attenuation = 1.2
+		var hatch_center := MapGrid.offset_cell_to_world(BreachSystem.HATCH_CELL)
+		_breach_alarm.position = Vector3(hatch_center.x, 14.0, hatch_center.y)
+		marker_root.add_child(_breach_alarm)
+	_breach_alarm.light_color = Color("EFC56B") if phase == BreachSystem.Phase.WARNING else Color("EF6860")
+	_breach_alarm.light_energy = energy
+	_breach_alarm.visible = energy > 0.0
 
 
 func _ensure_materials() -> void:
@@ -390,6 +420,7 @@ func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding
 			var progress := clampf(1.0 - patch_work_left / BreachSystem.PATCH_WORK_SECONDS, 0.0, 1.0)
 			var phase_color := Color("EFC56B") if breach_phase == BreachSystem.Phase.WARNING else Color("EF6860")
 			_mat_hatch.albedo_color = phase_color.lerp(Color("75D4B4"), progress)
+	_sync_breach_alarm(breach_phase, patch_work_left, Time.get_ticks_msec() / 1000.0)
 	var prop_root := get_node_or_null("PropRoot") as Node3D
 	if prop_root == null:
 		prop_root = Node3D.new()
