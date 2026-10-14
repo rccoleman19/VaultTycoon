@@ -1758,6 +1758,13 @@ func _refresh_oxygen() -> void:
 	]
 	if oxygen.breach_loss_rate > 0.0:
 		oxygen_label.text += " · LEAK %.1f" % oxygen.breach_loss_rate
+	# A finished wing no longer simulates, so a countdown would freeze forever.
+	var crossing := -1.0 if game.ended else oxygen.get_seconds_to_critical_crossing()
+	if crossing >= 0.0:
+		oxygen_label.text += "\n%s IN %s" % [
+			"CRITICAL" if oxygen.net_rate < 0.0 else "BREATHABLE",
+			_format_seconds(crossing),
+		]
 	oxygen_bar.value = oxygen.oxygen
 	if oxygen.is_critical():
 		oxygen_bar.modulate = Color("ef6860")
