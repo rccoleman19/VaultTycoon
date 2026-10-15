@@ -10,6 +10,7 @@ const PRIORITY_HIGHEST := 1
 const PRIORITY_LOWEST := 4
 const DEFAULT_WORK_PRIORITY := 3
 const NO_MANUAL_DESTINATION := Vector2i(-1, -1)
+const THIN_AIR_WORK_MULTIPLIER := 0.80
 # Public aliases make the numeric contract unambiguous to UI, tests, and future systems.
 const PRIORITY_OFF := PRIORITY_DISABLED
 const WORK_PRIORITY_OFF := PRIORITY_DISABLED
@@ -38,6 +39,8 @@ var recreating := false
 var recreation_id := -1
 var recreation_sessions := 0
 var stress_break_left := 0.0
+# Set each needs tick from wing O2; thin air (<= LOW) slows dig/build/craft.
+var short_of_air := false
 var drafted := false
 var manual_destination := NO_MANUAL_DESTINATION
 var is_forced_job := false
@@ -193,6 +196,7 @@ func advance_needs(
 ) -> void:
 	if not alive:
 		return
+	short_of_air = low_oxygen
 	var medical_rest := medical_bed_id >= 0 and state == "Rest-Medical"
 	needs.advance(day_fraction, lit, sleeping or medical_rest, in_bed or medical_rest, recreation_active, low_oxygen)
 	if needs.health <= 0.0:
@@ -217,6 +221,8 @@ func get_work_multiplier() -> float:
 		multiplier *= 0.65
 	if needs.mood < ResidentNeeds.LOW_MOOD_THRESHOLD:
 		multiplier *= 0.70
+	if short_of_air:
+		multiplier *= THIN_AIR_WORK_MULTIPLIER
 	return maxf(0.35, multiplier)
 
 
