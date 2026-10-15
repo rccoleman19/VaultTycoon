@@ -6,6 +6,7 @@ extends SceneTree
 
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 const EPS := 0.0001
+const THIN_AIR_SAVE_TEST_PATH := "user://headless_thin_air_work.json"
 
 var _case_count := 0
 var _assertion_count := 0
@@ -21,6 +22,7 @@ func _run() -> void:
 	_run_case("thin air multiplies work speed and keeps the floor", _test_multiplier)
 	_run_case("live wing O2 sets and clears the thin-air penalty", _test_live_wing)
 	_run_case("LOW threshold is inclusive for work speed", _test_dig_progress)
+	_run_case("paused load at LOW O2 keeps the thin-air work speed", _test_paused_load)
 	print("THIN AIR WORK TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
 
@@ -118,3 +120,47 @@ func _test_dig_progress() -> void:
 	_near(_dig_progress(100.0), 1.0, "1s of work in good air")
 	_near(_dig_progress(35.0), 0.8, "1s of work at exactly LOW")
 	_near(_dig_progress(36.0), 1.0, "1s of work just above LOW")
+
+
+func _remove_test_save() -> void:
+	if FileAccess.file_exists(THIN_AIR_SAVE_TEST_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(THIN_AIR_SAVE_TEST_PATH))
+
+
+func _inspector_work_line(game: VaultGame, resident: VaultResident) -> String:
+	game.select_resident(resident.resident_id)
+	game.player_orders.refresh()
+	return game.player_orders.inspector_state.text
+
+
+func _test_paused_load() -> void:
+	_remove_test_save()
+	var original := _spawn()
+	original.oxygen_system.oxygen = 30.0
+	original.step_simulation(0.1)
+	var saved_resident: VaultResident = original.residents[0]
+	_check(saved_resident.short_of_air, "LOW wing O2 marks the saved resident short of air")
+	_check("Work speed: 80%" in _inspector_work_line(original, saved_resident), "inspector shows 80% before saving")
+	_check(original.save_game(false, THIN_AIR_SAVE_TEST_PATH), "LOW-O2 wing saves to an isolated file")
+	_dispose(original)
+	var loaded := _spawn()
+	loaded.user_paused = false
+	_check(loaded.load_game(THIN_AIR_SAVE_TEST_PATH), "LOW-O2 save loads through the public file path")
+	_check(loaded.user_paused, "load leaves the wing paused")
+	_check(loaded.oxygen_system.is_low(), "loaded wing O2 is still LOW")
+	var resident: VaultResident = loaded.residents[0]
+	resident.needs.food = 100.0
+	resident.needs.rest = 100.0
+	resident.needs.mood = 80.0
+	_check(resident.short_of_air, "load rebuilds the thin-air flag from wing O2")
+	_near(resident.get_work_multiplier(), 0.8, "paused load keeps the thin-air work speed")
+	var text := _inspector_work_line(loaded, resident)
+	_check("Work speed: 80%" in text, "paused inspector still shows 80% after load: " + text.replace("\n", " | "))
+	loaded.oxygen_system.oxygen = 90.0
+	_check(loaded.save_game(false, THIN_AIR_SAVE_TEST_PATH), "breathable wing saves over the isolated file")
+	_dispose(loaded)
+	var fresh := _spawn()
+	_check(fresh.load_game(THIN_AIR_SAVE_TEST_PATH), "breathable save loads")
+	_check(not fresh.residents[0].short_of_air, "breathable load leaves residents at full air")
+	_dispose(fresh)
+	_remove_test_save()
