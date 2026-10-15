@@ -722,3 +722,18 @@ func _building_color_for_kind(kind: int) -> Color:
 		VaultBuilding.Kind.MEDICAL_BED:
 			return Color(0.85, 0.87, 0.88)
 	return Color.WHITE
+
+
+## Presentation only: the chamber fill cools and dims as air runs out, so a falling O2 reads in the 3D view.
+## Full warm fill at or above LOW (35%), fully cold and dim at or below CRITICAL (15%). Never feeds Lumen coverage.
+static func air_haze_strength(oxygen: float) -> float:
+	var span := OxygenSystem.LOW_OXYGEN_THRESHOLD - OxygenSystem.CRITICAL_OXYGEN_THRESHOLD
+	return clampf((OxygenSystem.LOW_OXYGEN_THRESHOLD - oxygen) / span, 0.0, 1.0)
+
+
+func sync_air_haze(oxygen: float) -> void:
+	if _chamber_fill == null or not is_instance_valid(_chamber_fill):
+		return
+	var haze := air_haze_strength(oxygen)
+	_chamber_fill.light_color = Color(1.0, 0.82, 0.62).lerp(Color("7F9BB8"), haze)
+	_chamber_fill.light_energy = lerpf(0.65, 0.3, haze)
