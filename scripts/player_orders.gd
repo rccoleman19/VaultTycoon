@@ -1460,9 +1460,10 @@ func _refresh_inspector() -> void:
 				mood_factors = "Seeking Rec Console · %s" % resident.needs.get_mood_factors(is_lit, false, game.oxygen_system.is_low())
 		elif resident.stress_break_left > 0.0 and not resident.sleeping and not resident.drafted:
 			mood_factors = "Stress break · mood holds · +%d in %ds" % [int(ResidentNeeds.STRESS_BREAK_RECOVERY), ceili(resident.stress_break_left)]
-		inspector_state.text = "Current task: %s\nWork speed: %d%%\nMood: %s\n%s" % [
+		inspector_state.text = "Current task: %s\nWork speed: %d%%%s\nMood: %s\n%s" % [
 			_get_resident_order_status(resident),
 			roundi(resident.get_work_multiplier() * 100.0),
+			(" · Rec boost %ds" % ceili(resident.rec_boost_left)) if resident.rec_boost_left > 0.0 else "",
 			resident.needs.get_mood_state(),
 			mood_factors,
 		]
