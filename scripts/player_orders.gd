@@ -2105,8 +2105,9 @@ func show_outcome(won: bool, survivors: int) -> void:
 		outcome_grade.add_theme_color_override("font_color", CREW_GRADE_COLORS[int(grade["stars"]) - 1])
 		outcome_grade.visible = true
 	else:
-		outcome_grade.visible = false
-		outcome_grade.text = ""
+		outcome_grade.text = format_loss_cause(loss_cause())
+		outcome_grade.add_theme_color_override("font_color", Color("ef6860"))
+		outcome_grade.visible = not outcome_grade.text.is_empty()
 		outcome_title.text = "WING LOST"
 		outcome_title.add_theme_color_override("font_color", Color("ef6860"))
 		outcome_text.text = "No residents remain alive. Reopen the last daily checkpoint or initialize a new wing and stabilize supplies, powered air recycling, and the pressure hatch sooner."
@@ -2150,6 +2151,56 @@ func format_crew_grade(grade: Dictionary) -> String:
 	var reasons: Array = grade["reasons"]
 	var reason := "whole crew home, hatch held, crew steady" if reasons.is_empty() else " · ".join(reasons)
 	return "CREW RATING %s%s · %s" % ["★".repeat(stars), "☆".repeat(3 - stars), reason]
+
+
+# Loss cause (QA 2026-10-18c #1). A corpse's needs freeze at death and O2 is saved, so the likely
+# cause is derived, never stored. Per dead resident, retained evidence first (the first match
+# wins): food 0, rest 0, mood at the severe line, then O2 at or below the suffocation line, else
+# unknown. A corpse still above 0 health (a direct kill) is unknown. The hint follows the largest
+# count; ties keep this order.
+const LOSS_CAUSES: Array[String] = ["starved", "exhausted", "in despair", "suffocated", "unknown"]
+const LOSS_CAUSE_HINTS: Array[String] = [
+	"Next wing: keep a Grow Tray and Nutrient Station powered, with Cook and Haul on, before the starting meals run out.",
+	"Next wing: build Bunks and undraft tired residents so they can sleep.",
+	"Next wing: keep the crew lit and build a powered Rec Console.",
+	"Next wing: keep an Air Recycler powered and patch the hatch before it opens.",
+	"Next wing: pause when health falls and check food, rest, mood and oxygen.",
+]
+
+
+func loss_cause() -> Array[int]:
+	var counts: Array[int] = [0, 0, 0, 0, 0]
+	var air_lost := game.oxygen_system.oxygen <= OxygenSystem.CRITICAL_OXYGEN_THRESHOLD
+	for resident: VaultResident in game.residents:
+		if resident.alive:
+			continue
+		if resident.needs.health > 0.0:
+			counts[4] += 1
+		elif resident.needs.food <= 0.0:
+			counts[0] += 1
+		elif resident.needs.rest <= 0.0:
+			counts[1] += 1
+		elif resident.needs.mood <= ResidentNeeds.SEVERE_MOOD_THRESHOLD:
+			counts[2] += 1
+		elif air_lost:
+			counts[3] += 1
+		else:
+			counts[4] += 1
+	return counts
+
+
+func format_loss_cause(counts: Array[int]) -> String:
+	var parts: Array[String] = []
+	var top := -1
+	for i in counts.size():
+		if counts[i] <= 0:
+			continue
+		parts.append("%d %s" % [counts[i], LOSS_CAUSES[i]])
+		if top < 0 or counts[i] > counts[top]:
+			top = i
+	if top < 0:
+		return ""
+	return "LIKELY CAUSE · %s\n%s" % [" · ".join(parts), LOSS_CAUSE_HINTS[top]]
 
 
 func hide_outcome() -> void:

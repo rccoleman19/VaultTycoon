@@ -1,6 +1,6 @@
 extends "res://tests/test_runner.gd"
 
-# Win-screen crew rating (QA 2026-10-18b #8).
+# Win-screen crew rating (QA 2026-10-18b #8) and loss cause (QA 2026-10-18c #1).
 const FULL := "CREW RATING ★★★ · whole crew home, hatch held, crew steady"
 
 
@@ -12,6 +12,9 @@ func _run() -> void:
 	_run_case("hatch history survives the seal; a legacy save is not penalized", _test_hatch_history)
 	_run_case("the loss screen hides the grade and keeps its layout", _test_loss_unchanged)
 	_run_case("a real managed win grades on screen and after a reload", _test_real_win)
+	_run_case("the loss panel names each cause with one hint", _test_loss_causes)
+	_run_case("a real idle loss reads starved and survives a reload", _test_real_idle_loss)
+	_run_case("a real air loss reads suffocated", _test_real_suffocation_loss)
 
 	print("")
 	if _failure_count == 0:
@@ -202,4 +205,112 @@ func _test_real_win() -> void:
 	_assert_equal(JSON.stringify(game.create_snapshot()), before, "rendering the grade does not change the snapshot")
 	_assert_true(game.apply_snapshot(JSON.parse_string(before)), "won snapshot reloads")
 	_assert_equal(game.player_orders.outcome_grade.text, shown, "reload shows the same grade")
+	_dispose(game)
+
+
+# Loss cause (QA 2026-10-18c #1).
+const STARVED_HINT := "Next wing: keep a Grow Tray and Nutrient Station powered, with Cook and Haul on, before the starting meals run out."
+const REST_HINT := "Next wing: build Bunks and undraft tired residents so they can sleep."
+const AIR_HINT := "Next wing: keep an Air Recycler powered and patch the hatch before it opens."
+const UNKNOWN_HINT := "Next wing: pause when health falls and check food, rest, mood and oxygen."
+
+
+func _cause(game: VaultGame) -> String:
+	return game.player_orders.format_loss_cause(game.player_orders.loss_cause())
+
+
+func _die(resident: VaultResident) -> void:
+	resident.needs.health = 0.0
+	resident.kill()
+
+
+func _test_loss_causes() -> void:
+	var game := _steady_game()
+	_assert_equal(_cause(game), "", "nobody dead: no cause line")
+	var r: Array = game.residents
+	r[0].needs.food = 0.0
+	_die(r[0])
+	_assert_equal(_cause(game), "LIKELY CAUSE · 1 starved\n" + STARVED_HINT, "starved")
+	r[1].needs.rest = 0.0
+	_die(r[1])
+	r[2].needs.rest = 0.0
+	_die(r[2])
+	_assert_equal(_cause(game), "LIKELY CAUSE · 1 starved · 2 exhausted\n" + REST_HINT, "largest count picks the hint")
+	r[3].needs.mood = ResidentNeeds.SEVERE_MOOD_THRESHOLD
+	r[3].needs.rest = 0.0
+	r[3].needs.food = 0.0001
+	_die(r[3])
+	_assert_equal(_cause(game), "LIKELY CAUSE · 1 starved · 3 exhausted\n" + REST_HINT, "rest outranks mood; food above 0 is not starvation")
+	r[3].needs.rest = 0.0001
+	_assert_true(_cause(game).contains("1 in despair"), "mood at the severe line is despair")
+	r[3].needs.mood = ResidentNeeds.SEVERE_MOOD_THRESHOLD + 0.0001
+	r[1].needs.rest = 50.0
+	_assert_equal(_cause(game), "LIKELY CAUSE · 1 starved · 1 exhausted · 2 unknown\n" + UNKNOWN_HINT, "no evidence and O2 fine: unknown")
+	game.oxygen_system.oxygen = OxygenSystem.CRITICAL_OXYGEN_THRESHOLD + 0.0001
+	_assert_true(not _cause(game).contains("suffocated"), "O2 above 15 is not suffocation")
+	game.oxygen_system.oxygen = OxygenSystem.CRITICAL_OXYGEN_THRESHOLD
+	_assert_equal(_cause(game), "LIKELY CAUSE · 1 starved · 1 exhausted · 2 suffocated\n" + AIR_HINT, "low O2 only explains corpses without need evidence")
+	r[1].needs.rest = 0.0
+	_assert_equal(_cause(game), "LIKELY CAUSE · 1 starved · 2 exhausted · 1 suffocated\n" + REST_HINT, "frozen needs outrank current O2")
+	r[2].needs.rest = 60.0
+	r[2].needs.food = 0.0
+	_assert_equal(_cause(game), "LIKELY CAUSE · 2 starved · 1 exhausted · 1 suffocated\n" + STARVED_HINT, "tie-free recount")
+	r[3].needs.rest = 0.0
+	_assert_equal(_cause(game), "LIKELY CAUSE · 2 starved · 2 exhausted\n" + STARVED_HINT, "ties keep the cause order")
+	var healthy_kill := _steady_game()
+	healthy_kill.residents[0].needs.food = 0.0
+	healthy_kill.residents[0].kill()
+	_assert_equal(_cause(healthy_kill), "LIKELY CAUSE · 1 unknown\n" + UNKNOWN_HINT, "a corpse above 0 health is unknown")
+	_dispose(healthy_kill)
+	var orders := game.player_orders
+	orders.show_outcome(false, 0)
+	_assert_true(orders.outcome_grade.visible and orders.outcome_grade.text == _cause(game), "loss panel shows the cause")
+	_assert_equal(orders.outcome_grade.get_theme_color("font_color"), Color("ef6860"), "cause reads red")
+	_assert_true(orders.outcome_text.text.begins_with("No residents remain alive."), "loss body unchanged")
+	_assert_equal(orders.outcome_title.text, "WING LOST", "loss title unchanged")
+	var before := JSON.stringify(game.create_snapshot())
+	orders.show_outcome(false, 0)
+	_assert_equal(JSON.stringify(game.create_snapshot()), before, "rendering the cause changes nothing saved")
+	orders.show_outcome(true, 0)
+	_assert_true(orders.outcome_grade.text.begins_with("CREW RATING "), "a win replaces the cause line")
+	_dispose(game)
+
+
+func _test_real_idle_loss() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	var t := 0.0
+	while not game.ended and t < 400.0:
+		if game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged:
+			game.acknowledge_breach_warning(true)
+		game.user_paused = false
+		game.step_simulation(1.0)
+		t += 1.0
+	_assert_true(game.ended and game.outcome == "loss", "an untouched wing is lost")
+	var orders := game.player_orders
+	print("REAL IDLE LOSS at %.0fs: %s" % [game.day_cycle.elapsed_seconds, orders.outcome_grade.text.replace("\n", " | ")])
+	_assert_equal(orders.outcome_grade.text, "LIKELY CAUSE · 4 starved\n" + STARVED_HINT, "idle loss reads starved")
+	var snap := JSON.stringify(game.create_snapshot())
+	_assert_true(game.apply_snapshot(JSON.parse_string(snap)), "lost snapshot reloads")
+	_assert_equal(game.player_orders.outcome_grade.text, "LIKELY CAUSE · 4 starved\n" + STARVED_HINT, "reload shows the same cause")
+	_dispose(game)
+
+
+func _test_real_suffocation_loss() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+		resident.set_work_priority("craft", VaultResident.PRIORITY_DISABLED)
+	game.oxygen_system.oxygen = 16.0
+	var t := 0.0
+	while not game.ended and t < 120.0:
+		if game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged:
+			game.acknowledge_breach_warning(true)
+		game.user_paused = false
+		game.step_simulation(1.0)
+		t += 1.0
+	_assert_true(game.ended and game.outcome == "loss", "a wing out of air is lost")
+	print("REAL AIR LOSS at %.0fs: %s" % [game.day_cycle.elapsed_seconds, game.player_orders.outcome_grade.text.replace("\n", " | ")])
+	_assert_equal(game.player_orders.outcome_grade.text, "LIKELY CAUSE · 4 suffocated\n" + AIR_HINT, "air loss reads suffocated")
 	_dispose(game)
