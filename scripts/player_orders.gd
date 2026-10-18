@@ -1291,6 +1291,8 @@ func _primary_next_step() -> Dictionary:
 				unfinished_air += 1
 		if completed_air == 0:
 			if unfinished_air > 0:
+				if _salvage_shortfall(VaultBuilding.Kind.AIR_RECYCLER) > 0:
+					return _fund_blueprint_step(VaultBuilding.Kind.AIR_RECYCLER)
 				return {
 					"text": "Next: YOU leave Haul + Craft on · THEY finish the Air Recycler",
 					"help": "Keep Haul + Craft above OFF so crew supply and finish the Air Recycler blueprint.",
