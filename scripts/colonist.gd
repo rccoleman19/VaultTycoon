@@ -332,6 +332,8 @@ func kill() -> void:
 	alive = false
 	sleeping = false
 	drafted = false
+	# short_of_air only refreshes while alive; a corpse must not keep the thin-air 80%.
+	short_of_air = false
 	manual_destination = NO_MANUAL_DESTINATION
 	clear_forced_order()
 	clear_path()

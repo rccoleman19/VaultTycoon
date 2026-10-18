@@ -668,7 +668,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	# short_of_air is derived, not saved: rebuild it so a paused load shows the right work speed.
 	var thin_air := oxygen_system.is_low()
 	for resident in residents:
-		resident.short_of_air = thin_air
+		resident.short_of_air = thin_air and resident.alive
 	selected_resident_id = -1
 	selected_building_id = -1
 	selected_breach = false
