@@ -1186,7 +1186,9 @@ func _test_mood_tip_kitchen_interrupt() -> void:
 		var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(22, 12))
 		rec.manually_disabled = true
 		game.power_grid.recalculate(game.buildings)
-		bo.needs.health = 99.0
+		# 95 HP: injured under both the < 100 tip gate and #82's HP <= 95 admission gate, so the
+		# Med tip is the lower step on the solo branch and on the integrated base alike.
+		bo.needs.health = 95.0
 		_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
 		ari.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
 		_assert_next(game, ENABLE_REC_NEXT, "%s: the break line enters the Rec tip over Med" % crisis)
