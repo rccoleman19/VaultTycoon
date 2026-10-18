@@ -22,6 +22,7 @@ func _init() -> void:
 func _run() -> void:
 	_run_case("main scene boots with a sealed four-resident wing", _test_scene_boot_and_initial_state)
 	_run_case("bed shortage compares undrafted bunk need with free completed bunks", _test_bed_shortage_alert)
+	_run_case("alert bar leads with CRITICAL, then O2 and food threats, then the rest", _test_alert_severity_order)
 	_run_case("DETAILS respects manual choices through ongoing brownouts", _test_details_brownout_collapse)
 	_run_case("DETAILS opens once for each overlapping urgency onset", _test_details_overlapping_urgencies)
 	_run_case("DETAILS reopens when a cleared brownout recurs", _test_details_brownout_recurrence)
@@ -224,6 +225,37 @@ func _test_bed_shortage_alert() -> void:
 	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
 	game.player_orders.refresh()
 	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "one free completed bunk clears the floor sleeper's shortage immediately")
+	_dispose(game)
+
+
+func _test_alert_severity_order() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.residents[1].drafted = true
+	game.food_system.meals = 0
+	game.oxygen_system.oxygen = OxygenSystem.LOW_OXYGEN_THRESHOLD
+	game.player_orders.refresh()
+	var text := game.player_orders.alert_label.text
+	_assert_true(text.begins_with("OXYGEN LOW  ·  LOW MEALS"), "with no CRITICAL the O2 then food threats lead the bar")
+	_assert_true(text.find("LOW MEALS") < text.find("DRAFTED CREW 1 · AUTO WORK PAUSED"), "drafted crew falls behind the food threat")
+	game.residents[0].needs.food = 10.0
+	game.player_orders.refresh()
+	text = game.player_orders.alert_label.text
+	var segments := text.split("  ·  ")
+	_assert_equal(segments[0], "CRITICAL: Ari", "a resident CRITICAL leads the bar")
+	_assert_equal(segments[1], "OXYGEN LOW", "O2 follows the life threat")
+	_assert_equal(segments[2], "LOW MEALS", "food follows O2")
+	_assert_true(segments.find("DRAFTED CREW 1 · AUTO WORK PAUSED") > 2, "the rest keep their wording behind the threats")
+	_assert_equal(text.count("CRITICAL: "), 1, "the CRITICAL segment appears once")
+	var expected := ["CRITICAL: Ari", "OXYGEN LOW", "LOW MEALS", "DRAFTED CREW 1 · AUTO WORK PAUSED"]
+	for segment in expected:
+		_assert_true(segment in segments, "no segment is dropped: %s" % segment)
+	game.residents[0].needs.food = 80.0
+	game.residents[1].drafted = false
+	game.food_system.meals = 40
+	game.oxygen_system.oxygen = OxygenSystem.STARTING_OXYGEN
+	game.player_orders.refresh()
+	_assert_false(game.player_orders.alert_label.text.begins_with("CRITICAL"), "the lead clears with the threat")
 	_dispose(game)
 
 

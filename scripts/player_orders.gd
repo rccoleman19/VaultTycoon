@@ -1671,8 +1671,36 @@ func _refresh_alerts() -> void:
 		if resident.alive and (resident.needs.food < 20.0 or resident.needs.rest < 15.0):
 			alerts.append("CRITICAL: %s" % resident.resident_name)
 			break
+	alerts = _order_alerts_by_severity(alerts)
 	alert_label.text = "STATUS NOMINAL" if alerts.is_empty() else "  ·  ".join(alerts)
 	alert_label.add_theme_color_override("font_color", Color("75d4b4") if alerts.is_empty() else Color("ef6860"))
+
+
+# Alert bar severity (QA 2026-10-18b #5): a resident CRITICAL leads, then the O2, breach and
+# food threats, then everything else. Order within a tier and every wording are unchanged.
+const ALERT_THREAT_PREFIXES: Array[String] = ["OXYGEN ", "BREACH OPEN", "SEAL WARNING", "LOW MEALS", "FOOD WAITING", "NO COOK ENABLED"]
+
+
+func _order_alerts_by_severity(alerts: Array[String]) -> Array[String]:
+	var ordered: Array[String] = []
+	var threats: Array[String] = []
+	var rest: Array[String] = []
+	for alert in alerts:
+		if alert.begins_with("CRITICAL: "):
+			ordered.append(alert)
+			continue
+		var is_threat := false
+		for prefix in ALERT_THREAT_PREFIXES:
+			if alert.begins_with(prefix):
+				is_threat = true
+				break
+		if is_threat:
+			threats.append(alert)
+		else:
+			rest.append(alert)
+	ordered.append_array(threats)
+	ordered.append_array(rest)
+	return ordered
 
 
 func _refresh_power_detail() -> void:
