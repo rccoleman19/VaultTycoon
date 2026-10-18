@@ -113,6 +113,7 @@ func _run() -> void:
 	_test_kitchen_before_offline_rec()
 	_test_offline_rec_priority()
 	_test_mood_tip_hysteresis()
+	_test_mood_tip_kitchen_interrupt()
 	_test_medical_availability()
 	_test_medical_finish_restore()
 	_test_medical_enable_restore()
@@ -1163,6 +1164,111 @@ func _test_mood_tip_hysteresis() -> void:
 	ari.needs.mood = 20.0
 	_assert_true(game.apply_snapshot(game.create_snapshot()), "snapshot reloads mid-hold")
 	_assert_dig(game, "a load replaces the crew and resets the hold at mood 20")
+	_dispose(game)
+
+
+func _assert_next(game: VaultGame, text: String, message: String) -> void:
+	_assert_equal(game.player_orders._primary_next_step()["text"], text, message)
+
+
+func _test_mood_tip_kitchen_interrupt() -> void:
+	# Codex P2 on #108: the kitchen crisis returns before the Rec branch, so the hold must still
+	# follow live needs while the crisis owns Next, or a stale hold revives Rec over lower tips.
+	for crisis in ["no kitchen", "unpowered kitchen"]:
+		var game := _healthy_game()
+		var ari: VaultResident = game.residents[0]
+		var bo: VaultResident = game.residents[1]
+		var crisis_next := KITCHEN_NEXT
+		if crisis == "unpowered kitchen":
+			var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+			kitchen.manually_disabled = true
+			crisis_next = POWER_NEXT
+		var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(22, 12))
+		rec.manually_disabled = true
+		game.power_grid.recalculate(game.buildings)
+		bo.needs.health = 99.0
+		_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+		ari.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+		_assert_next(game, ENABLE_REC_NEXT, "%s: the break line enters the Rec tip over Med" % crisis)
+		# Recovery during the crisis: Rec lifts mood above 35, then it sinks back without a break.
+		ari.needs.food = 19.0
+		game.food_system.meals = 0
+		_assert_next(game, crisis_next, "%s: the food crisis outranks the held Rec tip" % crisis)
+		ari.needs.recreate(1.5)
+		_assert_false(ari.needs.wants_recreation(), "%s: Rec lifts mood above 35 mid-crisis" % crisis)
+		_assert_next(game, crisis_next, "%s: the crisis keeps Next while mood recovers" % crisis)
+		ari.needs.advance(0.1, true, false, false)
+		_assert_true(ari.needs.wants_recreation() and ari.needs.mood > ResidentNeeds.BREAK_MOOD_THRESHOLD, "%s: mood sinks into 10-35 without a new break" % crisis)
+		_assert_next(game, crisis_next, "%s: the crisis still owns Next at mood %s" % [crisis, ari.needs.mood])
+		ari.needs.eat()
+		game.food_system.meals = game.get_alive_count()
+		_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+		_assert_next(game, MED_NEXT, "%s: once fed, Med guidance shows, not a stale Rec tip" % crisis)
+		game.player_orders.refresh()
+		_assert_equal(game.player_orders.objective_label.text, MED_NEXT, "%s: the HUD objective shows Med, not Rec" % crisis)
+		# A slide into 10-35 during the crisis, without touching the break line, does not enter.
+		ari.needs.food = 19.0
+		game.food_system.meals = 0
+		_assert_next(game, crisis_next, "%s: the second crisis owns Next" % crisis)
+		ari.needs.advance(0.1, true, false, false)
+		_assert_true(ari.needs.wants_recreation() and ari.needs.mood > ResidentNeeds.BREAK_MOOD_THRESHOLD, "%s: mood keeps sliding above the break line" % crisis)
+		_assert_next(game, crisis_next, "%s: the crisis owns Next during the slide" % crisis)
+		ari.needs.eat()
+		game.food_system.meals = game.get_alive_count()
+		_assert_next(game, MED_NEXT, "%s: a mid-crisis slide without a break does not enter the Rec tip" % crisis)
+		# Re-entry during the crisis: the break line latches even though a stress break leaves 25.
+		ari.needs.food = 19.0
+		game.food_system.meals = 0
+		ari.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+		_assert_next(game, crisis_next, "%s: the break line mid-crisis keeps the kitchen first" % crisis)
+		ari.needs.take_unstructured_break()
+		_assert_equal(ari.needs.mood, ResidentNeeds.BREAK_MOOD_THRESHOLD + ResidentNeeds.STRESS_BREAK_RECOVERY, "%s: the stress break lifts mood to 25 mid-crisis" % crisis)
+		_assert_next(game, crisis_next, "%s: the crisis owns Next after the break" % crisis)
+		ari.needs.eat()
+		game.food_system.meals = game.get_alive_count()
+		for _call in 2:
+			_assert_next(game, ENABLE_REC_NEXT, "%s: a break entered mid-crisis holds Rec at 25 once fed" % crisis)
+		game.player_orders.refresh()
+		_assert_equal(game.player_orders.objective_label.text, ENABLE_REC_NEXT, "%s: the HUD objective shows the held Rec tip" % crisis)
+		# After the crisis the existing hysteresis is unchanged: release above 35, re-enter at 9.
+		ari.needs.recreate(1.0)
+		_assert_next(game, MED_NEXT, "%s: recovery above 35 after the crisis releases" % crisis)
+		ari.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+		_assert_next(game, ENABLE_REC_NEXT, "%s: the break line re-enters after the crisis" % crisis)
+		_dispose(game)
+	# A new game during a crisis-held tip resets the hold.
+	var game := _healthy_game()
+	game.residents[0].needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+	_assert_next(game, REC_NEXT, "the break line enters before the new game")
+	game.residents[0].needs.food = 19.0
+	game.food_system.meals = 0
+	_assert_next(game, KITCHEN_NEXT, "the crisis holds Next before the new game")
+	game.new_game()
+	game.begin_shift()
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.mood = 100.0
+		resident.needs.health = 100.0
+	game.residents[0].needs.mood = 20.0
+	game.residents[0].needs.food = 19.0
+	game.food_system.meals = 0
+	_assert_next(game, KITCHEN_NEXT, "the new crew's crisis owns Next")
+	game.residents[0].needs.eat()
+	game.food_system.meals = game.get_alive_count()
+	_assert_dig(game, "a new game resets the hold: mood 20 shows no Rec tip once fed")
+	_dispose(game)
+	# A dead resident at the break line cannot enter the hold while the crisis owns Next.
+	game = _healthy_game()
+	game.residents[1].needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+	game.residents[1].alive = false
+	game.residents[0].needs.mood = 20.0
+	game.residents[0].needs.food = 19.0
+	game.food_system.meals = 0
+	_assert_next(game, KITCHEN_NEXT, "the crisis owns Next beside a dead resident at the break line")
+	game.residents[0].needs.eat()
+	game.food_system.meals = game.get_alive_count()
+	_assert_dig(game, "a dead resident cannot latch the Rec tip mid-crisis")
 	_dispose(game)
 
 

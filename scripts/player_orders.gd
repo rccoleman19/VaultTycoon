@@ -1012,6 +1012,8 @@ func _primary_next_step() -> Dictionary:
 			injured_without_reservation = true
 	if critical_resident and game.food_system.meals < game.get_alive_count():
 		var completed_kitchens := game.get_completed_building_count(VaultBuilding.Kind.KITCHEN)
+		# The crisis returns before the Rec branch, so keep the Rec-tip hold current here too.
+		_hold_mood_break_tip(mood_break_risk, rec_wanted)
 		if completed_kitchens < 1:
 			var unfinished_kitchens := 0
 			for kitchen: VaultBuilding in game.buildings:
