@@ -112,6 +112,7 @@ func _run() -> void:
 	_test_rec_guards()
 	_test_kitchen_before_offline_rec()
 	_test_offline_rec_priority()
+	_test_mood_tip_hysteresis()
 	_test_medical_availability()
 	_test_medical_finish_restore()
 	_test_medical_enable_restore()
@@ -1081,9 +1082,12 @@ func _test_rec_guards() -> void:
 		_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(22, 12))
 		game.power_grid.recalculate(game.buildings)
 		_assert_offline_rec(game, disabled)
+		# The tip latched at mood 9 above, so it holds until nobody wants Rec (mood > 35).
 		for mood in [9.0001, 35.0]:
 			game.residents[0].needs.mood = mood
-			_assert_dig(game, "mood %s does not trigger offline Rec" % mood)
+			_assert_offline_rec(game, disabled)
+		game.residents[0].needs.mood = 35.0001
+		_assert_dig(game, "mood above 35 releases the offline Rec tip")
 		game.residents[0].needs.mood = 9.0
 		game.residents[0].alive = false
 		_assert_dig(game, "dead mood-break resident does not trigger offline Rec")
@@ -1112,6 +1116,54 @@ func _test_kitchen_before_offline_rec() -> void:
 		_assert_true(game.power_grid.is_building_shed(kitchen.building_id), "real grid sheds enabled kitchen")
 		_assert_step(game, CHARGE_NEXT, "generator", CHARGE_HELP)
 		_dispose(game)
+
+
+func _test_mood_tip_hysteresis() -> void:
+	var game := _healthy_game()
+	var ari: VaultResident = game.residents[0]
+	var other: VaultResident = game.residents[1]
+	ari.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD + ResidentNeeds.STRESS_BREAK_RECOVERY
+	_assert_dig(game, "mood 25 without a prior break shows no Rec tip")
+	ari.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD + 0.0001
+	_assert_dig(game, "just above the break line does not enter the Rec tip")
+	ari.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+	_assert_equal(game.player_orders._primary_next_step()["text"], REC_NEXT, "the break line enters the Rec tip")
+	ari.needs.mood += ResidentNeeds.STRESS_BREAK_RECOVERY
+	for _call in 2:
+		_assert_equal(game.player_orders._primary_next_step()["text"], REC_NEXT, "a +16 stress break (9 -> 25) keeps the Rec tip")
+	game.player_orders.refresh()
+	_assert_true(REC_NEXT in game.player_orders.objective_label.text, "the HUD objective shows the held Rec tip")
+	ari.needs.mood = ResidentNeeds.RECREATION_SEEK_THRESHOLD
+	_assert_equal(game.player_orders._primary_next_step()["text"], REC_NEXT, "mood 35 still wants Rec, tip held")
+	ari.needs.mood = ResidentNeeds.RECREATION_SEEK_THRESHOLD + 0.0001
+	_assert_dig(game, "once nobody wants Rec the tip releases")
+	ari.needs.mood = 25.0
+	_assert_dig(game, "after release, falling back to 25 does not re-enter")
+	ari.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+	_assert_equal(game.player_orders._primary_next_step()["text"], REC_NEXT, "the break line re-enters")
+	ari.needs.mood = 60.0
+	other.needs.mood = 30.0
+	_assert_equal(game.player_orders._primary_next_step()["text"], REC_NEXT, "any living resident who still wants Rec holds the tip")
+	other.needs.mood = 36.0
+	_assert_dig(game, "the tip releases when every living resident recovers")
+	ari.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+	_assert_equal(game.player_orders._primary_next_step()["text"], REC_NEXT, "latched again before the kitchen check")
+	ari.needs.food = 10.0
+	game.food_system.meals = 0
+	_assert_equal(game.player_orders._primary_next_step()["text"], KITCHEN_NEXT, "a food crisis still outranks the held Rec tip")
+	ari.needs.food = 100.0
+	game.food_system.meals = 40
+	ari.needs.mood = 20.0
+	_assert_equal(game.player_orders._primary_next_step()["text"], REC_NEXT, "the hold resumes after the crisis")
+	ari.alive = false
+	_assert_dig(game, "a dead resident cannot hold the tip")
+	ari.alive = true
+	ari.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+	_assert_equal(game.player_orders._primary_next_step()["text"], REC_NEXT, "latched before the reload")
+	ari.needs.mood = 20.0
+	_assert_true(game.apply_snapshot(game.create_snapshot()), "snapshot reloads mid-hold")
+	_assert_dig(game, "a load replaces the crew and resets the hold at mood 20")
+	_dispose(game)
 
 
 func _test_offline_rec_priority() -> void:
