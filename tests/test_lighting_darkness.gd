@@ -8,6 +8,7 @@ func _run() -> void:
 	_run_case("lumen construction, overlap, and removal update coverage", _test_lumen_lifecycle_and_overlap)
 	_run_case("paused lumen controls update the resident inspector immediately", _test_paused_lumen_control_and_inspector)
 	_run_case("lit and dark residents receive exact integrated mood rates", _test_integrated_mood_rates)
+	_run_case("darkness alert waits 2s unlit and holds 6s lit; mood and HUD stay live", _test_dark_alert_dwell)
 	_run_case("brownout shedding removes lumen coverage until power recovers", _test_brownout_and_recovery)
 	_run_case("lighting is derived across active and legacy snapshots", _test_derived_save_and_legacy_state)
 	_run_case("coverage display control does not mutate the simulation", _test_display_only_control)
@@ -169,6 +170,9 @@ func _test_coverage_geometry_and_starting_counts() -> void:
 	dark_resident.position = game.map_grid.cell_to_world(Vector2i(28, 20))
 	game.player_orders.refresh()
 	_assert_true("D1" in game.player_orders.lighting_label.text, "right HUD updates when one resident enters darkness")
+	_assert_false("DARKNESS" in game.player_orders.alert_label.text, "darkness alert waits for the onset dwell")
+	game._update_dark_alert(VaultGame.DARK_ALERT_ONSET)
+	game.player_orders.refresh()
 	_assert_true("DARKNESS · 1 CREW UNLIT" in game.player_orders.alert_label.text, "darkness alert reports the affected crew count")
 
 	var dark_rock := Vector2i(29, 20)
@@ -270,6 +274,66 @@ func _test_integrated_mood_rates() -> void:
 	_assert_approximately(lit_resident.needs.mood, 79.55, 0.0001, "one lit second applies eighteen mood points per day")
 	_assert_approximately(dark_resident.needs.mood, 78.8, 0.0001, "one dark second applies baseline plus thirty darkness points per day")
 	_assert_approximately(lit_resident.needs.mood - dark_resident.needs.mood, 0.75, 0.0001, "darkness costs exactly thirty additional mood points per day")
+	_dispose(game)
+
+
+func _step_ticks(game: VaultGame, seconds: float) -> void:
+	for i in roundi(seconds / VaultGame.SIMULATION_TICK):
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+
+
+func _test_dark_alert_dwell() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	_prepare_stable_residents(game)
+	for other: VaultResident in game.residents:
+		other.drafted = true
+	var resident: VaultResident = game.residents[0]
+	# Two cells more than one hex apart, so each teleport resyncs occupancy.
+	var lit_pos := resident.position
+	var dark_pos := game.map_grid.cell_to_world(Vector2i(28, 20))
+	_assert_true(game.is_resident_lit(resident), "resident starts lit")
+	_assert_equal(game.get_dark_alert_count(), 0, "fixture starts with no darkness alert")
+	resident.position = dark_pos
+	_assert_false(game.is_resident_lit(resident), "resident is unlit at once")
+	_assert_equal(game.get_dark_resident_count(), 1, "HUD dark count is live at once")
+	_assert_false(resident.dark_alert_flagged, "no alert on the first dark frame")
+	var mood_before := resident.needs.mood
+	_step_ticks(game, 1.0)
+	_assert_approximately(mood_before - resident.needs.mood, 1.2, 0.0001, "darkness mood penalty applies before the alert shows")
+	_step_ticks(game, 0.9)
+	_assert_false(resident.dark_alert_flagged, "1.9s unlit: still no alert")
+	_step_ticks(game, 0.1)
+	_assert_true(resident.dark_alert_flagged, "2.0s unlit: resident counts for the alert")
+	game.player_orders.refresh()
+	_assert_true("DARKNESS · 1 CREW UNLIT" in game.player_orders.alert_label.text, "2.0s unlit: alert text shows")
+	resident.position = lit_pos
+	_step_ticks(game, 0.1)
+	_assert_equal(game.get_dark_resident_count(), 0, "HUD dark count clears at once")
+	_assert_true(resident.dark_alert_flagged, "one step back into light keeps the alert")
+	_step_ticks(game, 3.0)
+	resident.position = dark_pos
+	_step_ticks(game, 0.1)
+	resident.position = lit_pos
+	_step_ticks(game, 5.9)
+	_assert_true(resident.dark_alert_flagged, "a dark blip restarts the hold: 5.9s lit still held")
+	_step_ticks(game, 0.1)
+	_assert_false(resident.dark_alert_flagged, "6.0s lit: resident drops from the alert")
+	game.player_orders.refresh()
+	_assert_false("DARKNESS" in game.player_orders.alert_label.text, "6.0s lit: alert text clears")
+	resident.position = dark_pos
+	_step_ticks(game, 1.0)
+	resident.position = lit_pos
+	_step_ticks(game, 0.1)
+	resident.position = dark_pos
+	_step_ticks(game, 1.5)
+	_assert_false(resident.dark_alert_flagged, "a lit step resets the onset dwell")
+	_step_ticks(game, 0.5)
+	_assert_true(resident.dark_alert_flagged, "2s continuously unlit again: counts")
+	resident.kill()
+	_assert_equal(game.get_dark_alert_count(), 0, "the dead never count as unlit crew")
+	game.new_game(false)
+	_assert_equal(game.get_dark_alert_count(), 0, "a new wing starts with no darkness alert")
 	_dispose(game)
 
 

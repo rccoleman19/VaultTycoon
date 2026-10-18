@@ -48,6 +48,9 @@ var _path_index := 0
 var _path_destination := Vector2i(-999, -999)
 var _occupancy_cell := Vector2i(-999, -999)
 var _recreation_effect_was_running := false
+# DARKNESS alert dwell (presentation only; mood uses the live cell). Not saved.
+var dark_alert_flagged := false
+var _dark_alert_dwell := 0.0
 
 
 func configure(new_id: int, new_name: String, spawn_cell: Vector2i, map_grid: MapGrid) -> void:

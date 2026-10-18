@@ -1617,7 +1617,7 @@ func _refresh_alerts() -> void:
 		alerts.append("FOOD WAITING · ENABLE HAUL")
 	if game.power_grid.brownout_active:
 		alerts.append("POWER BROWNOUT · SHED %s" % game.power_grid.get_shed_summary())
-	var dark_residents := game.get_dark_resident_count()
+	var dark_residents := game.get_dark_alert_count()
 	if dark_residents > 0:
 		alerts.append("DARKNESS · %d CREW UNLIT" % dark_residents)
 	var residents_needing_bunks := 0
