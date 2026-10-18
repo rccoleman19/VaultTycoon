@@ -335,6 +335,8 @@ func kill() -> void:
 	manual_destination = NO_MANUAL_DESTINATION
 	clear_forced_order()
 	clear_path()
+	# The boost only decays while alive, so clear it here or a corpse keeps a frozen Rec boost.
+	rec_boost_left = 0.0
 	died.emit(self)
 	recreating = false
 	recreation_id = -1

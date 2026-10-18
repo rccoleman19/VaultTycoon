@@ -4,6 +4,8 @@ extends SceneTree
 # digs, builds, crafts and cooks at 120% for one 40-second day. The boost stacks
 # with the hunger/rest/mood penalties (floor 35%), shows in the inspector, and
 # survives save/load. A powered console now pays back in work, not only mood.
+# A resident who dies mid-boost loses it at once, so a corpse never shows a frozen
+# Rec boost and its inspector reads the same before a save and after the load.
 
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 const EPS := 0.0001
@@ -23,6 +25,7 @@ func _run() -> void:
 	_run_case("a finished console session grants the boost; an interrupted one does not", _test_live_session)
 	_run_case("inspector shows the boosted work speed and countdown", _test_inspector)
 	_run_case("boost survives a snapshot and malformed values load safely", _test_save)
+	_run_case("death clears the boost before died fires; corpses show no Rec boost", _test_death)
 	print("REC BOOST TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
 
@@ -184,4 +187,44 @@ func _test_save() -> void:
 	_check(loaded.apply_snapshot(dead), "deceased resident with a stale boost loads")
 	_near(loaded.get_resident_by_id(resident.resident_id).rec_boost_left, 0.0, "deceased resident carries no boost")
 	_dispose(original)
+	_dispose(loaded)
+
+
+func _work_line(text: String) -> String:
+	for line: String in text.split("\n"):
+		if line.begins_with("Work speed:"):
+			return line
+	return ""
+
+
+func _test_death() -> void:
+	var game := _spawn()
+	var damaged: VaultResident = game.residents[0]
+	var starved: VaultResident = game.residents[1]
+	var boost_at_death := {}
+	for resident: VaultResident in [damaged, starved]:
+		resident.rec_boost_left = 30.0
+		resident.died.connect(func(who: VaultResident) -> void: boost_at_death[who.resident_id] = who.rec_boost_left)
+	_check("Rec boost 30s" in _inspector_text(game, damaged), "living boosted resident shows the countdown")
+	damaged.apply_damage(500.0)
+	_check(not damaged.alive, "suffocation-style damage kills the resident")
+	_near(float(boost_at_death.get(damaged.resident_id, -1.0)), 0.0, "boost already cleared when died fires (damage path)")
+	_near(damaged.rec_boost_left, 0.0, "damage death clears the boost")
+	starved.needs.health = 0.0
+	starved.advance_needs(0.01, true, false)
+	_check(not starved.alive, "zero health kills the resident in advance_needs")
+	_near(float(boost_at_death.get(starved.resident_id, -1.0)), 0.0, "boost already cleared when died fires (needs path)")
+	_near(starved.rec_boost_left, 0.0, "needs death clears the boost")
+	game.step_simulation(5.0)
+	_near(damaged.rec_boost_left, 0.0, "a corpse never regains a boost")
+	var corpse := _inspector_text(game, damaged)
+	_check(not ("Rec boost" in corpse), "corpse inspector has no Rec boost: " + corpse.replace("\n", " | "))
+	_check(_work_line(corpse) == "Work speed: 100%", "corpse work line drops the 120%%: %s" % _work_line(corpse))
+	var snapshot := game.create_snapshot()
+	_near(float(snapshot.residents[0].rec_boost_left), 0.0, "snapshot stores no boost for the dead")
+	var loaded := _spawn()
+	_check(loaded.apply_snapshot(snapshot), "snapshot with a mid-boost death loads")
+	var reloaded := _inspector_text(loaded, loaded.get_resident_by_id(damaged.resident_id))
+	_check(_work_line(reloaded) == _work_line(corpse), "corpse work line identical after load: %s vs %s" % [_work_line(reloaded), _work_line(corpse)])
+	_dispose(game)
 	_dispose(loaded)
