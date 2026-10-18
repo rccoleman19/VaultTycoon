@@ -2,6 +2,7 @@ extends SceneTree
 
 # O2 forecast: the VAULT ATMOSPHERE readout counts down to the 15% critical
 # line while oxygen falls toward it, and up to breathable while it recovers.
+# Below the line with no recovery, it counts down to the first suffocation death.
 
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 
@@ -20,8 +21,12 @@ func _run() -> void:
 	_run_case("powered recycler above critical shows no forecast", _test_recovering_above)
 	_run_case("open breach shortens the countdown", _test_open_breach)
 	_run_case("recovering below critical counts up to breathable", _test_recovering_below)
-	_run_case("falling below critical shows no forecast", _test_falling_below)
-	_run_case("exactly at critical while falling shows no forecast", _test_at_line)
+	_run_case("falling below critical counts down to the first suffocation death", _test_falling_below)
+	_run_case("exactly at critical while falling is already suffocating", _test_at_line)
+	_run_case("exactly at critical while recovering shows no suffocation line", _test_at_line_rising)
+	_run_case("suffocation countdown tracks the weakest living resident", _test_weakest_resident)
+	_run_case("live suffocation ticks the HP countdown down", _test_live_suffocation)
+	_run_case("lost wing drops the suffocation countdown", _test_ended_suffocating)
 	_run_case("steady rate shows no forecast", _test_steady)
 	_run_case("live simulation ticks the countdown down", _test_live)
 	_run_case("lost wing drops the breathable forecast", _test_ended_loss)
@@ -109,15 +114,61 @@ func _test_recovering_below() -> void:
 func _test_falling_below() -> void:
 	var game := _spawn_game()
 	var text := _stage(game, 10.0, 0, false)
-	_assert_equal(text.get_slice_count("\n"), 2, "no third line below critical while falling")
+	# Full health 100 / 4 HP/s suffocation = 25s.
+	_assert_equal(text, "O2 10% · -0.32%/s\nUSE 0.32 · RECYCLE 0.00\nSUFFOCATING · FIRST DEATH IN 00:25", "suffocating readout")
 	_assert_false("IN " in text.get_slice("\n", 0), "no forecast on the first line")
+	_assert_near(game.player_orders._seconds_to_first_suffocation(), 25.0, "full-health seconds")
 	_free(game)
 
 
 func _test_at_line() -> void:
 	var game := _spawn_game()
 	var text := _stage(game, 15.0, 0, false)
-	_assert_equal(text.get_slice_count("\n"), 2, "no countdown at the line")
+	_assert_equal(text.get_slice_count("\n"), 3, "a third line at the line")
+	_assert_equal(text.get_slice("\n", 2), "SUFFOCATING · FIRST DEATH IN 00:25", "suffocating at the line")
+	_free(game)
+
+
+func _test_at_line_rising() -> void:
+	var game := _spawn_game()
+	var text := _stage(game, 15.0, 1, false)
+	_assert_equal(text, "O2 15% · +0.48%/s\nUSE 0.32 · RECYCLE 0.80", "rising at the line has two lines")
+	_free(game)
+
+
+func _test_weakest_resident() -> void:
+	var game := _spawn_game()
+	game.residents[0].needs.health = 30.0
+	game.residents[1].needs.health = 6.0
+	game.residents[1].alive = false
+	var text := _stage(game, 5.0, 0, false)
+	# Dead resident ignored; 3 alive x 0.08 = -0.24%/s; 30 / 4 = 7.5s -> 00:08.
+	_assert_equal(text, "O2 5% · -0.24%/s\nUSE 0.24 · RECYCLE 0.00\nSUFFOCATING · FIRST DEATH IN 00:08", "weakest living resident")
+	for resident: VaultResident in game.residents:
+		resident.alive = false
+	text = _stage(game, 5.0, 0, false)
+	_assert_equal(text.get_slice_count("\n"), 2, "no living resident has no countdown")
+	_free(game)
+
+
+func _test_live_suffocation() -> void:
+	var game := _spawn_game()
+	_stage(game, 10.0, 0, false)
+	game.step_simulation(5.0)
+	game.player_orders.refresh()
+	var text: String = game.player_orders.oxygen_label.text
+	_assert_true(game.oxygen_system.oxygen < 10.0, "oxygen kept falling")
+	_assert_equal(text.get_slice("\n", 2), "SUFFOCATING · FIRST DEATH IN 00:20", "five seconds later")
+	_free(game)
+
+
+func _test_ended_suffocating() -> void:
+	var game := _spawn_game()
+	var before := _stage(game, 10.0, 0, false)
+	_assert_equal(before.get_slice("\n", 2), "SUFFOCATING · FIRST DEATH IN 00:25", "paused live wing keeps the countdown")
+	game._finish_loss()
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.oxygen_label.text, "O2 10% · -0.32%/s\nUSE 0.32 · RECYCLE 0.00", "lost wing keeps only the final readout")
 	_free(game)
 
 
@@ -178,3 +229,7 @@ func _assert_near(actual: float, expected: float, message: String) -> void:
 
 func _assert_false(value: bool, message: String) -> void:
 	_assert_equal(value, false, message)
+
+
+func _assert_true(value: bool, message: String) -> void:
+	_assert_equal(value, true, message)

@@ -1765,6 +1765,11 @@ func _refresh_oxygen() -> void:
 			"CRITICAL" if oxygen.net_rate < 0.0 else "BREATHABLE",
 			_format_seconds(crossing),
 		]
+	elif not game.ended and oxygen.is_critical() and oxygen.net_rate <= 0.0001:
+		# Below the line with no recovery in sight, count down the HP drain instead.
+		var first_death := _seconds_to_first_suffocation()
+		if first_death >= 0.0:
+			oxygen_label.text += "\nSUFFOCATING · FIRST DEATH IN %s" % _format_seconds(first_death)
 	oxygen_bar.value = oxygen.oxygen
 	if oxygen.is_critical():
 		oxygen_bar.modulate = Color("ef6860")
@@ -2243,6 +2248,16 @@ func _on_fixture_deconstruct_pressed() -> void:
 	var building := game.get_building_by_id(game.selected_building_id)
 	if building != null:
 		game.deconstruct_building(building.building_id)
+
+
+# Seconds until suffocation damage alone empties the weakest living resident's
+# health; -1.0 when nobody is alive.
+func _seconds_to_first_suffocation() -> float:
+	var lowest := -1.0
+	for resident: VaultResident in game.residents:
+		if resident.alive and (lowest < 0.0 or resident.needs.health < lowest):
+			lowest = resident.needs.health
+	return -1.0 if lowest < 0.0 else lowest / OxygenSystem.SUFFOCATION_DAMAGE_PER_SECOND
 
 
 func _format_seconds(seconds: float) -> String:
