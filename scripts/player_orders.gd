@@ -1038,6 +1038,26 @@ func _breach_blocker_step() -> Dictionary:
 			- game.food_system.salvage,
 	)
 	if shortfall > 0:
+		# Salvage already delivered to an unfinished blueprint is the only instant source:
+		# cancelling refunds it at once, while digging rarely beats the 20 s grace. Name the
+		# smallest partly supplied blueprint that covers the shortfall (ties: lowest id). Guidance only.
+		var refund_blueprint: VaultBuilding = null
+		for building: VaultBuilding in game.buildings:
+			# A fully supplied blueprint only awaits assembly; it is not offered for a refund.
+			if building.complete or building.is_emergency_core or building.delivered < shortfall or building.delivered >= building.get_cost():
+				continue
+			if refund_blueprint == null or building.delivered < refund_blueprint.delivered or (building.delivered == refund_blueprint.delivered and building.building_id < refund_blueprint.building_id):
+				refund_blueprint = building
+		if refund_blueprint != null:
+			var kind_name: String = VaultBuilding.KIND_NAMES[refund_blueprint.kind]
+			var refund_step := _hatch_key_step(
+				"cancel the %s [X]" % kind_name,
+				"fund the hatch patch",
+				"The hatch patch is %d salvage short. Cancelling the unfinished %s at (%d, %d) refunds its %d delivered salvage at once; digging rarely beats the timer. Place it again after the seal." % [shortfall, kind_name, refund_blueprint.cell.x, refund_blueprint.cell.y, refund_blueprint.delivered],
+			)
+			if str(refund_step.text).begins_with("Next: YOU cancel"):
+				refund_step.tool = "cancel"
+			return refund_step
 		# Only rubble a Haul resident can reach (the scheduler's test) funds the patch.
 		var rubble := game.job_system.get_uncredited_rubble(true, shortfall)
 		var has_digger := _has_eligible_worker("dig")

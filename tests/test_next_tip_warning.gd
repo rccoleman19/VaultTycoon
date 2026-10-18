@@ -15,6 +15,7 @@ const PATCH_SHORT_COVERED := ["Next: YOU leave Dig + Haul on · THEY fund the ha
 const PATCH_SHORT_COVERED_NO_DIG := ["Next: YOU leave Haul on · THEY fund the hatch patch", "The hatch patch is 2 salvage short. Each dug rock tile yields 3 salvage once hauled.", "select"]
 const ENABLE_DIG := ["Next: YOU enable Dig [P] · THEY fund the hatch patch", "The hatch patch is 2 salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage.", "select"]
 const PLACE_BUNKS := ["Next: YOU place bunks · THEY craft", "Place bunks so tired undrafted crew have a bed.", "bed"]
+const PATCH_SHORT_4 := ["Next: YOU mark 2 rock [E] · THEY fund the hatch patch", "The hatch patch is 4 salvage short. Each dug rock tile yields 3 salvage once hauled.", "dig"]
 const PATCH_SHORT_TRANSIT := ["Next: YOU mark 1 rock [E] · THEY fund the hatch patch", "The hatch patch is 1 salvage short. Each dug rock tile yields 3 salvage once hauled.", "dig"]
 const WATCH := ["Next: YOU watch hatch · THEY auto-patch", "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft.", "select"]
 const LOCK_HELP := "Acknowledge the hatch warning first (RESUME RESPONSE, FOCUS HATCH or Space); R and P stay locked until then. "
@@ -57,6 +58,8 @@ func _run() -> void:
 	_run_case("crew cut off from the hatch (loaded save) ask for a tunnel until one is dug", _test_no_path_haul)
 	_run_case("a supplied patch with Craft crew cut off asks for a tunnel", _test_no_path_craft)
 	_run_case("only rubble a Haul resident can reach funds the hatch patch", _test_unreachable_rubble)
+	_run_case("a short patch names the blueprint whose refund covers it", _test_refund_tip)
+	_run_case("following the refund tip seals the hatch before it opens", _test_refund_tip_seals)
 	print("NEXT TIP WARNING TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
 
@@ -592,3 +595,78 @@ func _test_unreachable_rubble() -> void:
 	game.residents[0].kill()
 	_assert_tuple(game, PATCH_SHORT_3, "a dead pocket resident does not make the rubble reachable")
 	_dispose(game)
+
+
+
+const REFUND_HELP := "The hatch patch is 4 salvage short. Cancelling the unfinished %s at (%d, %d) refunds its %d delivered salvage at once; digging rarely beats the timer. Place it again after the seal."
+
+
+func _unfinished(game: VaultGame, kind: int, cell: Vector2i, delivered: int) -> VaultBuilding:
+	_assert_true(game.place_blueprint(kind, cell), "fixture blueprint placed at %s" % cell)
+	var building := game.get_building_at(cell)
+	building.delivered = delivered
+	return building
+
+
+func _test_refund_tip() -> void:
+	var game := _healthy()
+	game.food_system.salvage = 0
+	var recycler := _unfinished(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(24, 12), 10)
+	game.day_cycle.elapsed_seconds = BreachSystem.WARNING_AT_SECONDS - TICK
+	game.step_simulation(TICK)
+	game.food_system.salvage = 0
+	_assert_equal(_tuple(game)[0], "Next: YOU acknowledge warning · then cancel the Air Recycler [X]", "unacknowledged WARNING asks to acknowledge first")
+	game.acknowledge_breach_warning(false)
+	_assert_tuple(game, ["Next: YOU cancel the Air Recycler [X] · THEY fund the hatch patch", REFUND_HELP % ["Air Recycler", 24, 12, 10], "cancel"], "10 delivered covers a 4 shortfall")
+	var bunk := _unfinished(game, VaultBuilding.Kind.BED, Vector2i(27, 12), 4)
+	_assert_equal(_tuple(game)[0], "Next: YOU cancel the Bunk [X] · THEY fund the hatch patch", "the smallest covering refund wins")
+	bunk.delivered = 3
+	_assert_equal(_tuple(game)[0], "Next: YOU cancel the Air Recycler [X] · THEY fund the hatch patch", "3 delivered cannot cover 4")
+	recycler.delivered = 3
+	_assert_tuple(game, PATCH_SHORT_4, "no single blueprint covers it: the dig tip stays")
+	bunk.delivered = 4
+	bunk.complete = true
+	_assert_tuple(game, PATCH_SHORT_4, "a complete building is never offered, whatever its delivered count")
+	bunk.complete = false
+	bunk.delivered = bunk.get_cost()
+	_assert_tuple(game, PATCH_SHORT_4, "a fully supplied blueprint only awaits assembly and is not offered")
+	bunk.delivered = 4
+	game.food_system.salvage = 4
+	_assert_tuple(game, WATCH, "stock covers the patch: no refund tip")
+	game.food_system.salvage = 0
+	_open(game)
+	_assert_equal(_tuple(game)[0], "Next: YOU cancel the Bunk [X] · THEY fund the hatch patch", "OPEN still offers the refund")
+	_dispose(game)
+
+
+func _test_refund_tip_seals() -> void:
+	var game := _healthy()
+	var recycler := _unfinished(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(24, 12), 10)
+	game.day_cycle.elapsed_seconds = BreachSystem.WARNING_AT_SECONDS - TICK
+	game.step_simulation(TICK)
+	game.food_system.salvage = 0
+	game.acknowledge_breach_warning(true)
+	var opened := [false]
+	game.breach_system.breach_opened.connect(func() -> void: opened[0] = true)
+	var step: Dictionary = game.player_orders._primary_next_step()
+	_assert_equal(step.tool, "cancel", "the tip selects the cancel tool")
+	game.set_tool(str(step.tool))
+	_assert_true(game.issue_order(recycler.cell), "the player cancels the named blueprint")
+	game.set_tool("select")
+	_assert_equal(game.food_system.salvage, 10, "the delivered salvage is refunded at once")
+	while game.day_cycle.elapsed_seconds < BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS and not game.breach_system.is_sealed():
+		game.step_simulation(TICK)
+	_assert_true(game.breach_system.is_sealed(), "the hatch seals inside the grace period (t=%.1f)" % game.day_cycle.elapsed_seconds)
+	_assert_false(opened[0], "the hatch never opened")
+	_dispose(game)
+	# Counterfactual: the same wing that ignores the tip and waits on dig/haul does open.
+	var idle := _healthy()
+	_unfinished(idle, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(24, 12), 10)
+	idle.day_cycle.elapsed_seconds = BreachSystem.WARNING_AT_SECONDS - TICK
+	idle.step_simulation(TICK)
+	idle.food_system.salvage = 0
+	idle.acknowledge_breach_warning(true)
+	while idle.day_cycle.elapsed_seconds < BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS + 1.0:
+		idle.step_simulation(TICK)
+	_assert_true(idle.breach_system.is_open(), "without the refund the hatch opens")
+	_dispose(idle)
