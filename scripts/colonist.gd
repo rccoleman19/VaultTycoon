@@ -332,6 +332,8 @@ func kill() -> void:
 	died.emit(self)
 	recreating = false
 	recreation_id = -1
+	# Timers only tick while alive; a corpse must not keep a frozen stress break.
+	stress_break_left = 0.0
 	state = "Deceased"
 	modulate = Color(0.42, 0.42, 0.42, 0.8)
 	queue_redraw()
