@@ -66,6 +66,12 @@ func is_response_active() -> bool:
 	return phase == Phase.WARNING or phase == Phase.OPEN
 
 
+# Win-screen crew rating (QA 2026-10-18b #8): did the hatch ever open this run? Reads the saved
+# open flag, which a migrated legacy seal leaves false, so it survives re-save and later play.
+func has_opened() -> bool:
+	return _open_emitted
+
+
 func is_sealed() -> bool:
 	return phase == Phase.SEALED
 
@@ -263,7 +269,8 @@ func _deserialize_legacy_state() -> void:
 		patch_work_left = 0.0
 		warning_acknowledged = true
 		_warning_emitted = true
-		_open_emitted = true
+		# A migrated seal records no opening: none was seen, and inventing one would
+		# change the crew rating after a re-save.
 		_sealed_emitted = true
 	elif _elapsed_seconds >= WARNING_AT_SECONDS:
 		phase = Phase.WARNING
