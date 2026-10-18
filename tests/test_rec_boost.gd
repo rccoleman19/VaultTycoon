@@ -27,6 +27,7 @@ func _run() -> void:
 	_run_case("boost survives a snapshot and malformed values load safely", _test_save)
 	_run_case("death clears the boost before died fires; corpses show no Rec boost", _test_death)
 	_run_case("the boost pauses while asleep, resumes on waking and keeps its time across a load", _test_sleep)
+	_run_case("a starved, exhausted, miserable corpse reads Work speed: 100%", _test_corpse_needs)
 	print("REC BOOST TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
 
@@ -272,5 +273,34 @@ func _test_sleep() -> void:
 	restored.needs.rest = 100.0
 	loaded.step_simulation(2.0)
 	_near(restored.rec_boost_left, 28.0, "waking resumes the countdown from the saved time")
+	_dispose(game)
+	_dispose(loaded)
+
+
+# A corpse keeps the needs it died with, so get_work_multiplier still reports the hunger,
+# rest and mood penalties. The sim never uses it for the dead (job_system skips them), so
+# only the inspector line is pinned to 100%, live and after a load.
+func _test_corpse_needs() -> void:
+	var game := _spawn()
+	var corpse: VaultResident = game.residents[0]
+	var living: VaultResident = game.residents[1]
+	for resident: VaultResident in [corpse, living]:
+		resident.needs.food = 10.0
+		resident.needs.rest = 10.0
+		resident.needs.mood = 10.0
+	_check(_work_line(_inspector_text(game, corpse)) == "Work speed: 35%", "living penalised resident reads 35%% before death: %s" % _work_line(_inspector_text(game, corpse)))
+	corpse.kill()
+	corpse.needs.food = 10.0
+	corpse.needs.rest = 10.0
+	corpse.needs.mood = 10.0
+	_near(corpse.get_work_multiplier(), 0.35, "the sim multiplier is untouched for the dead")
+	var text := _inspector_text(game, corpse)
+	_check(_work_line(text) == "Work speed: 100%", "corpse work line ignores need penalties: %s" % _work_line(text))
+	_check(text.count("\n") == 3, "corpse inspector keeps its four lines: " + text.replace("\n", " | "))
+	_check(_work_line(_inspector_text(game, living)) == "Work speed: 35%", "living crew keep their penalty: %s" % _work_line(_inspector_text(game, living)))
+	var loaded := _spawn()
+	_check(loaded.apply_snapshot(game.create_snapshot()), "snapshot with a penalised corpse loads")
+	var reloaded := _inspector_text(loaded, loaded.get_resident_by_id(corpse.resident_id))
+	_check(_work_line(reloaded) == "Work speed: 100%", "corpse work line still 100%% after load: %s" % _work_line(reloaded))
 	_dispose(game)
 	_dispose(loaded)
