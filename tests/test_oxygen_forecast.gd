@@ -2,7 +2,9 @@ extends SceneTree
 
 # O2 forecast: the VAULT ATMOSPHERE readout counts down to the 15% critical
 # line while oxygen falls toward it, and up to breathable while it recovers.
-# Below the line with no recovery, it counts down to the first suffocation death.
+# Below the line with no recovery, it counts down to the first death at each
+# resident's real HP rate: suffocation plus starvation/exhaustion/despair drain,
+# minus medical healing.
 
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 
@@ -26,6 +28,11 @@ func _run() -> void:
 	_run_case("exactly at critical while recovering shows no suffocation line", _test_at_line_rising)
 	_run_case("suffocation countdown tracks the weakest living resident", _test_weakest_resident)
 	_run_case("live suffocation ticks the HP countdown down", _test_live_suffocation)
+	_run_case("starving resident dies twice as fast", _test_starving)
+	_run_case("awake exhausted resident adds exhaustion drain", _test_exhausted)
+	_run_case("sleeping resident at zero rest has no exhaustion drain", _test_exhausted_sleeping)
+	_run_case("despairing resident adds mood drain", _test_despair)
+	_run_case("medical care slows the countdown", _test_medical)
 	_run_case("lost wing drops the suffocation countdown", _test_ended_suffocating)
 	_run_case("steady rate shows no forecast", _test_steady)
 	_run_case("live simulation ticks the countdown down", _test_live)
@@ -159,6 +166,64 @@ func _test_live_suffocation() -> void:
 	var text: String = game.player_orders.oxygen_label.text
 	_assert_true(game.oxygen_system.oxygen < 10.0, "oxygen kept falling")
 	_assert_equal(text.get_slice("\n", 2), "SUFFOCATING · FIRST DEATH IN 00:20", "five seconds later")
+	_free(game)
+
+
+func _test_starving() -> void:
+	var game := _spawn_game()
+	game.residents[2].needs.health = 20.0
+	game.residents[2].needs.food = 0.0
+	var text := _stage(game, 10.0, 0, false)
+	# 4 suffocation + 160/40 starvation = 8 HP/s; 20 / 8 = 2.5s -> 00:03, not 00:05.
+	_assert_equal(text.get_slice("\n", 2), "SUFFOCATING · FIRST DEATH IN 00:03", "starvation counted")
+	_assert_near(game.player_orders._seconds_to_first_suffocation(), 2.5, "starving seconds")
+	_free(game)
+
+
+func _test_exhausted() -> void:
+	var game := _spawn_game()
+	game.residents[2].needs.health = 19.0
+	game.residents[2].needs.rest = 0.0
+	game.residents[2].sleeping = false
+	var text := _stage(game, 10.0, 0, false)
+	# 4 + 30/40 = 4.75 HP/s; 19 / 4.75 = 4s -> 00:04 (suffocation alone: 00:05).
+	_assert_equal(text.get_slice("\n", 2), "SUFFOCATING · FIRST DEATH IN 00:04", "exhaustion counted")
+	_free(game)
+
+
+func _test_exhausted_sleeping() -> void:
+	var game := _spawn_game()
+	game.residents[2].needs.health = 19.0
+	game.residents[2].needs.rest = 0.0
+	game.residents[2].sleeping = true
+	var text := _stage(game, 10.0, 0, false)
+	# Sleep refills rest before the drain check, so only suffocation: 19 / 4 -> 00:05.
+	_assert_equal(text.get_slice("\n", 2), "SUFFOCATING · FIRST DEATH IN 00:05", "sleep skips exhaustion")
+	_free(game)
+
+
+func _test_despair() -> void:
+	var game := _spawn_game()
+	game.residents[2].needs.health = 33.0
+	game.residents[2].needs.mood = 0.0
+	var text := _stage(game, 10.0, 0, false)
+	# 4 + 5/40 = 4.125 HP/s; 33 / 4.125 = 8s -> 00:08 (suffocation alone: 00:09).
+	_assert_equal(text.get_slice("\n", 2), "SUFFOCATING · FIRST DEATH IN 00:08", "despair counted")
+	_free(game)
+
+
+func _test_medical() -> void:
+	var game := _spawn_game()
+	var patient: VaultResident = game.residents[2]
+	patient.needs.health = 20.0
+	patient.medical_bed_id = 999
+	patient.state = "Rest-Medical"
+	var text := _stage(game, 10.0, 0, false)
+	# 4 - 2 healing = 2 HP/s; 20 / 2 = 10s -> 00:10, still sooner than the healthy 00:25.
+	_assert_equal(text.get_slice("\n", 2), "SUFFOCATING · FIRST DEATH IN 00:10", "medical healing counted")
+	patient.state = "Seeking Medical Bed"
+	text = _stage(game, 10.0, 0, false)
+	_assert_equal(text.get_slice("\n", 2), "SUFFOCATING · FIRST DEATH IN 00:05", "no healing until in the bed")
 	_free(game)
 
 

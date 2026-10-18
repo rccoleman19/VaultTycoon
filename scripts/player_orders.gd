@@ -2250,14 +2250,35 @@ func _on_fixture_deconstruct_pressed() -> void:
 		game.deconstruct_building(building.building_id)
 
 
-# Seconds until suffocation damage alone empties the weakest living resident's
-# health; -1.0 when nobody is alive.
+# Seconds until the first living resident's health runs out at its current
+# rate: suffocation plus starvation, exhaustion and despair drain, minus medical
+# healing. -1.0 when nobody is alive.
 func _seconds_to_first_suffocation() -> float:
-	var lowest := -1.0
+	var soonest := -1.0
 	for resident: VaultResident in game.residents:
-		if resident.alive and (lowest < 0.0 or resident.needs.health < lowest):
-			lowest = resident.needs.health
-	return -1.0 if lowest < 0.0 else lowest / OxygenSystem.SUFFOCATION_DAMAGE_PER_SECOND
+		if not resident.alive:
+			continue
+		var seconds := resident.needs.health / _suffocating_health_loss_per_second(resident)
+		if soonest < 0.0 or seconds < soonest:
+			soonest = seconds
+	return soonest
+
+
+# Mirrors ResidentNeeds.advance() and JobSystem medical care; suffocation (4)
+# always outpaces medical healing (2), so the result stays positive.
+func _suffocating_health_loss_per_second(resident: VaultResident) -> float:
+	var medical := resident.medical_bed_id >= 0 and resident.state == "Rest-Medical"
+	var drain_per_day := 0.0
+	if resident.needs.food <= 0.0:
+		drain_per_day += 160.0
+	if resident.needs.rest <= 0.0 and not resident.sleeping and not medical:
+		drain_per_day += 30.0
+	if resident.needs.mood <= ResidentNeeds.SEVERE_MOOD_THRESHOLD:
+		drain_per_day += 5.0
+	var loss := OxygenSystem.SUFFOCATION_DAMAGE_PER_SECOND + drain_per_day / DayCycle.SECONDS_PER_DAY
+	if medical:
+		loss -= JobSystem.MEDICAL_HP_PER_SECOND
+	return loss
 
 
 func _format_seconds(seconds: float) -> String:
