@@ -1993,6 +1993,11 @@ func _test_charge_finish_priority() -> void:
 	_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
 	game.residents[0].needs.food = 100.0
 	game.residents[0].needs.mood = 9.0
+	# QA 2026-10-18b: an empty larder outranks the Rec tip even before anyone is critical.
+	_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
+	game.food_system.meals = 1
+	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
+	game.food_system.meals = game.get_alive_count()
 	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
 	game.residents[0].needs.mood = 100.0
 	game.residents[0].needs.health = 99.0
@@ -2000,6 +2005,9 @@ func _test_charge_finish_priority() -> void:
 	game.residents[0].needs.health = 100.0
 	game.residents[0].needs.rest = 28.0
 	_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+	game.residents[0].needs.rest = 100.0
+	game.food_system.meals = 0
+	_assert_dig(game, "an empty larder alone, without a mood break, keeps the dig hint")
 	_dispose(game)
 
 

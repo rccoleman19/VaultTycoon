@@ -995,7 +995,9 @@ func _primary_next_step() -> Dictionary:
 			rec_wanted = true
 		if resident.needs.health < 100.0 and resident.medical_bed_id < 0:
 			injured_without_reservation = true
-	if critical_resident and game.food_system.meals < game.get_alive_count():
+	# An empty larder outranks the mood tips: a stress break passes, starvation does not.
+	var empty_larder_break := mood_break_risk and game.food_system.meals == 0
+	if (critical_resident or empty_larder_break) and game.food_system.meals < game.get_alive_count():
 		var completed_kitchens := game.get_completed_building_count(VaultBuilding.Kind.KITCHEN)
 		if completed_kitchens < 1:
 			var unfinished_kitchens := 0
