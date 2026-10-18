@@ -2,6 +2,7 @@ extends "res://tests/test_runner.gd"
 
 # Win-screen crew rating (QA 2026-10-18b #8) and loss cause (QA 2026-10-18c #1).
 const FULL := "CREW RATING ★★★ · whole crew home, hatch held, crew steady"
+const HATCH_SAVE_TEST_PATH := "user://headless_crew_grade_hatch.json"
 
 
 func _run() -> void:
@@ -10,6 +11,7 @@ func _run() -> void:
 	_run_case("BREAK RISK and CRITICAL boundaries match the HUD", _test_boundaries)
 	_run_case("a win never drops below one star and lists every reason", _test_floor)
 	_run_case("hatch history survives the seal; a legacy save is not penalized", _test_hatch_history)
+	_run_case("legacy hatch history is stable across re-save and records a real opening", _test_legacy_hatch_round_trip)
 	_run_case("the loss screen hides the grade and keeps its layout", _test_loss_unchanged)
 	_run_case("a real managed win grades on screen and after a reload", _test_real_win)
 	_run_case("the loss panel names each cause with one hint", _test_loss_causes)
@@ -314,3 +316,61 @@ func _test_real_suffocation_loss() -> void:
 	print("REAL AIR LOSS at %.0fs: %s" % [game.day_cycle.elapsed_seconds, game.player_orders.outcome_grade.text.replace("\n", " | ")])
 	_assert_equal(game.player_orders.outcome_grade.text, "LIKELY CAUSE · 4 suffocated\n" + AIR_HINT, "air loss reads suffocated")
 	_dispose(game)
+
+
+func _legacy_snapshot(source: VaultGame) -> Dictionary:
+	var snapshot: Dictionary = JSON.parse_string(JSON.stringify(source.create_snapshot()))
+	snapshot.erase("breach")
+	var jobs: Dictionary = snapshot.get("jobs", {})
+	jobs.erase("breach_supply")
+	snapshot.jobs = jobs
+	return snapshot
+
+
+func _test_legacy_hatch_round_trip() -> void:
+	_remove_test_save(HATCH_SAVE_TEST_PATH)
+	var source := _steady_game()
+	var won := _legacy_snapshot(source)
+	_dispose(source)
+	won.day = {
+		"elapsed_seconds": DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE,
+		"current_day": DayCycle.DAYS_TO_SURVIVE,
+		"completed": true,
+	}
+	won.ended = true
+	won.outcome = "win"
+	var game := _spawn_game()
+	_assert_true(bool(game.save_load.save_snapshot(won, HATCH_SAVE_TEST_PATH).ok), "legacy won snapshot writes")
+	_assert_true(game.load_game(HATCH_SAVE_TEST_PATH), "legacy won snapshot loads")
+	_assert_true(game.breach_system.is_sealed() and not game.breach_system.has_opened(), "migrated seal is not an opening")
+	_assert_equal(game.player_orders.outcome_grade.text, FULL, "legacy win shows full marks")
+	_assert_true(game.save_game(false, HATCH_SAVE_TEST_PATH), "legacy win re-saves")
+	_assert_false(bool(game.breach_system.serialize().open_emitted), "re-save writes no invented opening")
+	_dispose(game)
+	game = _spawn_game()
+	_assert_true(game.load_game(HATCH_SAVE_TEST_PATH), "re-saved legacy win reloads")
+	_assert_true(game.breach_system.is_sealed() and not game.breach_system.has_opened(), "reload keeps the hatch held")
+	_assert_equal(game.player_orders.outcome_grade.text, FULL, "reload keeps full marks")
+	_dispose(game)
+
+	source = _spawn_game()
+	source.begin_shift()
+	var early := _legacy_snapshot(source)
+	_dispose(source)
+	game = _spawn_game()
+	_assert_true(bool(game.save_load.save_snapshot(early, HATCH_SAVE_TEST_PATH).ok), "early legacy snapshot writes")
+	_assert_true(game.load_game(HATCH_SAVE_TEST_PATH), "early legacy snapshot loads")
+	_assert_true(game.breach_system.phase == BreachSystem.Phase.DORMANT and not game.breach_system.has_opened(), "early legacy load starts unopened")
+	game.begin_shift()
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+		resident.set_work_priority("craft", VaultResident.PRIORITY_DISABLED)
+	game.step_simulation(BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS + 1.0)
+	_assert_true(game.breach_system.is_open() and game.breach_system.has_opened(), "a real opening after a legacy load counts")
+	_assert_true(game.save_game(false, HATCH_SAVE_TEST_PATH), "opened legacy wing saves")
+	_dispose(game)
+	game = _spawn_game()
+	_assert_true(game.load_game(HATCH_SAVE_TEST_PATH), "opened legacy wing reloads")
+	_assert_true(game.breach_system.has_opened(), "the real opening survives the reload")
+	_dispose(game)
+	_remove_test_save(HATCH_SAVE_TEST_PATH)
