@@ -81,4 +81,7 @@ if grep -E -q 'SCRIPT ERROR:|Parse Error:|Failed to load script' "$COLD_LOG"; th
 fi
 echo "Cold-boot class-cache check passed."
 
+# Wing seed (QA 2026-10-18c #2) runs last so no merge-plan check.sh context moves.
+run_godot_check wing-seed --script res://tests/test_wing_seed.gd
+
 echo "All Vault Tycoon headless checks passed."

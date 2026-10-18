@@ -108,6 +108,7 @@ func _build_interface() -> void:
 	brand.add_theme_font_size_override("font_size", 17)
 	brand.custom_minimum_size.x = 262
 	top_row.add_child(brand)
+	wing_brand_label = brand
 	clock_label = Label.new()
 	clock_label.custom_minimum_size.x = 170
 	top_row.add_child(clock_label)
@@ -679,6 +680,7 @@ func _build_briefing() -> void:
 	title.add_theme_font_size_override("font_size", 20)
 	title.add_theme_color_override("font_color", Color("75d4b4"))
 	shell.add_child(title)
+	wing_briefing_title = title
 	var intro := Label.new()
 	intro.text = "YOU designate dig/build/stockpile. THEY auto-claim from Dig/Haul/Craft/Cook defaults. Draft is optional. Survive seven days."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -754,7 +756,7 @@ func _build_outcome() -> void:
 	row.add_child(load_button)
 	var restart_button := Button.new()
 	restart_button.text = "NEW WING"
-	restart_button.pressed.connect(func() -> void: game.new_game(true))
+	restart_button.pressed.connect(func() -> void: game.new_game(true, game.roll_wing_seed()))
 	row.add_child(restart_button)
 	outcome_panel.visible = false
 
@@ -2096,6 +2098,26 @@ func _set_need(key: String, label_text: String, value: float) -> void:
 		bar.modulate = Color("ef6860") if value <= ResidentNeeds.BREAK_MOOD_THRESHOLD else (Color("efc56b") if value < 70.0 else Color("75d4b4"))
 	else:
 		bar.modulate = Color("ef6860") if value < 25.0 else (Color("efc56b") if value < 50.0 else Color("75d4b4"))
+
+
+# Wing seed (QA 2026-10-18c #2, slice 1): a seeded wing names itself, e.g. `07-3F2A`, on the top
+# bar and the briefing. The legacy wing (seed 0) keeps today's labels exactly.
+var wing_brand_label: Label
+var wing_briefing_title: Label
+
+
+static func wing_id(wing_seed: int) -> String:
+	return "07" if wing_seed == 0 else "07-%04X" % wing_seed
+
+
+func show_wing_id(wing_seed: int) -> void:
+	if wing_brand_label != null:
+		wing_brand_label.text = "VAULT WING // SUBLEVEL 07" if wing_seed == 0 else "VAULT WING // %s" % wing_id(wing_seed)
+	if wing_briefing_title != null:
+		wing_briefing_title.text = "VAULT WING %s // SEAL STABILIZATION" % wing_id(wing_seed)
+		if wing_seed != 0:
+			var warn := roundi(BreachSystem.warning_at_for_seed(wing_seed))
+			wing_briefing_title.text += "\nHATCH TEST AT %02d:%02d" % [warn / 60, warn % 60]
 
 
 func _get_recreation_user(building_id: int) -> VaultResident:

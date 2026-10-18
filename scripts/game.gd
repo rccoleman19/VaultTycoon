@@ -7,6 +7,9 @@ signal game_lost
 
 const SIMULATION_TICK := 0.1
 const RIGHT_PANEL_WIDTH := 310.0
+const LEGACY_WING_SEED := 0
+const MAX_WING_SEED := 0xFFFF
+var wing_seed := LEGACY_WING_SEED
 const BUILD_KIND_BY_TOOL := {
 	"bed": VaultBuilding.Kind.BED,
 	"lamp": VaultBuilding.Kind.LAMP,
@@ -98,7 +101,8 @@ func _process(delta: float) -> void:
 	player_orders.refresh()
 
 
-func new_game(show_tutorial := false) -> void:
+func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED) -> void:
+	var seed_value := clampi(start_seed, LEGACY_WING_SEED, MAX_WING_SEED)
 	player_orders.show_work_priorities(false)
 	for building in buildings:
 		building.free()
@@ -114,7 +118,10 @@ func new_game(show_tutorial := false) -> void:
 	food_system.reset()
 	oxygen_system.reset()
 	day_cycle.reset()
+	wing_seed = seed_value
+	breach_system.warning_at = BreachSystem.warning_at_for_seed(wing_seed)
 	breach_system.reset()
+	player_orders.show_wing_id(wing_seed)
 	ended = false
 	outcome = ""
 	active_tool = "select"
@@ -190,7 +197,7 @@ func _simulation_step(delta_seconds: float) -> void:
 		DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE,
 	)
 	var phase_before_step := breach_system.phase
-	var open_boundary := BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS
+	var open_boundary := breach_system.get_open_at()
 	var opening_at_step_end := (
 		phase_before_step == BreachSystem.Phase.WARNING
 		and next_elapsed >= open_boundary
@@ -615,6 +622,7 @@ func create_snapshot() -> Dictionary:
 		"camera": [world_camera.position.x, world_camera.position.y, world_camera.zoom.x],
 		"ended": ended,
 		"outcome": outcome,
+		"wing_seed": wing_seed,
 	}
 
 
@@ -650,6 +658,9 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	food_system.deserialize(snapshot.get("food", {}))
 	oxygen_system.deserialize(snapshot.get("oxygen", {}))
 	day_cycle.deserialize(snapshot.get("day", {}))
+	wing_seed = _snapshot_wing_seed(snapshot)
+	breach_system.warning_at = BreachSystem.warning_at_for_seed(wing_seed)
+	player_orders.show_wing_id(wing_seed)
 	breach_system.deserialize(snapshot.get("breach", {}), day_cycle.elapsed_seconds)
 	next_building_id = int(snapshot.get("next_building_id", 1))
 	ended = bool(snapshot.get("ended", false))
@@ -682,6 +693,29 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	return true
 
 
+# Wing seed (QA 2026-10-18c #2, slice 1). Additive snapshot key: a save without it is the legacy wing.
+func _snapshot_wing_seed(snapshot: Dictionary) -> int:
+	return int(snapshot.get("wing_seed", LEGACY_WING_SEED))
+
+
+# The only entropy in the game: the NEW WING button reads the clock once and hands it to the pure
+# pick_wing_seed(). Load, snapshot, simulation and UI refresh never roll.
+func roll_wing_seed() -> int:
+	return pick_wing_seed(Time.get_ticks_usec() ^ int(Time.get_unix_time_from_system() * 1000.0), wing_seed)
+
+
+# Pure and bounded: a seed in 1..MAX_WING_SEED whose breach window differs from the current wing's,
+# so back-to-back wings always feel different. Eight windows, so the scan ends within 8 steps.
+static func pick_wing_seed(entropy: int, current_seed: int) -> int:
+	var current_window := BreachSystem.warning_at_for_seed(current_seed)
+	var candidate := 1 + BreachSystem.seed_hash(entropy & 0x7FFFFFFF, 2) % MAX_WING_SEED
+	for step in MAX_WING_SEED:
+		if BreachSystem.warning_at_for_seed(candidate) != current_window:
+			return candidate
+		candidate = 1 + candidate % MAX_WING_SEED
+	return candidate
+
+
 func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	var map_data: Variant = snapshot.get("map")
 	var resident_data: Variant = snapshot.get("residents")
@@ -707,10 +741,22 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 		return false
 	if snapshot.has("outcome") and typeof(snapshot.outcome) != TYPE_STRING:
 		return false
+	if snapshot.has("wing_seed") and not _is_integer_in_range(snapshot.wing_seed, LEGACY_WING_SEED, MAX_WING_SEED):
+		return false
+	# A seeded save is always new, so it must carry a real breach state and clock; only the legacy
+	# wing may fall back to the historical synthesis.
+	if _snapshot_wing_seed(snapshot) != LEGACY_WING_SEED:
+		var seeded_breach: Variant = snapshot.get("breach")
+		var seeded_day: Variant = snapshot.get("day")
+		if not seeded_breach is Dictionary or seeded_breach.is_empty() or not seeded_day is Dictionary:
+			return false
+		var seeded_elapsed: Variant = seeded_day.get("elapsed_seconds")
+		if typeof(seeded_elapsed) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(seeded_elapsed)) or float(seeded_elapsed) < 0.0:
+			return false
 	if snapshot.has("breach"):
 		if not day_data is Dictionary:
 			return false
-		if not breach_system.is_serialized_data_valid(breach_data, day_data.get("elapsed_seconds")):
+		if not breach_system.is_serialized_data_valid(breach_data, day_data.get("elapsed_seconds"), BreachSystem.warning_at_for_seed(_snapshot_wing_seed(snapshot))):
 			return false
 	if snapshot.has("oxygen") and not oxygen_system.is_serialized_data_valid(oxygen_data):
 		return false

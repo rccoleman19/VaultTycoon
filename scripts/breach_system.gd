@@ -14,6 +14,13 @@ const WARNING_AT_SECONDS := 60.0
 const GRACE_SECONDS := 20.0
 
 const _OPEN_AT_SECONDS := WARNING_AT_SECONDS + GRACE_SECONDS
+# Wing seed (QA 2026-10-18c #2, slice 1). The legacy wing (seed 0) warns at 60 s exactly as before;
+# a seeded wing warns at one of 45, 50, ... 80 s. The time is derived from the saved seed, never
+# saved itself. The game sets warning_at before reset/deserialize.
+const SEEDED_WARNING_MIN := 45.0
+const SEEDED_WARNING_STEP := 5.0
+const SEEDED_WARNING_SLOTS := 8
+var warning_at := WARNING_AT_SECONDS
 
 var game: Node
 var phase: Phase = Phase.DORMANT
@@ -53,9 +60,9 @@ func advance(_delta_seconds: float, elapsed_seconds: float) -> void:
 	var step_end := _finite_nonnegative(elapsed_seconds)
 	_elapsed_seconds = step_end
 
-	if phase == Phase.DORMANT and step_end >= WARNING_AT_SECONDS:
+	if phase == Phase.DORMANT and step_end >= warning_at:
 		_enter_warning(true)
-	if phase == Phase.WARNING and step_end >= _OPEN_AT_SECONDS:
+	if phase == Phase.WARNING and step_end >= get_open_at():
 		_enter_open(true)
 
 	if phase != Phase.DORMANT:
@@ -107,7 +114,7 @@ func get_pressure_percent() -> float:
 	match phase:
 		Phase.WARNING:
 			return clampf(
-				(_elapsed_seconds - WARNING_AT_SECONDS) / GRACE_SECONDS * 100.0,
+				(_elapsed_seconds - warning_at) / GRACE_SECONDS * 100.0,
 				0.0,
 				100.0,
 			)
@@ -118,13 +125,31 @@ func get_pressure_percent() -> float:
 
 func get_time_to_warning(elapsed_seconds: float = -1.0) -> float:
 	var current_time := _elapsed_seconds if elapsed_seconds < 0.0 else elapsed_seconds
-	return maxf(0.0, WARNING_AT_SECONDS - _finite_nonnegative(current_time))
+	return maxf(0.0, warning_at - _finite_nonnegative(current_time))
 
 
 func get_time_to_open() -> float:
 	if phase == Phase.OPEN or phase == Phase.SEALED:
 		return 0.0
-	return maxf(0.0, _OPEN_AT_SECONDS - _elapsed_seconds)
+	return maxf(0.0, get_open_at() - _elapsed_seconds)
+
+
+static func warning_at_for_seed(wing_seed: int) -> float:
+	if wing_seed == 0:
+		return WARNING_AT_SECONDS
+	return SEEDED_WARNING_MIN + SEEDED_WARNING_STEP * float(seed_hash(wing_seed, 1) % SEEDED_WARNING_SLOTS)
+
+
+# Fixed 31-bit integer mix (no RNG): the same seed and salt always give the same value.
+static func seed_hash(wing_seed: int, salt: int) -> int:
+	var h := (wing_seed * 0x2545F491 + salt * 0x9E3779B1) & 0x7FFFFFFF
+	h = ((h ^ (h >> 15)) * 0x2C1B3C6D) & 0x7FFFFFFF
+	h = ((h ^ (h >> 12)) * 0x297A2D39) & 0x7FFFFFFF
+	return h ^ (h >> 15)
+
+
+func get_open_at() -> float:
+	return warning_at + GRACE_SECONDS
 
 
 func serialize() -> Dictionary:
@@ -172,7 +197,9 @@ func deserialize(data: Dictionary, elapsed_seconds: float = 0.0) -> void:
 	queue_redraw()
 
 
-func is_serialized_data_valid(data: Variant, elapsed_seconds: Variant = null) -> bool:
+func is_serialized_data_valid(data: Variant, elapsed_seconds: Variant = null, warning_time := -1.0) -> bool:
+	var warn := warning_at if warning_time < 0.0 else warning_time
+	var open_at := warn + GRACE_SECONDS
 	if not data is Dictionary:
 		return false
 	var saved: Dictionary = data
@@ -239,13 +266,13 @@ func is_serialized_data_valid(data: Variant, elapsed_seconds: Variant = null) ->
 	var saved_elapsed := float(elapsed_seconds)
 	match saved_phase:
 		Phase.DORMANT:
-			return saved_elapsed < WARNING_AT_SECONDS
+			return saved_elapsed < warn
 		Phase.WARNING:
-			return saved_elapsed >= WARNING_AT_SECONDS and saved_elapsed < _OPEN_AT_SECONDS
+			return saved_elapsed >= warn and saved_elapsed < open_at
 		Phase.OPEN:
-			return saved_elapsed >= _OPEN_AT_SECONDS
+			return saved_elapsed >= open_at
 		Phase.SEALED:
-			return saved_elapsed >= WARNING_AT_SECONDS
+			return saved_elapsed >= warn
 	return false
 
 
@@ -257,7 +284,7 @@ func _deserialize_legacy_state() -> void:
 	_open_emitted = false
 	_sealed_emitted = false
 
-	if _elapsed_seconds >= _OPEN_AT_SECONDS:
+	if _elapsed_seconds >= get_open_at():
 		phase = Phase.SEALED
 		patch_delivered = PATCH_COST
 		patch_work_left = 0.0
@@ -265,7 +292,7 @@ func _deserialize_legacy_state() -> void:
 		_warning_emitted = true
 		_open_emitted = true
 		_sealed_emitted = true
-	elif _elapsed_seconds >= WARNING_AT_SECONDS:
+	elif _elapsed_seconds >= warning_at:
 		phase = Phase.WARNING
 		warning_acknowledged = true
 		_warning_emitted = true
