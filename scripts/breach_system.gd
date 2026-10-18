@@ -25,6 +25,8 @@ var _elapsed_seconds := 0.0
 var _warning_emitted := false
 var _open_emitted := false
 var _sealed_emitted := false
+# False only after a legacy (pre-breach) snapshot, whose hatch history was synthesized, not seen.
+var _open_history_known := true
 var _last_selected := false
 
 
@@ -43,6 +45,7 @@ func reset() -> void:
 	_warning_emitted = false
 	_open_emitted = false
 	_sealed_emitted = false
+	_open_history_known = true
 	_last_selected = _is_selected()
 	queue_redraw()
 
@@ -64,6 +67,12 @@ func advance(_delta_seconds: float, elapsed_seconds: float) -> void:
 
 func is_response_active() -> bool:
 	return phase == Phase.WARNING or phase == Phase.OPEN
+
+
+# Win-screen crew rating (QA 2026-10-18b #8): did the hatch ever open this run? Reads the saved
+# open flag; a legacy snapshot that synthesized it reports false rather than an inferred opening.
+func has_opened() -> bool:
+	return _open_emitted and _open_history_known
 
 
 func is_sealed() -> bool:
@@ -141,6 +150,7 @@ func serialize() -> Dictionary:
 
 func deserialize(data: Dictionary, elapsed_seconds: float = 0.0) -> void:
 	_elapsed_seconds = maxf(0.0, elapsed_seconds)
+	_open_history_known = true
 
 	# Breach state was optional in schema version 1. A legacy save beyond the
 	# grace period is treated as already contained rather than inventing damage.
@@ -250,6 +260,7 @@ func is_serialized_data_valid(data: Variant, elapsed_seconds: Variant = null) ->
 
 
 func _deserialize_legacy_state() -> void:
+	_open_history_known = false
 	patch_delivered = 0
 	patch_work_left = PATCH_WORK_SECONDS
 	warning_acknowledged = false

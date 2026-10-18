@@ -66,6 +66,7 @@ var breach_resume_button: Button
 var outcome_panel: PanelContainer
 var outcome_title: Label
 var outcome_text: Label
+var outcome_grade: Label
 var work_priorities_overlay: Control
 var work_priorities_panel: PanelContainer
 var work_priorities_button: Button
@@ -726,6 +727,7 @@ func _build_outcome() -> void:
 	outcome_panel.set_anchors_preset(Control.PRESET_CENTER)
 	outcome_panel.position = Vector2(-260, -145)
 	outcome_panel.size = Vector2(520, 290)
+	outcome_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 	outcome_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	outcome_panel.add_theme_stylebox_override("panel", _panel_style(Color("111b21"), Color("efc56b"), 3))
 	root.add_child(outcome_panel)
@@ -740,6 +742,12 @@ func _build_outcome() -> void:
 	outcome_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	outcome_title.add_theme_font_size_override("font_size", 26)
 	content.add_child(outcome_title)
+	outcome_grade = Label.new()
+	outcome_grade.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	outcome_grade.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	outcome_grade.add_theme_font_size_override("font_size", 17)
+	outcome_grade.visible = false
+	content.add_child(outcome_grade)
 	outcome_text = Label.new()
 	outcome_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	outcome_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -2074,10 +2082,56 @@ func show_outcome(won: bool, survivors: int) -> void:
 		outcome_title.text = "SEAL STABILIZED"
 		outcome_title.add_theme_color_override("font_color", Color("75d4b4"))
 		outcome_text.text = "The pressure breach was contained, breathable air was restored, and the wing remained inhabited through seven full days. %d resident%s survived. Your local victory state has been saved." % [survivors, "" if survivors == 1 else "s"]
+		var grade := crew_grade()
+		outcome_grade.text = format_crew_grade(grade)
+		outcome_grade.add_theme_color_override("font_color", CREW_GRADE_COLORS[int(grade["stars"]) - 1])
+		outcome_grade.visible = true
 	else:
+		outcome_grade.visible = false
+		outcome_grade.text = ""
 		outcome_title.text = "WING LOST"
 		outcome_title.add_theme_color_override("font_color", Color("ef6860"))
 		outcome_text.text = "No residents remain alive. Reopen the last daily checkpoint or initialize a new wing and stabilize supplies, powered air recycling, and the pressure hatch sooner."
+
+
+# Win-screen crew rating (QA 2026-10-18b #8). A win starts at 3 stars and loses one per failed
+# check, never below 1: whole crew alive, hatch never opened, no survivor at BREAK RISK (mood <=
+# 9) or CRITICAL (food < 20 or rest < 15, the alert-bar rule). Derived from saved state only, so a
+# load into a won save shows the same grade; nothing new is saved.
+const CREW_GRADE_COLORS: Array[Color] = [Color("ef6860"), Color("efc56b"), Color("75d4b4")]
+
+
+func crew_grade() -> Dictionary:
+	var crew := game.residents.size()
+	var lost := 0
+	var break_risk := 0
+	var critical := 0
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			lost += 1
+			continue
+		if resident.needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD:
+			break_risk += 1
+		if resident.needs.food < 20.0 or resident.needs.rest < 15.0:
+			critical += 1
+	var reasons: Array[String] = []
+	if lost > 0:
+		reasons.append("%d of %d crew lost" % [lost, crew])
+	if game.breach_system.has_opened():
+		reasons.append("hatch opened")
+	if break_risk > 0:
+		reasons.append("%d survivor%s at BREAK RISK" % [break_risk, "" if break_risk == 1 else "s"])
+	if critical > 0:
+		reasons.append("%d survivor%s CRITICAL" % [critical, "" if critical == 1 else "s"])
+	var failed := int(lost > 0) + int(game.breach_system.has_opened()) + int(break_risk > 0 or critical > 0)
+	return {"stars": maxi(1, 3 - failed), "reasons": reasons}
+
+
+func format_crew_grade(grade: Dictionary) -> String:
+	var stars := int(grade["stars"])
+	var reasons: Array = grade["reasons"]
+	var reason := "whole crew home, hatch held, crew steady" if reasons.is_empty() else " · ".join(reasons)
+	return "CREW RATING %s%s · %s" % ["★".repeat(stars), "☆".repeat(3 - stars), reason]
 
 
 func hide_outcome() -> void:
