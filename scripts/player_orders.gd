@@ -1758,6 +1758,18 @@ func _refresh_oxygen() -> void:
 	]
 	if oxygen.breach_loss_rate > 0.0:
 		oxygen_label.text += " · LEAK %.1f" % oxygen.breach_loss_rate
+	# A finished wing no longer simulates, so a countdown would freeze forever.
+	var crossing := -1.0 if game.ended else oxygen.get_seconds_to_critical_crossing()
+	if crossing >= 0.0:
+		oxygen_label.text += "\n%s IN %s" % [
+			"CRITICAL" if oxygen.net_rate < 0.0 else "BREATHABLE",
+			_format_seconds(crossing),
+		]
+	elif not game.ended and oxygen.is_critical() and oxygen.net_rate <= 0.0001:
+		# Below the line with no recovery in sight, count down the HP drain instead.
+		var first_death := _seconds_to_first_suffocation()
+		if first_death >= 0.0:
+			oxygen_label.text += "\nSUFFOCATING · FIRST DEATH IN %s" % _format_seconds(first_death)
 	oxygen_bar.value = oxygen.oxygen
 	if oxygen.is_critical():
 		oxygen_bar.modulate = Color("ef6860")
@@ -2236,6 +2248,37 @@ func _on_fixture_deconstruct_pressed() -> void:
 	var building := game.get_building_by_id(game.selected_building_id)
 	if building != null:
 		game.deconstruct_building(building.building_id)
+
+
+# Seconds until the first living resident's health runs out at its current
+# rate: suffocation plus starvation, exhaustion and despair drain, minus medical
+# healing. -1.0 when nobody is alive.
+func _seconds_to_first_suffocation() -> float:
+	var soonest := -1.0
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			continue
+		var seconds := resident.needs.health / _suffocating_health_loss_per_second(resident)
+		if soonest < 0.0 or seconds < soonest:
+			soonest = seconds
+	return soonest
+
+
+# Mirrors ResidentNeeds.advance() and JobSystem medical care; suffocation (4)
+# always outpaces medical healing (2), so the result stays positive.
+func _suffocating_health_loss_per_second(resident: VaultResident) -> float:
+	var medical := resident.medical_bed_id >= 0 and resident.state == "Rest-Medical"
+	var drain_per_day := 0.0
+	if resident.needs.food <= 0.0:
+		drain_per_day += 160.0
+	if resident.needs.rest <= 0.0 and not resident.sleeping and not medical:
+		drain_per_day += 30.0
+	if resident.needs.mood <= ResidentNeeds.SEVERE_MOOD_THRESHOLD:
+		drain_per_day += 5.0
+	var loss := OxygenSystem.SUFFOCATION_DAMAGE_PER_SECOND + drain_per_day / DayCycle.SECONDS_PER_DAY
+	if medical:
+		loss -= JobSystem.MEDICAL_HP_PER_SECOND
+	return loss
 
 
 func _format_seconds(seconds: float) -> String:

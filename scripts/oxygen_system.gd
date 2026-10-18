@@ -94,6 +94,20 @@ func is_breathable() -> bool:
 	return oxygen >= CRITICAL_OXYGEN_THRESHOLD
 
 
+# Seconds until oxygen crosses the 15% critical line at the current net rate:
+# falling toward it from above, or recovering toward it from below. -1.0 when
+# the current rate never crosses it (steady, or moving away from the line).
+func get_seconds_to_critical_crossing() -> float:
+	var current := clampf(_finite_or_default(oxygen, STARTING_OXYGEN), 0.0, MAX_OXYGEN)
+	if not is_finite(net_rate):
+		return -1.0
+	if current > CRITICAL_OXYGEN_THRESHOLD and net_rate < -0.0001:
+		return (current - CRITICAL_OXYGEN_THRESHOLD) / -net_rate
+	if current < CRITICAL_OXYGEN_THRESHOLD and net_rate > 0.0001:
+		return (CRITICAL_OXYGEN_THRESHOLD - current) / net_rate
+	return -1.0
+
+
 func get_status_text() -> String:
 	return status_text
 
