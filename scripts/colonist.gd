@@ -201,7 +201,8 @@ func advance_needs(
 	needs.advance(day_fraction, lit, sleeping or medical_rest, in_bed or medical_rest, recreation_active, low_oxygen)
 	if needs.health <= 0.0:
 		kill()
-	if rec_boost_left > 0.0:
+	# The boost is for awake work: it pauses while asleep and resumes on waking.
+	if rec_boost_left > 0.0 and not sleeping:
 		rec_boost_left = maxf(0.0, rec_boost_left - day_fraction * DayCycle.SECONDS_PER_DAY)
 	queue_redraw()
 

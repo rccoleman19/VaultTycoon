@@ -26,6 +26,7 @@ func _run() -> void:
 	_run_case("inspector shows the boosted work speed and countdown", _test_inspector)
 	_run_case("boost survives a snapshot and malformed values load safely", _test_save)
 	_run_case("death clears the boost before died fires; corpses show no Rec boost", _test_death)
+	_run_case("the boost pauses while asleep, resumes on waking and keeps its time across a load", _test_sleep)
 	print("REC BOOST TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
 
@@ -226,5 +227,50 @@ func _test_death() -> void:
 	_check(loaded.apply_snapshot(snapshot), "snapshot with a mid-boost death loads")
 	var reloaded := _inspector_text(loaded, loaded.get_resident_by_id(damaged.resident_id))
 	_check(_work_line(reloaded) == _work_line(corpse), "corpse work line identical after load: %s vs %s" % [_work_line(reloaded), _work_line(corpse)])
+	_dispose(game)
+	_dispose(loaded)
+
+
+func _test_sleep() -> void:
+	var resident := VaultResident.new()
+	_healthy(resident)
+	resident.rec_boost_left = 30.0
+	resident.sleeping = true
+	resident.advance_needs(0.5, true, true)
+	_near(resident.rec_boost_left, 30.0, "half a day asleep burns none of the boost")
+	resident.sleeping = false
+	resident.advance_needs(0.25, true, false)
+	_near(resident.rec_boost_left, 20.0, "awake again, the boost counts down")
+	resident.free()
+	var game := _spawn()
+	var sleeper: VaultResident = game.residents[0]
+	var awake: VaultResident = game.residents[1]
+	sleeper.needs.rest = 10.0
+	sleeper.sleeping = true
+	sleeper.state = "Collapsed on floor"
+	sleeper.rec_boost_left = 30.0
+	awake.rec_boost_left = 30.0
+	game.step_simulation(5.0)
+	_check(sleeper.sleeping, "sleeper is still asleep after 5s")
+	_near(sleeper.rec_boost_left, 30.0, "a sleeping resident keeps the full boost")
+	_near(awake.rec_boost_left, 25.0, "an awake resident's boost still counts down")
+	var asleep_text := _inspector_text(game, sleeper)
+	_check("· Rec boost 30s paused\n" in asleep_text, "asleep inspector says the boost is paused: " + asleep_text.replace("\n", " | "))
+	var awake_text := _inspector_text(game, awake)
+	_check("Work speed: 120% · Rec boost 25s\n" in awake_text, "awake inspector line unchanged: " + awake_text.replace("\n", " | "))
+	var snapshot := game.create_snapshot()
+	var loaded := _spawn()
+	_check(loaded.apply_snapshot(snapshot), "snapshot with a sleeping boosted resident loads")
+	var restored: VaultResident = loaded.get_resident_by_id(sleeper.resident_id)
+	_check(restored.sleeping, "load keeps the resident asleep")
+	_near(restored.rec_boost_left, 30.0, "load keeps the paused boost time")
+	_check(_work_line(_inspector_text(loaded, restored)) == _work_line(asleep_text), "asleep work line identical after load")
+	loaded.step_simulation(2.0)
+	_near(restored.rec_boost_left, 30.0, "still paused after the load")
+	restored.sleeping = false
+	restored.state = "Idle"
+	restored.needs.rest = 100.0
+	loaded.step_simulation(2.0)
+	_near(restored.rec_boost_left, 28.0, "waking resumes the countdown from the saved time")
 	_dispose(game)
 	_dispose(loaded)

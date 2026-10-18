@@ -1463,7 +1463,7 @@ func _refresh_inspector() -> void:
 		inspector_state.text = "Current task: %s\nWork speed: %d%%%s\nMood: %s\n%s" % [
 			_get_resident_order_status(resident),
 			roundi(resident.get_work_multiplier() * 100.0),
-			(" · Rec boost %ds" % ceili(resident.rec_boost_left)) if resident.rec_boost_left > 0.0 else "",
+			(" · Rec boost %ds%s" % [ceili(resident.rec_boost_left), " paused" if resident.sleeping else ""]) if resident.rec_boost_left > 0.0 else "",
 			resident.needs.get_mood_state(),
 			mood_factors,
 		]
