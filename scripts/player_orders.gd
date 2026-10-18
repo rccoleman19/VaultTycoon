@@ -1643,8 +1643,11 @@ func _refresh_alerts() -> void:
 	for bed: VaultBuilding in game.buildings:
 		if bed.kind == VaultBuilding.Kind.MEDICAL_BED and bed.complete and not bed.manually_disabled and bed.reserved_by < 0:
 			free_medical += 1
-	if injured > 0 or game.get_completed_building_count(VaultBuilding.Kind.MEDICAL_BED) > 0:
+	var medical_beds_built := game.get_completed_building_count(VaultBuilding.Kind.MEDICAL_BED)
+	if medical_beds_built > 0:
 		alerts.append("INJURED %d · MED BEDS FREE %d" % [injured, free_medical])
+	elif injured > 0:
+		alerts.append("INJURED %d · NO MED BED" % injured)
 	var lowest_mood_resident: VaultResident = null
 	var recreation_needed := false
 	for resident: VaultResident in game.residents:
