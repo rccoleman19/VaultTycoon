@@ -66,6 +66,11 @@ var briefing_sublevel_label: Label
 var briefing_deeper_button: Button
 var briefing_shallower_button: Button
 var briefing_record_label: Label
+# Meta perks P2: the perk row under the sublevel stepper (hidden until a perk is unlocked).
+var briefing_perk_row: HBoxContainer
+var briefing_perk_label: Label
+var briefing_perk_prev_button: Button
+var briefing_perk_next_button: Button
 var _briefing_is_opening := false
 var help_button: Button
 var breach_warning_panel: PanelContainer
@@ -709,6 +714,25 @@ func _build_briefing() -> void:
 	briefing_shallower_button.tooltip_text = "Shallower sublevel"
 	briefing_shallower_button.pressed.connect(step_sublevel.bind(1))
 	briefing_sublevel_row.add_child(briefing_shallower_button)
+	briefing_perk_row = HBoxContainer.new()
+	briefing_perk_row.add_theme_constant_override("separation", 8)
+	briefing_perk_row.visible = false
+	shell.add_child(briefing_perk_row)
+	briefing_perk_prev_button = Button.new()
+	briefing_perk_prev_button.text = "◀"
+	briefing_perk_prev_button.tooltip_text = "Previous perk"
+	briefing_perk_prev_button.pressed.connect(step_perk.bind(-1))
+	briefing_perk_row.add_child(briefing_perk_prev_button)
+	briefing_perk_label = Label.new()
+	briefing_perk_label.add_theme_color_override("font_color", Color("9fd8c4"))
+	briefing_perk_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	briefing_perk_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	briefing_perk_row.add_child(briefing_perk_label)
+	briefing_perk_next_button = Button.new()
+	briefing_perk_next_button.text = "▶"
+	briefing_perk_next_button.tooltip_text = "Next perk"
+	briefing_perk_next_button.pressed.connect(step_perk.bind(1))
+	briefing_perk_row.add_child(briefing_perk_next_button)
 	briefing_record_label = Label.new()
 	briefing_record_label.add_theme_color_override("font_color", Color("efc56b"))
 	briefing_record_label.add_theme_font_size_override("font_size", 14)
@@ -2027,6 +2051,11 @@ func _briefing_focus_controls(opening: bool) -> Array[Control]:
 		for button: Button in [briefing_deeper_button, briefing_shallower_button]:
 			if button.visible and not button.disabled:
 				controls.append(button)
+	# Meta perks P2: the perk arrows follow the sublevel arrows, before LOAD.
+	if briefing_perk_row != null and briefing_perk_row.visible:
+		for button: Button in [briefing_perk_prev_button, briefing_perk_next_button]:
+			if button.visible and not button.disabled:
+				controls.append(button)
 	if briefing_load_button != null and briefing_load_button.visible and not briefing_load_button.disabled:
 		controls.append(briefing_load_button)
 	return controls
@@ -2183,6 +2212,9 @@ func record_line(won: bool) -> String:
 		raised = previous.is_empty() or int(current.best_day) > int(previous.best_day)
 	if fresh and raised:
 		text += " · NEW RECORD"
+	# Meta perks P2: records are not split by perk; the line says which perk this run used.
+	if game.wing_perk != "":
+		text += " · with %s" % VaultGame.perk_name(game.wing_perk)
 	if fresh and game.finish_record.has("unlocked"):
 		var level := int(game.finish_record.unlocked)
 		text += "\nSUBLEVEL %02d UNLOCKED · %s" % [level, VaultGame.sublevel_modifier(level).get("name", "")]
@@ -2328,6 +2360,49 @@ func _refresh_sublevel_stepper() -> void:
 	briefing_shallower_button.disabled = level >= WingRecords.BASE_SUBLEVEL
 	briefing_record_label.text = briefing_record_text()
 	briefing_record_label.visible = _briefing_is_opening and not briefing_record_label.text.is_empty()
+	_refresh_perk_row()
+
+
+# Meta perks P2: NONE plus every unlocked perk, in order; shown only once one is unlocked.
+func perk_choices() -> Array:
+	return [""] + game.unlocked_perks()
+
+
+func _refresh_perk_row() -> void:
+	if briefing_perk_row == null:
+		return
+	var choices := perk_choices()
+	briefing_perk_row.visible = _briefing_is_opening and game.wing_seed != 0 and choices.size() > 1
+	var index := maxi(0, choices.find(game.wing_perk))
+	var id: String = choices[index]
+	briefing_perk_label.text = "PERK · NONE" if id == "" else "PERK · %s: %s" % [VaultGame.perk_name(id), VaultGame.PERKS[id].detail]
+	briefing_perk_prev_button.disabled = index <= 0
+	briefing_perk_next_button.disabled = index >= choices.size() - 1
+
+
+# ◀/▶ pick the perk for this and later wings; the wing is rebuilt on the same seed and sublevel so the
+# perk's start applies once. Keyboard focus stays on the perk arrows, as on the sublevel stepper.
+func step_perk(direction: int) -> void:
+	if not _briefing_is_opening or game.wing_seed == 0:
+		return
+	var choices := perk_choices()
+	var index := clampi(maxi(0, choices.find(game.wing_perk)) + direction, 0, choices.size() - 1)
+	if choices[index] == game.wing_perk:
+		return
+	var replay := briefing_load_button != null and not briefing_load_button.visible
+	var arrows := [briefing_perk_prev_button, briefing_perk_next_button]
+	if direction > 0:
+		arrows.reverse()
+	var keep_focus := get_viewport().gui_get_focus_owner() in arrows
+	game.equipped_perk = choices[index]
+	_replay_opening = replay
+	game.new_game(true, game.wing_seed, game.sublevel)
+	_replay_opening = false
+	if keep_focus:
+		for button: Button in arrows:
+			if button in _briefing_focus_controls(true):
+				button.grab_focus()
+				break
 
 
 # "RECORD 06-1092 · BEST ★★☆ · FURTHEST DAY 7": the rolled wing's record on this sublevel.
