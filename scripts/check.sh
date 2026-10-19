@@ -45,6 +45,7 @@ run_godot_check post-seal-pacing --script res://tests/test_post_seal_pacing.gd
 run_godot_check idle-start --script res://tests/test_idle_start.gd
 run_godot_check postseal-help --script res://tests/test_postseal_help.gd
 run_godot_check keep-running --script res://tests/test_keep_running.gd
+run_godot_check keep-running-food --script res://tests/test_keep_running_food.gd
 run_godot_check annex --script res://tests/test_annex.gd
 run_godot_check annex-payoff --script res://tests/test_annex_payoff.gd
 run_godot_check comfort --script res://tests/test_comfort.gd

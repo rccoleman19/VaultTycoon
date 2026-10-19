@@ -1100,16 +1100,16 @@ func _primary_next_step() -> Dictionary:
 				if kitchen.kind == VaultBuilding.Kind.KITCHEN and not kitchen.complete:
 					unfinished_kitchens += 1
 			if unfinished_kitchens >= 1:
-				return {
+				return _food_step({
 					"text": "Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station",
 					"help": "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint.",
 					"tool": "select",
-				}
-			return {
+				})
+			return _food_step({
 				"text": "Next: YOU place a Nutrient Station · THEY cook",
 				"help": "Place and power a Nutrient Station so Cook can turn raw food into meals.",
 				"tool": "kitchen",
-			}
+			})
 		if completed_kitchens > 0 and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) == 0:
 			var all_kitchens_disabled := true
 			for kitchen: VaultBuilding in game.buildings:
@@ -1117,18 +1117,18 @@ func _primary_next_step() -> Dictionary:
 					all_kitchens_disabled = false
 					break
 			if all_kitchens_disabled:
-				return {
+				return _food_step({
 					"text": "Next: YOU power the Nutrient Station · THEY cook",
 					"help": "Power the Nutrient Station so Cook can run.",
 					"tool": "select",
-				}
+				})
 			if _unfinished_charge_count() > 0:
-				return _charge_finish_step()
-			return {
+				return _food_step(_charge_finish_step())
+			return _food_step({
 				"text": "Next: YOU place a Charge Node · THEY power the kitchen",
 				"help": "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power.",
 				"tool": "generator",
-			}
+			})
 	if mood_break_risk and game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) < 1:
 		var unfinished_rec := 0
 		for rec: VaultBuilding in game.buildings:
@@ -1210,23 +1210,23 @@ func _primary_next_step() -> Dictionary:
 		}
 	if critical_resident and game.food_system.meals < game.get_alive_count() and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) >= 1:
 		if not _has_eligible_worker("haul") and (game.job_system.get_pending_meals() > 0 or (not game.food_system.can_cook() and game.job_system.get_pending_raw_food() > 0)):
-			return {
+			return _food_step({
 				"text": "Next: YOU enable Haul · THEY deliver food",
 				"tool": "select",
 				"help": "Open PRIORITIES [P] and enable Haul on a living, undrafted resident. Food is waiting for delivery.",
-			}
+			})
 		if not _has_eligible_worker("cook"):
-			return {
+			return _food_step({
 				"text": "Next: YOU enable Cook · THEY cook",
 				"tool": "select",
 				"help": "Enable Cook on a living, undrafted resident so the powered Nutrient Station can run.",
-			}
+			})
 		elif game.food_system.can_cook():
-			return {
+			return _food_step({
 				"text": "Next: YOU leave Cook on · THEY cook",
 				"tool": "select",
 				"help": "Meals are short. The powered Nutrient Station can cook.",
-			}
+			})
 		else:
 			if game.job_system.get_pending_meals() == 0 and game.job_system.get_pending_raw_food() == 0:
 				var total_trays := 0
@@ -1241,36 +1241,36 @@ func _primary_next_step() -> Dictionary:
 						if not tray.manually_disabled:
 							enabled_trays += 1
 				if total_trays == 0:
-					return {
+					return _food_step({
 						"text": "Next: YOU place a Grow Tray · THEY grow",
 						"tool": "grow",
 						"help": "Place a Grow Tray and keep it powered. Its raw food output needs Haul delivery before Cook can use it.",
-					}
+					})
 				if completed_trays == 0:
-					return {
+					return _food_step({
 						"text": "Next: YOU leave Haul + Craft on · THEY finish the Grow Tray",
 						"tool": "select",
 						"help": "Keep Haul + Craft above OFF so crew supply and finish the Grow Tray blueprint.",
-					}
+					})
 				if game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) == 0:
 					if enabled_trays == 0:
-						return {
+						return _food_step({
 							"text": "Next: YOU enable a Grow Tray · THEY grow",
 							"tool": "select",
 							"help": "Enable a completed Grow Tray so it can grow raw food. Haul delivers its output for Cook.",
-						}
+						})
 					if _unfinished_charge_count() > 0:
-						return _charge_finish_step()
-					return {
+						return _food_step(_charge_finish_step())
+					return _food_step({
 						"text": "Next: YOU place a Charge Node · THEY power the Grow Tray",
 						"tool": "generator",
 						"help": "The grid lacks available power for the Grow Tray. Place a Charge Node to add 7 power.",
-					}
-			return {
+					})
+			return _food_step({
 				"text": "Next: YOU leave Cook on · THEY cook",
 				"tool": "select",
 				"help": "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food.",
-			}
+			})
 	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
 	var floor_count := game.map_grid.get_floor_cells().size()
 	var dig_marks := game.map_grid.dig_marks.size()
@@ -1320,32 +1320,32 @@ func _primary_next_step() -> Dictionary:
 		if game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY) < 1:
 			for tray: VaultBuilding in game.buildings:
 				if tray.kind == VaultBuilding.Kind.GROW_TRAY and not tray.complete:
-					return {
+					return _food_step({
 						"text": "Next: YOU leave Haul + Craft on · THEY finish the Grow Tray",
 						"help": "Keep Haul + Craft above OFF so crew supply and finish the Grow Tray blueprint.",
 						"tool": "select",
-					}
-			return {
+					})
+			return _food_step({
 				"text": "Next: YOU place Grow Tray · THEY haul output",
 				"help": "Designate GROW and keep it powered. Haul defaults move raw food to stock.",
 				"tool": "grow",
-			}
+			})
 		if game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) < 1:
 			var unfinished_kitchens := 0
 			for kitchen: VaultBuilding in game.buildings:
 				if kitchen.kind == VaultBuilding.Kind.KITCHEN and not kitchen.complete:
 					unfinished_kitchens += 1
 			if unfinished_kitchens >= 1:
-				return {
+				return _food_step({
 					"text": "Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station",
 					"help": "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint.",
 					"tool": "select",
-				}
-			return {
+				})
+			return _food_step({
 				"text": "Next: YOU place Nutrient Station · THEY cook/haul",
 				"help": "Designate NUTRI, power it, leave Cook + Haul above OFF.",
 				"tool": "kitchen",
-			}
+			})
 		var food_capacity_short := false
 		if cook_ok and haul_ok:
 			food_capacity_short = true
@@ -1362,17 +1362,17 @@ func _primary_next_step() -> Dictionary:
 					break
 		if food_capacity_short:
 			if _unfinished_charge_count() > 0:
-				return _charge_finish_step()
-			return {
+				return _food_step(_charge_finish_step())
+			return _food_step({
 				"text": "Next: YOU place a Charge Node · THEY add power",
 				"help": "The grid lacks power for the food chain. Place a Charge Node to add 7 power.",
 				"tool": "generator",
-			}
-		return {
+			})
+		return _food_step({
 			"text": "Next: YOU power food chain · THEY cook/haul alone",
 			"help": "Enable Grow + Nutrient power. Keep Cook/Haul above OFF so defaults keep working.",
 			"tool": "select",
-		}
+		})
 	if game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) < 1:
 		var completed_air := 0
 		var unfinished_air := 0
@@ -2862,9 +2862,20 @@ func keep_running_next_step() -> Dictionary:
 # Past Day 7 only life-support steps pass through (food chain, power, air, care); opening steps
 # such as marking rock or placing the first bunks give way to the keep-running Next.
 const KEEP_RUNNING_PASS := ["Air Recycler", "Nutrient Station", "Charge Node", "power", "Med Bed", "Rec Console"]
+# Steps classified by the diagnosis that produced them, so their wording never decides it.
+const STEP_KIND_FOOD := "food"
+const KEEP_RUNNING_PASS_KINDS := [STEP_KIND_FOOD]
+
+
+# Food-chain recovery (Cook, Haul, Grow Tray, Nutrient Station and their power) from _primary_next_step.
+func _food_step(step: Dictionary) -> Dictionary:
+	step["kind"] = STEP_KIND_FOOD
+	return step
 
 
 func _is_default_step(step: Dictionary) -> bool:
+	if str(step.get("kind", "")) in KEEP_RUNNING_PASS_KINDS:
+		return false
 	var text := str(step.get("text", ""))
 	for word: String in KEEP_RUNNING_PASS:
 		if text.contains(word):
