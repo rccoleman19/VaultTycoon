@@ -11,7 +11,7 @@ func _run() -> void:
 	_run_case("Air Recycler Mk II is locked until its order, then keeps the air for 2 power", _test_air_mk2)
 	_run_case("claims save and load; old saves claim nothing; bad claims are rejected", _test_save)
 	_run_case("a new wing clears the claims and an ended wing claims nothing", _test_reset_and_end)
-	_run_case("a done order row selects a fixture to fit; the offer stays Grow-only", _test_ui_rows)
+	_run_case("a done order row selects a fixture to fit; the offer moves on to Charge", _test_ui_rows)
 	_run_case("a managed wing earns both fits from its own salvage and still wins", _test_playthrough)
 
 	print("")
@@ -285,7 +285,7 @@ func _test_ui_rows() -> void:
 	_assert_equal(fit_row.text, "[DONE] Fit Grow Mk II → Charge Mk II", "done text")
 	_assert_rows_fit(orders, "a done row")
 	_assert_equal(orders.wing_orders_header.text, "WING ORDERS · 1/2", "header 1/2")
-	_assert_false(orders.upgrade_offer_button.visible, "the offer stays Grow-only and hides once trays are fitted")
+	_assert_equal(orders.upgrade_offer_button.text if orders.upgrade_offer_button.visible else "<hidden>", "Charge Mk II · 18 · +3 power", "once trays are fitted the offer moves on to the unlocked Charge fit (QA-d #2)")
 	_assert_false(fit_row.disabled, "the done row is clickable")
 	fit_row.pressed.emit()
 	_assert_equal(game.selected_building_id, node.building_id, "it selects the Charge Node, not the core")

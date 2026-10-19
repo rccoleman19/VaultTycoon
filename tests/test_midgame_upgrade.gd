@@ -182,7 +182,7 @@ func _test_ui_flow() -> void:
 	_assert_true(orders.inspector_state.text.contains("Growth: 50%"), "the inspector uses the 6 s interval (%s)" % orders.inspector_state.text)
 	_assert_equal(orders.inspector_title.text, "GROW TRAY MK II", "the inspector title shows Mk II")
 	_assert_false(orders.fixture_upgrade_row.visible, "no fit row once fitted")
-	_assert_false(orders.upgrade_offer_button.visible, "the offer goes away once every tray is fitted")
+	_assert_equal(orders.upgrade_offer_button.text if orders.upgrade_offer_button.visible else "<hidden>", "Charge Mk II · 18 · +3 power", "once every tray is fitted the offer moves on to the unlocked Charge fit (QA-d #2)")
 	_dispose(game)
 
 

@@ -183,7 +183,7 @@ func _build_interface() -> void:
 	upgrade_offer_button.visible = false
 	upgrade_offer_button.custom_minimum_size.y = 26
 	upgrade_offer_button.clip_text = true
-	upgrade_offer_button.tooltip_text = "Optional: select a Grow Tray to fit Mk II (1 raw every 6 s, same power)."
+	upgrade_offer_button.tooltip_text = "Optional post-seal Mk II fit: selects the fixture; buy it in the inspector. Charge Mk II gives +3 power for a second Grow Tray."
 	upgrade_offer_button.pressed.connect(_on_upgrade_offer_pressed)
 	summary.add_child(upgrade_offer_button)
 	wing_orders_box = VBoxContainer.new()
@@ -2300,14 +2300,102 @@ func _upgrade_benefit_text(building: VaultBuilding) -> String:
 	return "1 raw every %d s instead of %d s · same %d power." % [roundi(VaultBuilding.GROW_MK2_SECONDS), roundi(FoodSystem.GROW_SECONDS), building.get_base_power_demand()]
 
 
-# The first tier-1 Grow Tray once the hatch is sealed; resolved at refresh and again at click time.
+# The post-seal Mk II offer (QA-d #2/#4), resolved at refresh and again at click time: a Charge Node
+# first when a finished Grow Tray sits unpowered and Charge Mk II is unlocked, then the first tier-1
+# Grow Tray, Charge Node and Air Recycler whose fit is unlocked.
 func _upgrade_offer_target() -> VaultBuilding:
 	if game.ended or not game.breach_system.is_sealed():
 		return null
+	if _unpowered_tray() != null:
+		var charge := _first_fittable(VaultBuilding.Kind.GENERATOR)
+		if charge != null:
+			return charge
+	for kind: int in [VaultBuilding.Kind.GROW_TRAY, VaultBuilding.Kind.GENERATOR, VaultBuilding.Kind.AIR_RECYCLER]:
+		var target := _first_fittable(kind)
+		if target != null:
+			return target
+	return null
+
+
+func _first_fittable(kind: int) -> VaultBuilding:
+	if not game.is_upgrade_unlocked(kind):
+		return null
 	for building: VaultBuilding in game.buildings:
-		if building.kind == VaultBuilding.Kind.GROW_TRAY and building.can_take_upgrade():
+		if building.kind == kind and building.can_take_upgrade() and not building.is_emergency_core:
 			return building
 	return null
+
+
+func _unpowered_tray() -> VaultBuilding:
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY and building.complete and not building.powered and not building.manually_disabled:
+			return building
+	return null
+
+
+# Idle post-seal salvage (QA-d #4): name the next useful build the stored salvage can pay for. A raw
+# pile wants a second Nutrient Station, then a Rec Console, then a second Grow Tray; when the grid has
+# no room for it, a Charge Node first. -1 when nothing useful is affordable. Shown only when no Mk II
+# fit is on offer.
+const NUDGE_RAW_PILE := 6
+const NUDGE_TOOLS := {
+	VaultBuilding.Kind.KITCHEN: "kitchen",
+	VaultBuilding.Kind.RECREATION_CONSOLE: "rec",
+	VaultBuilding.Kind.GROW_TRAY: "grow",
+	VaultBuilding.Kind.GENERATOR: "generator",
+}
+
+
+func salvage_nudge_kind() -> int:
+	if game.ended or not game.breach_system.is_sealed():
+		return -1
+	var want := -1
+	if game.food_system.raw_food >= NUDGE_RAW_PILE and _count_kind(VaultBuilding.Kind.KITCHEN) < 2:
+		want = VaultBuilding.Kind.KITCHEN
+	elif _count_kind(VaultBuilding.Kind.RECREATION_CONSOLE) == 0:
+		want = VaultBuilding.Kind.RECREATION_CONSOLE
+	elif _count_kind(VaultBuilding.Kind.GROW_TRAY) < 2:
+		want = VaultBuilding.Kind.GROW_TRAY
+	if want < 0:
+		return -1
+	if _planned_power_spare() < int(VaultBuilding.POWER_DEMAND.get(want, 0)):
+		want = VaultBuilding.Kind.GENERATOR
+	return want if game.food_system.salvage >= int(VaultBuilding.COSTS[want]) else -1
+
+
+func _count_kind(kind: int) -> int:
+	var count := 0
+	for building: VaultBuilding in game.buildings:
+		if building.kind == kind and not building.is_emergency_core:
+			count += 1
+	return count
+
+
+# Supply (counting unfinished Charge Nodes at 7) minus the demand of every consumer, built or planned.
+func _planned_power_spare() -> int:
+	var spare := 0
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GENERATOR:
+			spare += building.get_power_output() if building.complete else 7
+		elif not building.manually_disabled:
+			spare -= building.get_base_power_demand()
+	return spare
+
+
+func _salvage_nudge() -> bool:
+	return salvage_nudge_kind() >= 0
+
+
+func upgrade_offer_text(target: VaultBuilding) -> String:
+	var cost := target.get_upgrade_cost()
+	match target.kind:
+		VaultBuilding.Kind.GENERATOR:
+			if _unpowered_tray() != null:
+				return "Tray unpowered · Charge Mk II %d" % cost
+			return "Charge Mk II · %d · +%d power" % [cost, VaultBuilding.CHARGE_MK2_OUTPUT - target.get_power_output()]
+		VaultBuilding.Kind.AIR_RECYCLER:
+			return "Air Mk II · %d salvage · -%d power" % [cost, target.get_base_power_demand() - VaultBuilding.AIR_MK2_POWER]
+	return "Grow Tray Mk II · %d salvage" % cost
 
 
 # The right panel holds RIGHT_PANEL_WIDTH: the lighting row's label clips into what is left beside
@@ -2338,9 +2426,12 @@ func _refresh_upgrade_offer() -> void:
 	if upgrade_offer_button == null:
 		return
 	var target := _upgrade_offer_target()
-	upgrade_offer_button.visible = target != null
+	var nudge := salvage_nudge_kind() if target == null else -1
+	upgrade_offer_button.visible = target != null or nudge >= 0
 	if target != null:
-		upgrade_offer_button.text = "Grow Tray Mk II · %d salvage" % target.get_upgrade_cost()
+		upgrade_offer_button.text = upgrade_offer_text(target)
+	elif nudge >= 0:
+		upgrade_offer_button.text = "Spend %d: build %s" % [game.food_system.salvage, VaultBuilding.KIND_NAMES[nudge]]
 	_refresh_wing_orders()
 
 
@@ -2416,8 +2507,11 @@ func _on_wing_order_pressed(order_id: String) -> void:
 
 func _on_upgrade_offer_pressed() -> void:
 	var target := _upgrade_offer_target()
+	var nudge := salvage_nudge_kind() if target == null else -1
 	if target != null:
 		game.select_building(target.building_id)
+	elif nudge >= 0:
+		game.set_tool(NUDGE_TOOLS[nudge])
 
 
 func _on_fixture_upgrade_pressed() -> void:

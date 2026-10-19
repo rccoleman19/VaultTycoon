@@ -179,7 +179,7 @@ func _test_offer_fit_reachable() -> void:
 	_assert_true(VaultGame.ORDER_FIT_GROW_MK2 in game.wing_orders_claimed, "the fit order is claimed")
 	orders.refresh()
 	await _layout()
-	_assert_false(orders.upgrade_offer_button.visible, "the offer hides once no tier-1 tray is left")
+	_assert_equal(orders.upgrade_offer_button.text if orders.upgrade_offer_button.visible else "<hidden>", "Charge Mk II · 18 · +3 power", "once no tier-1 tray is left the offer moves on to the unlocked Charge fit (QA-d #2)")
 	_assert_false(orders.fixture_upgrade_row.is_visible_in_tree(), "the fitted tray offers no further FIT")
 	_assert_scroll_usable(orders, "after fitting with DETAILS open")
 	# The done order row selects the Charge Node its reward unlocked; its FIT is reachable too.
@@ -274,7 +274,7 @@ func _test_pre_seal_details() -> void:
 	_assert_true(game.breach_system.is_sealed(), "the hatch seals")
 	_assert_equal(orders.breach_label.get_index() - 1, orders.oxygen_bar.get_index() + 1, "once sealed the hatch block returns below VAULT ATMOSPHERE")
 	_assert_equal(orders.breach_focus_button.get_index(), orders.breach_bar.get_index() + 1, "in its own order")
-	_assert_false(orders.upgrade_offer_button.visible, "no Mk II offer before the seal")
+	_assert_equal(orders.upgrade_offer_button.text if orders.upgrade_offer_button.visible else "<hidden>", "Spend 48: build Rec Console", "sealed with no tray to fit: the idle-salvage nudge (QA-d #4)")
 	_dispose(game)
 
 
