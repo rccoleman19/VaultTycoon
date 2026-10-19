@@ -6,6 +6,8 @@ extends "res://tests/test_runner.gd"
 
 const MIN_SCROLL_HEIGHT := 150.0
 const LAYOUT_FRAMES := 6
+const FOCUS_MARGIN := 24.0
+const TEXT_ROOM := 12.0
 
 
 func _run() -> void:
@@ -13,6 +15,7 @@ func _run() -> void:
 	await _run_frame_case("the Grow Mk II offer and a done order reveal FIT with DETAILS open, and FIT fits", _test_offer_fit_reachable)
 	await _run_frame_case("opening DETAILS shows its readouts at the top, by hand or on an urgency", _test_details_scroll_to_top)
 	await _run_frame_case("pre-seal DETAILS still shows every readout and FOCUS HATCH at once", _test_pre_seal_details)
+	await _run_frame_case("the right panel holds its width and the Mk II offer fits it", _test_panel_width)
 
 	print("")
 	if _failure_count == 0:
@@ -260,5 +263,46 @@ func _test_pre_seal_details() -> void:
 	}
 	for label: String in readouts:
 		_assert_on_screen(orders, readouts[label], "the %s readout during the hatch warning" % label)
+	var focus_room := orders.right_scroll.get_global_rect().end.y - orders.breach_focus_button.get_global_rect().end.y
+	_assert_true(focus_room >= FOCUS_MARGIN, "FOCUS HATCH keeps at least %d px above the scroll's bottom edge (got %.1f)" % [FOCUS_MARGIN, focus_room])
+	_assert_panel_width(orders, "hatch warning DETAILS open")
+	_assert_equal(orders.details_box.get_child(orders.breach_label.get_index() - 1).get_index(), 0, "during the warning the hatch block leads DETAILS")
+	game.breach_system.patch_delivered = BreachSystem.PATCH_COST
+	game.breach_system.apply_patch_work(100.0)
+	orders.refresh()
+	await _layout()
+	_assert_true(game.breach_system.is_sealed(), "the hatch seals")
+	_assert_equal(orders.breach_label.get_index() - 1, orders.oxygen_bar.get_index() + 1, "once sealed the hatch block returns below VAULT ATMOSPHERE")
+	_assert_equal(orders.breach_focus_button.get_index(), orders.breach_bar.get_index() + 1, "in its own order")
 	_assert_false(orders.upgrade_offer_button.visible, "no Mk II offer before the seal")
+	_dispose(game)
+
+
+# Follow-up to VT-20: nothing in the rail may widen the right panel past RIGHT_PANEL_WIDTH.
+func _assert_panel_width(orders: PlayerOrders, label: String) -> void:
+	var panel := _right_panel(orders)
+	_assert_true(panel.size.x <= VaultGame.RIGHT_PANEL_WIDTH + 0.5, "%s: the right panel stays %d px wide (got %.1f)" % [label, VaultGame.RIGHT_PANEL_WIDTH, panel.size.x])
+	_assert_true(panel.get_global_rect().end.x <= _viewport_rect().end.x + 0.5, "%s: the right panel ends at the screen edge" % label)
+
+
+func _test_panel_width() -> void:
+	var game := _sealed_game()
+	var orders := game.player_orders
+	await _set_details(game, false)
+	_assert_panel_width(orders, "post-seal collapsed")
+	await _set_details(game, true)
+	_assert_panel_width(orders, "post-seal DETAILS open")
+	var offer := orders.upgrade_offer_button
+	_assert_true(offer.visible and offer.clip_text, "the Mk II offer clips rather than widening the rail")
+	_assert_false(offer.text.begins_with("Optional"), "the offer label is short; the tooltip keeps the full hint")
+	var font := offer.get_theme_font("font")
+	var font_size := offer.get_theme_font_size("font_size")
+	var style := offer.get_theme_stylebox("normal")
+	var text_width := font.get_string_size(offer.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	var room := offer.size.x - style.get_minimum_size().x - text_width
+	_assert_true(room >= TEXT_ROOM, "'%s' fits its button with %.0f px to spare" % [offer.text, room])
+	var row := orders.lighting_label.get_parent() as Control
+	var content_width := orders.right_scroll.size.x - orders.right_scroll.get_v_scroll_bar().size.x
+	_assert_true(row.get_combined_minimum_size().x <= content_width, "the lighting row's minimum (%.0f px) fits beside the scroll bar (%.0f px)" % [row.get_combined_minimum_size().x, content_width])
+	_assert_true(orders.lighting_overlay_button.get_global_rect().end.x <= orders.right_scroll.get_global_rect().end.x, "[L] MAP OFF stays inside the rail")
 	_dispose(game)

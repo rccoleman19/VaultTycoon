@@ -156,7 +156,7 @@ func _test_ui_flow() -> void:
 	_seal(game)
 	orders.refresh()
 	_assert_true(orders.upgrade_offer_button.visible, "the offer appears after the seal")
-	_assert_equal(orders.upgrade_offer_button.text, "Optional: Grow Tray Mk II · 18 salvage", "offer text")
+	_assert_equal(orders.upgrade_offer_button.text, "Grow Tray Mk II · 18 salvage", "offer text (short, so the rail keeps its width)")
 	_assert_false(orders.details_box.visible, "the offer shows with DETAILS collapsed")
 	_assert_true(orders.upgrade_offer_button.get_parent() != orders.details_box, "the offer is outside DETAILS")
 	_assert_false(orders.objective_label.text.contains("Mk II"), "Next is not used for the offer")

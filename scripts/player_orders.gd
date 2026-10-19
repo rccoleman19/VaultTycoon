@@ -181,6 +181,7 @@ func _build_interface() -> void:
 	upgrade_offer_button = Button.new()
 	upgrade_offer_button.visible = false
 	upgrade_offer_button.custom_minimum_size.y = 26
+	upgrade_offer_button.clip_text = true
 	upgrade_offer_button.tooltip_text = "Optional: select a Grow Tray to fit Mk II (1 raw every 6 s, same power)."
 	upgrade_offer_button.pressed.connect(_on_upgrade_offer_pressed)
 	summary.add_child(upgrade_offer_button)
@@ -231,7 +232,7 @@ func _build_interface() -> void:
 	lighting_row.add_theme_constant_override("separation", 6)
 	details_box.add_child(lighting_row)
 	lighting_label = Label.new()
-	lighting_label.custom_minimum_size = Vector2(188, 26)
+	lighting_label.custom_minimum_size = Vector2(LIGHTING_LABEL_MIN_WIDTH, 26)
 	lighting_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lighting_label.clip_text = true
 	lighting_label.add_theme_font_size_override("font_size", 14)
@@ -1826,6 +1827,7 @@ func _refresh_oxygen() -> void:
 func _refresh_breach() -> void:
 	var breach := game.breach_system
 	breach_focus_button.visible = breach.phase != BreachSystem.Phase.DORMANT
+	_order_hatch_block(breach.is_response_active())
 	match breach.phase:
 		BreachSystem.Phase.DORMANT:
 			breach_label.text = "WATCH ACTIVE · TEST IN %s" % _format_seconds(breach.get_time_to_warning(game.day_cycle.elapsed_seconds))
@@ -2279,13 +2281,37 @@ func _upgrade_offer_target() -> VaultBuilding:
 	return null
 
 
+# The right panel holds RIGHT_PANEL_WIDTH: the lighting row's label clips into what is left beside
+# [L] MAP OFF instead of forcing 188 px, and the Mk II offer is short and clips (Codex VT-20 follow-up).
+const LIGHTING_LABEL_MIN_WIDTH := 120.0
+
+
+# While the hatch is in WARNING or OPEN, the PRESSURE HATCH block (header, readout, bar, FOCUS
+# HATCH) moves to the top of DETAILS so FOCUS HATCH sits well inside the scroll however tall the
+# other readouts grow; afterwards it returns below VAULT ATMOSPHERE (Codex VT-20 follow-up).
+func _order_hatch_block(first: bool) -> void:
+	var header := details_box.get_child(breach_label.get_index() - 1)
+	var at_top := header.get_index() == 0
+	if first == at_top:
+		return
+	var block: Array[Node] = [header, breach_label, breach_bar, breach_focus_button]
+	if first:
+		for index in block.size():
+			details_box.move_child(block[index], index)
+		return
+	var previous: Node = oxygen_bar
+	for node: Node in block:
+		details_box.move_child(node, previous.get_index())
+		previous = node
+
+
 func _refresh_upgrade_offer() -> void:
 	if upgrade_offer_button == null:
 		return
 	var target := _upgrade_offer_target()
 	upgrade_offer_button.visible = target != null
 	if target != null:
-		upgrade_offer_button.text = "Optional: Grow Tray Mk II · %d salvage" % target.get_upgrade_cost()
+		upgrade_offer_button.text = "Grow Tray Mk II · %d salvage" % target.get_upgrade_cost()
 	_refresh_wing_orders()
 
 
