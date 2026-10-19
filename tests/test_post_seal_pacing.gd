@@ -10,6 +10,7 @@ func _run() -> void:
 	_run_case("reclamation is a post-seal choice the player starts once", _test_reclaim_gate)
 	_run_case("reclamation pays +18 every 30 s, 6 times, then stops", _test_reclaim_schedule)
 	_run_case("the reclamation save key is additive, versioned and validated", _test_reclaim_save)
+	_run_case("with reclamation started, cooking and meal haul lead until Stock 16 is met", _test_meal_priority)
 	_finish()
 
 
@@ -162,4 +163,43 @@ func _test_reclaim_save() -> void:
 	var unsealed: Dictionary = snapshot.duplicate(true)
 	unsealed.breach.phase = BreachSystem.Phase.OPEN
 	_assert_false(other.apply_snapshot(unsealed), "a save whose hatch is not sealed is already rejected (so the key never meets an unsealed wing)")
+	_dispose(game)
+
+
+func _test_meal_priority() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	var jobs := game.job_system
+	var cook := JobSystem.JobType.COOK
+	var haul := JobSystem.JobType.HAUL_MEAL
+	var build := JobSystem.JobType.SUPPLY_BUILD
+	game.food_system.meals = 10
+	_assert_equal(jobs._job_priority(cook), 20, "pre-seal cook: 20")
+	_assert_equal(jobs._job_priority(haul), 45, "pre-seal 10 meals: batching rule (45)")
+	_seal(game)
+	_assert_equal(jobs._job_priority(cook), 20, "sealed without reclamation: unchanged")
+	_assert_equal(jobs._job_priority(haul), 45, "sealed without reclamation: unchanged")
+	game.start_reclamation()
+	_assert_equal(jobs._job_priority(cook), 8, "reclamation, 10 < 16 meals: cook 8")
+	_assert_equal(jobs._job_priority(haul), 9, "and meal haul 9")
+	_assert_true(jobs._job_priority(cook) < jobs._job_priority(build), "ahead of blueprint supply")
+	game.food_system.meals = 15
+	_assert_equal(jobs._job_priority(cook), 8, "15 meals: still 8")
+	game.food_system.meals = 16
+	_assert_equal(jobs._job_priority(cook), 20, "16 meals: cook back to 20")
+	_assert_equal(jobs._job_priority(haul), 45, "16 meals: haul back to 45")
+	game.food_system.meals = 10
+	var air := _blueprint(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(24, 12))
+	_assert_equal(jobs._job_priority(cook), 20, "an unfinished Air Recycler keeps building first")
+	air.delivered = air.get_cost()
+	_assert_equal(jobs._job_priority(cook), 20, "supplied but not built still counts")
+	air.complete = true
+	_assert_equal(jobs._job_priority(cook), 8, "once built, cooking leads again")
+	var charge := _blueprint(game, VaultBuilding.Kind.GENERATOR, Vector2i(21, 12))
+	_assert_equal(jobs._job_priority(cook), 20, "an unfinished Charge Node also keeps building first")
+	charge.complete = true
+	game.wing_orders_claimed.append(VaultGame.ORDER_STOCK_MEALS)
+	_assert_equal(jobs._job_priority(cook), 20, "order claimed: back to 20")
+	game.food_system.meals = 4
+	_assert_equal(jobs._job_priority(haul), 18, "the low-meal haul rule still applies")
 	_dispose(game)

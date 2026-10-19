@@ -876,6 +876,24 @@ func _job_claims_before(resident: VaultResident, a: Dictionary, b: Dictionary) -
 	return int(a.id) < int(b.id)
 
 
+# Post-seal (QA-d #3): once the player starts reclamation, cooking and meal haul go ahead of building
+# (but never ahead of an unfinished Air Recycler or Charge Node) until the Stock-meals order is met.
+# Without this, raw food piled up (24+) behind post-seal construction and Stock 16 was never reached.
+func _stocking_meals_order() -> bool:
+	if (
+		breach == null
+		or not breach.is_sealed()
+		or not bool(game.reclaim_active)
+		or VaultGame.ORDER_STOCK_MEALS in game.wing_orders_claimed
+		or food.meals >= VaultGame.ORDER_STOCK_MEALS_TARGET
+	):
+		return false
+	for building: VaultBuilding in game.buildings:
+		if building.kind in LIFE_SUPPORT_KINDS and not building.complete and not building.is_emergency_core:
+			return false
+	return true
+
+
 # Post-seal (QA-d #2): while an unfinished Air Recycler or Charge Node still needs salvage, other
 # blueprints wait for theirs, so a second Grow Tray can never starve life support. Pre-seal unchanged.
 const LIFE_SUPPORT_KINDS := [VaultBuilding.Kind.AIR_RECYCLER, VaultBuilding.Kind.GENERATOR]
@@ -1158,6 +1176,8 @@ func _job_priority(type: int) -> int:
 				return 2
 			if type == JobType.DIG:
 				return 3
+	if (type == JobType.COOK or type == JobType.HAUL_MEAL) and _stocking_meals_order():
+		return 8 if type == JobType.COOK else 9
 	match type:
 		JobType.SUPPLY_BREACH: return 0
 		JobType.PATCH_BREACH: return 1
