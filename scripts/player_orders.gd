@@ -1610,7 +1610,9 @@ func _refresh_alerts() -> void:
 		alerts.append("BREACH OPEN · O2 VENTING")
 	elif game.breach_system.phase == BreachSystem.Phase.WARNING:
 		alerts.append("SEAL WARNING · %s" % _format_seconds(game.breach_system.get_time_to_open()))
-	if game.food_system.meals < game.get_alive_count():
+	if game.food_system.meals <= 0 and game.get_alive_count() > 0:
+		alerts.append("NO MEALS")
+	elif game.food_system.meals < game.get_alive_count():
 		alerts.append("LOW MEALS")
 	var pending_food := game.job_system.get_pending_raw_food() + game.job_system.get_pending_meals()
 	if pending_food > 0 and not _has_eligible_worker("haul"):
@@ -1638,7 +1640,7 @@ func _refresh_alerts() -> void:
 	var injured := 0
 	var free_medical := 0
 	for resident: VaultResident in game.residents:
-		if resident.alive and resident.needs.health < 100.0:
+		if _counts_as_injured(resident):
 			injured += 1
 	for bed: VaultBuilding in game.buildings:
 		if bed.kind == VaultBuilding.Kind.MEDICAL_BED and bed.complete and not bed.manually_disabled and bed.reserved_by < 0:
@@ -1679,9 +1681,21 @@ func _refresh_alerts() -> void:
 	alert_label.add_theme_color_override("font_color", Color("75d4b4") if alerts.is_empty() else Color("ef6860"))
 
 
+# Starvation is not an injury a Med Bed can treat (QA 2026-10-18c #4): JobSystem._handle_medical
+# never admits a resident at food <= 35 and starving drains 4 HP/s, so a hungry resident's lost
+# HP counts toward INJURED only once they are fed, or while they already hold a Med Bed.
+const MED_BED_MIN_FOOD := 35.0
+
+
+func _counts_as_injured(resident: VaultResident) -> bool:
+	if not resident.alive or resident.needs.health >= 100.0:
+		return false
+	return resident.medical_bed_id >= 0 or resident.needs.food > MED_BED_MIN_FOOD
+
+
 # Alert bar severity (QA 2026-10-18b #5): a resident CRITICAL leads, then the O2, breach and
 # food threats, then everything else. Order within a tier and every wording are unchanged.
-const ALERT_THREAT_PREFIXES: Array[String] = ["OXYGEN ", "BREACH OPEN", "SEAL WARNING", "LOW MEALS", "FOOD WAITING", "NO COOK ENABLED"]
+const ALERT_THREAT_PREFIXES: Array[String] = ["OXYGEN ", "BREACH OPEN", "SEAL WARNING", "NO MEALS", "LOW MEALS", "FOOD WAITING", "NO COOK ENABLED"]
 
 
 func _order_alerts_by_severity(alerts: Array[String]) -> Array[String]:
