@@ -14,6 +14,8 @@ func _run() -> void:
 	_run_case("the Mk II offer covers every unlocked fit and an unpowered tray", _test_offer_order)
 	_run_case("idle post-seal salvage is pointed at the next useful build", _test_salvage_nudge)
 	_run_case("every new post-seal button text fits the right panel", _test_texts_fit)
+	_run_case("while stocking 16 meals, a cook turns 2 raw into 2 meals", _test_cook_batch)
+	_run_case("the build nudge waits while two blueprints still need salvage", _test_nudge_cap)
 	_finish()
 
 
@@ -199,7 +201,7 @@ func _test_meal_priority() -> void:
 	air.complete = true
 	_assert_equal(jobs._job_priority(cook), 8, "once built, cooking leads again")
 	var charge := _blueprint(game, VaultBuilding.Kind.GENERATOR, Vector2i(21, 12))
-	_assert_equal(jobs._job_priority(cook), 20, "an unfinished Charge Node also keeps building first")
+	_assert_equal(jobs._job_priority(cook), 8, "an unfinished Charge Node does not pause cooking")
 	charge.complete = true
 	game.wing_orders_claimed.append(VaultGame.ORDER_STOCK_MEALS)
 	_assert_equal(jobs._job_priority(cook), 20, "order claimed: back to 20")
@@ -336,4 +338,72 @@ func _test_texts_fit() -> void:
 	for text: String in ["Begin reclamation · +18 salvage", "Reclamation · +18 in 30 s · 6 left", "Reclamation complete"]:
 		var room := _room(orders, orders.reclaim_button, text)
 		_assert_true(room >= 12.0, "reclaim '%s' fits with %.0f px to spare" % [text, room])
+	_dispose(game)
+
+
+func _test_cook_batch() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	var jobs := game.job_system
+	_assert_true(jobs.has_method("finish_cook"), "finish_cook exists")
+	if not jobs.has_method("finish_cook"):
+		_dispose(game)
+		return
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
+	game.food_system.meals = 10
+	game.food_system.raw_food = 5
+	_assert_equal(jobs.finish_cook(kitchen), 1, "pre-seal: 1 meal per cook")
+	_assert_equal(game.food_system.raw_food, 4, "pre-seal: 1 raw used")
+	_seal(game)
+	_assert_equal(jobs.finish_cook(kitchen), 1, "sealed, reclamation not started: 1")
+	game.start_reclamation()
+	_assert_equal(jobs.finish_cook(kitchen), 2, "stocking: a batch of 2")
+	_assert_equal(game.food_system.raw_food, 1, "2 raw used: same raw per meal")
+	_assert_equal(jobs.finish_cook(kitchen), 1, "1 raw left: a batch of 1")
+	_assert_equal(jobs.finish_cook(kitchen), 0, "no raw: nothing")
+	game.food_system.raw_food = 4
+	game.food_system.meals = 16
+	_assert_equal(jobs.finish_cook(kitchen), 1, "16 meals stored: back to 1")
+	game.food_system.meals = 10
+	var air := _blueprint(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(24, 12))
+	_assert_equal(jobs.finish_cook(kitchen), 1, "an unfinished Air Recycler: 1")
+	air.complete = true
+	_assert_equal(jobs.finish_cook(kitchen), 2, "Air Recycler built: 2 again")
+	var queued := 0
+	for job: Dictionary in jobs.jobs:
+		if int(job.type) == JobSystem.JobType.HAUL_MEAL and not bool(job.get("done", false)):
+			queued += int(job.get("amount", 0))
+	_assert_equal(queued, 1 + 1 + 2 + 1 + 1 + 2, "every cooked meal is queued for haul")
+	game.food_system.raw_food = 4
+	game.wing_orders_claimed.append(VaultGame.ORDER_STOCK_MEALS)
+	_assert_equal(jobs.finish_cook(kitchen), 1, "order claimed: 1")
+	_dispose(game)
+
+
+func _test_nudge_cap() -> void:
+	var game := _offer_game()
+	_seal(game)
+	_of_kind(game, VaultBuilding.Kind.GROW_TRAY).upgrade_tier = 2
+	_of_kind(game, VaultBuilding.Kind.GENERATOR).upgrade_tier = 2
+	game._check_wing_orders()
+	game.power_grid.recalculate(game.buildings)
+	game.food_system.raw_food = 6
+	game.food_system.salvage = 40
+	_assert_equal(_offer(game), "Spend 40: build Nutrient Station", "nothing pending: a raw pile nudges a Nutrient Station")
+	var rec := _blueprint(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12))
+	_assert_equal(_offer(game), "Spend 40: build Nutrient Station", "one blueprint waiting for salvage: still nudges")
+	var lamp := _blueprint(game, VaultBuilding.Kind.LAMP, Vector2i(23, 13))
+	_assert_equal(game.player_orders.salvage_nudge_kind(), -1, "two waiting for salvage: the nudge waits")
+	_assert_equal(_offer(game), "<hidden>", "and the offer hides")
+	lamp.delivered = lamp.get_cost()
+	_assert_false(lamp.needs_supply(), "the Lamp is fully supplied (only assembly left)")
+	_assert_equal(_offer(game), "Spend 40: build Nutrient Station", "supplied blueprints stop counting: the nudge returns")
+	rec.delivered = rec.get_cost()
+	_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 13))
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.LAMP, Vector2i(21, 13)), "a planned Lamp")
+	_assert_equal(game.player_orders._planned_power_spare(), 0, "12 supply, 12 planned demand")
+	_assert_equal(game.player_orders.salvage_nudge_kind(), VaultBuilding.Kind.GENERATOR, "one unfunded: no room for a tray, a Charge Node")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(21, 14)), "a planned Bunk (no power)")
+	_assert_equal(game.player_orders.salvage_nudge_kind(), -1, "a Charge Node nudge also waits on two unfunded blueprints")
 	_dispose(game)

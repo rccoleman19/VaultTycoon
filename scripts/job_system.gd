@@ -877,8 +877,9 @@ func _job_claims_before(resident: VaultResident, a: Dictionary, b: Dictionary) -
 
 
 # Post-seal (QA-d #3): once the player starts reclamation, cooking and meal haul go ahead of building
-# (but never ahead of an unfinished Air Recycler or Charge Node) until the Stock-meals order is met.
-# Without this, raw food piled up (24+) behind post-seal construction and Stock 16 was never reached.
+# (but never ahead of an unfinished Air Recycler) until the Stock-meals order is met. Without this, raw
+# food piled up (24+) behind post-seal construction and Stock 16 was never reached. An unfinished Charge
+# Node no longer pauses it: a nudged Charge Node took the kitchen's labor for 30-60 s (cadence follow-up).
 func _stocking_meals_order() -> bool:
 	if (
 		breach == null
@@ -889,13 +890,26 @@ func _stocking_meals_order() -> bool:
 	):
 		return false
 	for building: VaultBuilding in game.buildings:
-		if building.kind in LIFE_SUPPORT_KINDS and not building.complete and not building.is_emergency_core:
+		if building.kind == VaultBuilding.Kind.AIR_RECYCLER and not building.complete and not building.is_emergency_core:
 			return false
 	return true
 
 
+# One finished cook: 1 raw into 1 meal, or a batch of 2 while the Stock-meals order is being stocked
+# (one Nutrient Station only matched four crew eating, so raw piled to 20 and Stock 16 came late).
+func finish_cook(building: VaultBuilding) -> int:
+	var cooked := 0
+	for _batch in range(COOK_BATCH_STOCKING if _stocking_meals_order() else 1):
+		if food.finish_cooking():
+			cooked += FoodSystem.COOK_OUTPUT
+	if cooked > 0:
+		queue_meals(building.cell, cooked)
+	return cooked
+
+
 # Post-seal (QA-d #2): while an unfinished Air Recycler or Charge Node still needs salvage, other
 # blueprints wait for theirs, so a second Grow Tray can never starve life support. Pre-seal unchanged.
+const COOK_BATCH_STOCKING := 2
 const LIFE_SUPPORT_KINDS := [VaultBuilding.Kind.AIR_RECYCLER, VaultBuilding.Kind.GENERATOR]
 
 
@@ -1006,8 +1020,7 @@ func _process_job(resident: VaultResident, delta_seconds: float) -> void:
 		resident.state = "Preparing meals"
 		resident.work_accumulator += delta_seconds * resident.get_work_multiplier()
 		if resident.work_accumulator >= 4.0:
-			if food.finish_cooking():
-				queue_meals(building.cell, FoodSystem.COOK_OUTPUT)
+			finish_cook(building)
 			_finish_job(job, resident)
 
 

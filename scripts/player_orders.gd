@@ -2360,7 +2360,22 @@ func salvage_nudge_kind() -> int:
 		return -1
 	if _planned_power_spare() < int(VaultBuilding.POWER_DEMAND.get(want, 0)):
 		want = VaultBuilding.Kind.GENERATOR
+	if _blueprints_awaiting_salvage() >= NUDGE_MAX_UNFUNDED:
+		return -1
 	return want if game.food_system.salvage >= int(VaultBuilding.COSTS[want]) else -1
+
+
+# Blueprints still waiting for salvage. With two of them the nudge waits: placing more only spread
+# each delivery thinner (four blueprints in two seconds) and left nothing for the next choice.
+const NUDGE_MAX_UNFUNDED := 2
+
+
+func _blueprints_awaiting_salvage() -> int:
+	var count := 0
+	for building: VaultBuilding in game.buildings:
+		if not building.complete and not building.is_emergency_core and building.needs_supply():
+			count += 1
+	return count
 
 
 func _count_kind(kind: int) -> int:
