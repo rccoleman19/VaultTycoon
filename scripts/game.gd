@@ -111,7 +111,7 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED) -> void:
 	buildings.clear()
 	residents.clear()
 	next_building_id = 1
-	map_grid.new_wing()
+	map_grid.new_wing(seed_value)
 	job_system.reset()
 	power_grid.reset()
 	lighting_system.reset()
@@ -609,7 +609,7 @@ func create_snapshot() -> Dictionary:
 	var resident_data: Array = []
 	for resident in residents:
 		resident_data.append(resident.serialize())
-	return {
+	var snapshot := {
 		"map": map_grid.serialize(),
 		"buildings": building_data,
 		"residents": resident_data,
@@ -624,6 +624,10 @@ func create_snapshot() -> Dictionary:
 		"outcome": outcome,
 		"wing_seed": wing_seed,
 	}
+	# Wing-seed slice 2: additive, written only for a seeded layout, so legacy saves keep their bytes.
+	if map_grid.layout_seed != LEGACY_WING_SEED:
+		snapshot["map_layout"] = MAP_LAYOUT_SEEDED
+	return snapshot
 
 
 func apply_snapshot(snapshot: Dictionary) -> bool:
@@ -661,6 +665,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	wing_seed = _snapshot_wing_seed(snapshot)
 	breach_system.warning_at = BreachSystem.warning_at_for_seed(wing_seed)
 	player_orders.show_wing_id(wing_seed)
+	map_grid.apply_layout_seed(wing_seed if int(snapshot.get("map_layout", 0)) == MAP_LAYOUT_SEEDED else LEGACY_WING_SEED)
 	breach_system.deserialize(snapshot.get("breach", {}), day_cycle.elapsed_seconds)
 	next_building_id = int(snapshot.get("next_building_id", 1))
 	ended = bool(snapshot.get("ended", false))
@@ -694,6 +699,9 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 
 
 # Wing seed (QA 2026-10-18c #2, slice 1). Additive snapshot key: a save without it is the legacy wing.
+const MAP_LAYOUT_SEEDED := 1
+
+
 func _snapshot_wing_seed(snapshot: Dictionary) -> int:
 	return int(snapshot.get("wing_seed", LEGACY_WING_SEED))
 
@@ -742,6 +750,9 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	if snapshot.has("outcome") and typeof(snapshot.outcome) != TYPE_STRING:
 		return false
 	if snapshot.has("wing_seed") and not _is_integer_in_range(snapshot.wing_seed, LEGACY_WING_SEED, MAX_WING_SEED):
+		return false
+	# Wing-seed slice 2: a seeded layout is only valid on a seeded wing, and only version 1 exists.
+	if snapshot.has("map_layout") and (not _is_integer_in_range(snapshot.map_layout, MAP_LAYOUT_SEEDED, MAP_LAYOUT_SEEDED)):
 		return false
 	# A seeded save is always new, so it must carry a real breach state and clock; only the legacy
 	# wing may fall back to the historical synthesis.

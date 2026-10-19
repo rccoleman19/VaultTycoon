@@ -1177,7 +1177,7 @@ func _primary_next_step() -> Dictionary:
 				"help": "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food.",
 			}
 	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
-	var floor_count := game.map_grid.get_floor_cells().size()
+	var floor_count := game.map_grid.get_floor_cells().size() - game.map_grid.layout_pocket_count
 	var dig_marks := game.map_grid.dig_marks.size()
 	if floor_count < initial_floor + 12:
 		if dig_marks <= 0:
@@ -1806,7 +1806,7 @@ func _refresh_breach() -> void:
 func _refresh_checklist() -> void:
 	if checklist == null:
 		return
-	var initial_floor_count := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
+	var initial_floor_count := game.map_grid.get_initial_floor_count()
 	var cook_enabled := _has_eligible_worker("cook")
 	var hatch_ready := (
 		game.breach_system.is_sealed()
