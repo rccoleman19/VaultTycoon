@@ -2399,8 +2399,8 @@ func _unpowered_tray() -> VaultBuilding:
 
 # Idle post-seal salvage (QA-d #4): name the next useful build the stored salvage can pay for. A raw
 # pile wants a second Nutrient Station, then a Rec Console, then a second Grow Tray; when the grid has
-# no room for it, a Charge Node first. -1 when nothing useful is affordable. Shown only when no Mk II
-# fit is on offer.
+# no room for it, a Charge Node first. -1 when nothing useful is affordable, or while a paid Annex
+# waits on floor. Shown only when no Mk II fit is on offer.
 const NUDGE_RAW_PILE := 6
 const NUDGE_TOOLS := {
 	VaultBuilding.Kind.KITCHEN: "kitchen",
@@ -2412,6 +2412,10 @@ const NUDGE_TOOLS := {
 
 func salvage_nudge_kind() -> int:
 	if game.ended or not game.breach_system.is_sealed():
+		return -1
+	# Every nudge places a fixture on free floor; a paid Annex waiting on room needs those cells.
+	# Mk II fits upgrade in place and stay on offer.
+	if game.annex_waiting_for_room() and game.annex_room_short() > 0:
 		return -1
 	var want := -1
 	if game.food_system.raw_food >= NUDGE_RAW_PILE and _count_kind(VaultBuilding.Kind.KITCHEN) < 2:

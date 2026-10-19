@@ -20,6 +20,7 @@ func _run() -> void:
 	_run_case("a done Annex missing its resident waits for room instead of a partial payoff", _test_done_missing_resident)
 	_run_case("with room the payoff is unchanged and the save shape is the same", _test_happy_path)
 	_run_case("room texts fit with 12 px to spare", _test_fit)
+	_run_case("while the Annex waits on room, Spend offers no floor build", _test_spend_waits)
 	print("")
 	if _failure_count == 0:
 		print("ANNEX ROOM TESTS PASSED: %d cases, %d assertions" % [_case_count, _assertion_count])
@@ -282,4 +283,40 @@ func _test_fit() -> void:
 	var select_line := "SELECT // Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job."
 	var status_room := _text_width(orders.tool_status, select_line) - _text_width(orders.tool_status, "SELECT // " + ROOM_STATUS % _cells(4))
 	_assert_true(status_room >= 12.0, "room status is %.0f px shorter than the select help the bar fits" % status_room)
+	_dispose(game)
+
+
+func _test_spend_waits() -> void:
+	var game := _running()
+	_zone_all_but(game, 2)
+	# A built Grow Tray on an already-zoned cell: a Mk II fit candidate that takes no free floor.
+	var zoned: Vector2i = game.map_grid.stockpile_cells.keys()[0]
+	game.map_grid.stockpile_cells.erase(zoned)
+	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, zoned)
+	_finish(game)
+	game.food_system.salvage = 40
+	_assert_true(game.annex_waiting_for_room(), "the paid Annex waits on room")
+	_assert_equal(game.annex_room_short(), 2, "two cells short")
+	_assert_equal(game.player_orders.salvage_nudge_kind(), -1, "no Spend build while it waits")
+	game.player_orders.refresh()
+	var button: Button = game.player_orders.upgrade_offer_button
+	_assert_false(button.visible and button.text.begins_with("Spend "), "the Spend button offers no build: %s" % button.text)
+	var fit: VaultBuilding = game.player_orders._upgrade_offer_target()
+	_assert_true(fit != null, "a Mk II fit is affordable in this state")
+	if fit != null:
+		_assert_true(button.visible and button.text == game.player_orders.upgrade_offer_text(fit), "an in-place Mk II fit stays on offer: %s" % button.text)
+	var fits_before := game.buildings.size()
+	game.food_system.salvage = 15
+	game.player_orders.refresh()
+	_assert_false(button.visible and button.text.begins_with("Spend "), "with too little for a fit, still no Spend build: %s" % button.text)
+	game.food_system.salvage = 40
+	game.player_orders._on_upgrade_offer_pressed()
+	_assert_equal(game.buildings.size(), fits_before, "pressing the offer places nothing")
+	_assert_true(str(game.active_tool) not in ["kitchen", "rec", "grow", "generator"], "and arms no build tool")
+	_unzone(game, 2)
+	for i in 3:
+		game._advance_annex(0.1)
+	_assert_true(game.annex_resident() != null, "with room the Annex opens")
+	game.food_system.salvage = 40
+	_assert_true(game.player_orders.salvage_nudge_kind() >= 0, "after it opens Spend offers a build again")
 	_dispose(game)
