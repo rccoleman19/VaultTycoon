@@ -2146,6 +2146,9 @@ func record_line(won: bool) -> String:
 		raised = previous.is_empty() or int(current.best_day) > int(previous.best_day)
 	if fresh and raised:
 		text += " · NEW RECORD"
+	if fresh and game.finish_record.has("unlocked"):
+		var level := int(game.finish_record.unlocked)
+		text += "\nSUBLEVEL %02d UNLOCKED · %s" % [level, VaultGame.sublevel_modifier(level).get("name", "")]
 	return text
 
 
@@ -2292,11 +2295,17 @@ func _sublevel() -> int:
 func show_wing_id(wing_seed: int) -> void:
 	if wing_brand_label != null:
 		wing_brand_label.text = "VAULT WING // SUBLEVEL 07" if wing_seed == 0 else "VAULT WING // %s" % wing_id(wing_seed, _sublevel())
+		var modifier := VaultGame.sublevel_modifier(_sublevel()) if wing_seed != 0 else {}
+		if not modifier.is_empty():
+			wing_brand_label.text += " · %s" % modifier.name
 	if wing_briefing_title != null:
 		wing_briefing_title.text = "VAULT WING %s // SEAL STABILIZATION" % wing_id(wing_seed, _sublevel())
 		if wing_seed != 0:
-			var warn := roundi(BreachSystem.warning_at_for_seed(wing_seed))
+			var warn := roundi(VaultGame.warning_at_for(wing_seed, _sublevel()))
 			wing_briefing_title.text += "\nHATCH TEST AT %02d:%02d" % [warn / 60, warn % 60]
+			var modifier := VaultGame.sublevel_modifier(_sublevel())
+			if not modifier.is_empty():
+				wing_briefing_title.text += "\nSUBLEVEL %02d · %s: %s" % [_sublevel(), modifier.name, modifier.detail]
 			# Contents name the applied layout. A pre-layout seeded save keeps wing_seed but
 			# loads with layout_seed 0, so the briefing must not advertise pockets/veins.
 			if game != null and game.map_grid.layout_seed != 0:

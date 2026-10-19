@@ -60,7 +60,7 @@ func _test_win() -> void:
 	_assert_true(game.ended and game.outcome == "win", "the run is won")
 	_assert_equal(game.wing_records().get_record(4242), {"ever_won": true, "best_stars": 3, "best_day": 7, "annex": false}, "the win is recorded with its grade")
 	_assert_true(game.player_orders.outcome_record.visible, "the record line shows")
-	_assert_equal(game.player_orders.outcome_record.text, "BEST ★★★ · NEW RECORD", "first win is a new record")
+	_assert_equal(game.player_orders.outcome_record.text, "BEST ★★★ · NEW RECORD\nSUBLEVEL 06 UNLOCKED · EARLY HATCH", "first win is a new record (and opens 06)")
 	var bytes := _bytes()
 	game._finish_win()
 	_assert_equal(_bytes(), bytes, "a second finish call records nothing more")

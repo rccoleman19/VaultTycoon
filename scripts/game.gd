@@ -14,6 +14,18 @@ var wing_seed := LEGACY_WING_SEED
 # Saved only below 07, as the additive "sublevel" key, so 07 and legacy saves keep their bytes.
 var sublevel := WingRecords.BASE_SUBLEVEL
 const SUBLEVEL_SAVE_VERSION := 1
+# Records + ladder C5: each sublevel below 07 carries one named modifier (not cumulative), applied
+# at NEW WING and, for the rule-based ones, restored on LOAD from the saved sublevel.
+const EARLY_HATCH_ADVANCE_SECONDS := 15.0
+const THIN_VEIN_SALVAGE_YIELD := 4
+const DARK_STARTER_LUMENS := 0
+const FIFTH_MOUTH_CREW_SIZE := 5
+const SUBLEVEL_MODIFIERS := {
+	6: {"name": "EARLY HATCH", "detail": "hatch test 15 s earlier"},
+	5: {"name": "THIN VEINS", "detail": "salvage veins -33%"},
+	4: {"name": "DARK START", "detail": "no starter Lumen"},
+	3: {"name": "FIFTH MOUTH", "detail": "a fifth resident to feed"},
+}
 # Records + ladder: the per-wing sidecar store (scripts/wing_records.gd). Off for seed 0, and off
 # whenever the main loop runs a script (tests, QA drivers) unless records_path is injected, so no
 # test or tool ever touches the player's user://wing_records.json.
@@ -149,7 +161,7 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 	day_cycle.reset()
 	wing_seed = seed_value
 	sublevel = level
-	breach_system.warning_at = BreachSystem.warning_at_for_seed(wing_seed)
+	_apply_sublevel_rules()
 	breach_system.reset()
 	player_orders.show_wing_id(wing_seed)
 	ended = false
@@ -161,12 +173,18 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 	selected_breach = false
 	_simulation_accumulator = 0.0
 	_spawn_starting_fixture(VaultBuilding.Kind.GENERATOR, Vector2i(24, 15), true)
-	_spawn_starting_fixture(VaultBuilding.Kind.LAMP, Vector2i(22, 14), false)
+	if sublevel != 4 or DARK_STARTER_LUMENS > 0:
+		_spawn_starting_fixture(VaultBuilding.Kind.LAMP, Vector2i(22, 14), false)
 	_spawn_starting_fixture(VaultBuilding.Kind.STOCKPILE, Vector2i(19, 17), false)
 	var names := ["Ari", "Bo", "Cyra", "Dax"]
 	var cells := [Vector2i(20, 15), Vector2i(21, 16), Vector2i(22, 17), Vector2i(23, 18)]
 	var starting_food := [65.0, 72.0, 79.0, 86.0]
 	var starting_rest := [55.0, 70.0, 82.0, 94.0]
+	if sublevel == 3 and FIFTH_MOUTH_CREW_SIZE > names.size():
+		names.append("Fen")
+		cells.append(Vector2i(24, 19))
+		starting_food.append(72.0)
+		starting_rest.append(76.0)
 	for index in names.size():
 		var resident := VaultResident.new()
 		resident_root.add_child(resident)
@@ -703,8 +721,8 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	day_cycle.deserialize(snapshot.get("day", {}))
 	wing_seed = _snapshot_wing_seed(snapshot)
 	sublevel = _snapshot_sublevel(snapshot)
-	breach_system.warning_at = BreachSystem.warning_at_for_seed(wing_seed)
 	map_grid.apply_layout_seed(wing_seed if int(snapshot.get("map_layout", 0)) == MAP_LAYOUT_SEEDED else LEGACY_WING_SEED)
+	_apply_sublevel_rules()
 	player_orders.show_wing_id(wing_seed)
 	crew_traits_version = CREW_TRAITS_V1 if wing_seed != LEGACY_WING_SEED and int(snapshot.get("crew_traits", 0)) == CREW_TRAITS_V1 else 0
 	apply_crew_traits()
@@ -757,6 +775,23 @@ func apply_crew_traits() -> void:
 
 func _snapshot_wing_seed(snapshot: Dictionary) -> int:
 	return int(snapshot.get("wing_seed", LEGACY_WING_SEED))
+
+
+static func sublevel_modifier(level: int) -> Dictionary:
+	return SUBLEVEL_MODIFIERS.get(level, {})
+
+
+# The hatch warning time for a wing: 06 EARLY HATCH moves it 15 s earlier (the 20 s grace is kept).
+static func warning_at_for(seed_value: int, level: int) -> float:
+	var warn := BreachSystem.warning_at_for_seed(seed_value)
+	if seed_value != LEGACY_WING_SEED and level == 6:
+		warn -= EARLY_HATCH_ADVANCE_SECONDS
+	return warn
+
+
+func _apply_sublevel_rules() -> void:
+	breach_system.warning_at = warning_at_for(wing_seed, sublevel)
+	map_grid.vein_yield = THIN_VEIN_SALVAGE_YIELD if sublevel == 5 else MapGrid.VEIN_SALVAGE_YIELD
 
 
 func _snapshot_sublevel(snapshot: Dictionary) -> int:
@@ -836,7 +871,7 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	if snapshot.has("breach"):
 		if not day_data is Dictionary:
 			return false
-		if not breach_system.is_serialized_data_valid(breach_data, day_data.get("elapsed_seconds"), BreachSystem.warning_at_for_seed(_snapshot_wing_seed(snapshot))):
+		if not breach_system.is_serialized_data_valid(breach_data, day_data.get("elapsed_seconds"), warning_at_for(_snapshot_wing_seed(snapshot), _snapshot_sublevel(snapshot))):
 			return false
 	if snapshot.has("oxygen") and not oxygen_system.is_serialized_data_valid(oxygen_data):
 		return false
@@ -1386,8 +1421,13 @@ func _record_finish(won: bool) -> void:
 	var previous := store.get_record(wing_seed, level)
 	var stars: Variant = int(player_orders.crew_grade()["stars"]) if won else null
 	var day := clampi(day_cycle.current_day, 1, WingRecords.MAX_DAY)
+	var unlocked_before := store.unlocked_sublevel()
 	if store.record(wing_seed, won, stars, day, level):
 		finish_record = {"previous": previous, "current": store.get_record(wing_seed, level)}
+		var unlocked_now := store.unlocked_sublevel()
+		# Only the next sublevel down counts as this win's unlock (03 is the floor).
+		if unlocked_now < unlocked_before and unlocked_now == level - 1:
+			finish_record["unlocked"] = unlocked_now
 
 
 func _tool_help(tool: String) -> String:
