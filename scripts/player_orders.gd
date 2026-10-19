@@ -10,6 +10,7 @@ var resource_label: Label
 var power_label: Label
 var pause_button: Button
 var objective_label: Label
+var also_label: Label
 var alert_label: Label
 var crew_mood_label: Label
 var crew_mood_bar: ProgressBar
@@ -179,6 +180,11 @@ func _build_interface() -> void:
 	objective_label.add_theme_font_size_override("font_size", 16)
 	objective_label.custom_minimum_size.y = 42
 	summary.add_child(objective_label)
+	also_label = Label.new()
+	also_label.visible = false
+	also_label.add_theme_color_override("font_color", Color("a8946a"))
+	also_label.add_theme_font_size_override("font_size", 13)
+	summary.add_child(also_label)
 	alert_label = Label.new()
 	alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	alert_label.custom_minimum_size.y = 34
@@ -2545,6 +2551,33 @@ func _refresh_upgrade_offer() -> void:
 	elif nudge >= 0:
 		upgrade_offer_button.text = "Spend %d: build %s" % [game.food_system.salvage, VaultBuilding.KIND_NAMES[nudge]]
 	_refresh_wing_orders()
+	_refresh_also()
+
+
+# QA-e #2: a dim line under Next names a live post-seal action. Next itself is unchanged.
+const ALSO_NAMES := {
+	VaultBuilding.Kind.GROW_TRAY: "Grow Tray",
+	VaultBuilding.Kind.GENERATOR: "Charge",
+	VaultBuilding.Kind.AIR_RECYCLER: "Air",
+}
+
+
+func also_text() -> String:
+	if game.ended or not game.breach_system.is_sealed():
+		return ""
+	if game.can_start_reclamation():
+		return "Also: begin reclamation · +%d salvage" % VaultGame.RECLAIM_START_SALVAGE
+	var target := _upgrade_offer_target()
+	if target != null and game.food_system.salvage >= target.get_upgrade_cost():
+		return "Also: fit %s Mk II · %d" % [ALSO_NAMES.get(target.kind, "a"), target.get_upgrade_cost()]
+	return ""
+
+
+func _refresh_also() -> void:
+	if also_label == null:
+		return
+	also_label.text = also_text()
+	also_label.visible = not also_label.text.is_empty()
 
 
 const WING_ORDER_TEXT := {

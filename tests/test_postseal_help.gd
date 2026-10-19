@@ -7,6 +7,9 @@ func _run() -> void:
 	_run_case("HELP adds the post-seal lines only after the seal", _test_gating)
 	_run_case("the post-seal lines track orders, Stock 16, reclamation and the offer", _test_tracking)
 	_run_case("every post-seal line fits the HELP checklist with 12 px to spare", _test_fit)
+	_run_case("the Also line under Next names reclamation, then an affordable Mk II", _test_also)
+	_run_case("the Also line is hidden before the seal, when nothing is affordable and when the wing ends", _test_also_hidden)
+	_run_case("the Also line sits under Next, is dimmer, leaves Next alone and fits", _test_also_layout)
 	print("")
 	if _failure_count == 0:
 		print("POST-SEAL HELP TESTS PASSED: %d cases, %d assertions" % [_case_count, _assertion_count])
@@ -118,6 +121,78 @@ func _test_fit() -> void:
 	texts.append("[OFFER]  Mk II: Charge Mk II · 18 · +3 power")
 	texts.append("[OFFER]  Mk II: nothing to fit right now")
 	for text: String in texts:
+		var room := width - font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+		_assert_true(room >= 12.0, "'%s' fits with %.0f px to spare" % [text, room])
+	_dispose(game)
+
+
+func _also(game: VaultGame) -> String:
+	game.player_orders.refresh()
+	return game.player_orders.also_label.text if game.player_orders.also_label.visible else "<hidden>"
+
+
+func _test_also() -> void:
+	var game := _base_game(30)
+	_seal(game)
+	_assert_equal(_also(game), "Also: begin reclamation · +%d salvage" % VaultGame.RECLAIM_START_SALVAGE, "reclamation first")
+	_assert_true(game.start_reclamation(), "start reclamation")
+	var salvage := game.food_system.salvage
+	_assert_equal(_also(game), "Also: fit Grow Tray Mk II · 18", "then the affordable Grow Tray Mk II")
+	var tray: VaultBuilding = game.player_orders._upgrade_offer_target()
+	_assert_true(game.upgrade_building(tray.building_id), "fit it")
+	game.food_system.salvage = 40
+	_assert_equal(_also(game), "Also: fit Charge Mk II · 18", "then the Charge Mk II its order unlocked")
+	game.food_system.salvage = 17
+	_assert_equal(_also(game), "<hidden>", "hidden one salvage short")
+	game.food_system.salvage = 18
+	_assert_equal(_also(game), "Also: fit Charge Mk II · 18", "shown at exactly the cost")
+	_dispose(game)
+
+
+func _test_also_hidden() -> void:
+	var game := _base_game(60)
+	_assert_equal(_also(game), "<hidden>", "hidden before the seal")
+	_seal(game)
+	_assert_true(_also(game) != "<hidden>", "shown after the seal")
+	game.ended = true
+	_assert_equal(_also(game), "<hidden>", "hidden once the wing ends")
+	_dispose(game)
+	game = _base_game(0)
+	_seal(game)
+	_assert_true(game.start_reclamation(), "start reclamation")
+	game.food_system.salvage = 0
+	_assert_equal(_also(game), "<hidden>", "nothing affordable hides it")
+	_dispose(game)
+
+
+func _test_also_layout() -> void:
+	var game := _base_game(30)
+	var orders := game.player_orders
+	orders.refresh()
+	var next_before := orders.objective_label.text
+	_seal(game)
+	orders.refresh()
+	var step := str(orders._primary_next_step().get("text", ""))
+	_assert_equal(orders.objective_label.text, step, "Next still shows the unchanged Next step")
+	_assert_false(step.begins_with("Also"), "Next never carries the Also text")
+	_assert_equal(orders.also_label.get_parent(), orders.objective_label.get_parent(), "same summary block as Next")
+	_assert_equal(orders.also_label.get_index(), orders.objective_label.get_index() + 1, "directly under Next")
+	var dim: Color = orders.also_label.get_theme_color("font_color")
+	var next_colour: Color = orders.objective_label.get_theme_color("font_color")
+	_assert_true(dim.get_luminance() < next_colour.get_luminance(), "dimmer than Next")
+	_assert_true(orders.also_label.get_theme_font_size("font_size") < orders.objective_label.get_theme_font_size("font_size"), "smaller than Next")
+	var width := VaultGame.RIGHT_PANEL_WIDTH
+	var node: Node = orders.also_label.get_parent()
+	while node is Control:
+		if node is PanelContainer:
+			width -= (node as PanelContainer).get_theme_stylebox("panel").get_minimum_size().x
+			break
+		if node is MarginContainer:
+			width -= (node as Control).get_theme_constant("margin_left") + (node as Control).get_theme_constant("margin_right")
+		node = node.get_parent()
+	var font := orders.also_label.get_theme_font("font")
+	var size := orders.also_label.get_theme_font_size("font_size")
+	for text: String in ["Also: begin reclamation · +%d salvage" % VaultGame.RECLAIM_START_SALVAGE, "Also: fit Grow Tray Mk II · 18", "Also: fit Charge Mk II · 18", "Also: fit Air Mk II · 18", "Also: fit Grow Tray Mk II · 999"]:
 		var room := width - font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
 		_assert_true(room >= 12.0, "'%s' fits with %.0f px to spare" % [text, room])
 	_dispose(game)
