@@ -40,6 +40,7 @@ cd "$PROJECT_ROOT"
 run_godot_check import --editor --quit
 # Mid-game salvage sink (QA 2026-10-18c #3, slice 1).
 run_godot_check midgame-upgrade --script res://tests/test_midgame_upgrade.gd
+run_godot_check wing-orders --script res://tests/test_wing_orders.gd
 run_godot_check tests --script res://tests/test_runner.gd
 run_godot_check mood-recreation --script res://tests/test_mood_recreation.gd
 run_godot_check stress-break-venting --script res://tests/test_stress_break_venting.gd

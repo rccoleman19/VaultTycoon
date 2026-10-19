@@ -45,6 +45,11 @@ var fixture_deconstruct_button: Button
 var upgrade_offer_button: Button
 var fixture_upgrade_row: HBoxContainer
 var fixture_upgrade_button: Button
+# Wing orders (QA 2026-10-18c #3, slice 2): a compact post-seal panel under the offer, outside
+# Next and DETAILS. A done row selects a fixture that its reward unlocked.
+var wing_orders_box: VBoxContainer
+var wing_orders_header: Label
+var wing_order_rows := {}
 var need_labels: Dictionary = {}
 var need_bars: Dictionary = {}
 var work_buttons: Dictionary = {}
@@ -177,6 +182,24 @@ func _build_interface() -> void:
 	upgrade_offer_button.tooltip_text = "Optional: select a Grow Tray to fit Mk II (1 raw every 6 s, same power)."
 	upgrade_offer_button.pressed.connect(_on_upgrade_offer_pressed)
 	summary.add_child(upgrade_offer_button)
+	wing_orders_box = VBoxContainer.new()
+	wing_orders_box.visible = false
+	wing_orders_box.add_theme_constant_override("separation", 2)
+	summary.add_child(wing_orders_box)
+	wing_orders_header = Label.new()
+	wing_orders_header.add_theme_color_override("font_color", Color("8faeb7"))
+	wing_orders_header.add_theme_font_size_override("font_size", 13)
+	wing_orders_box.add_child(wing_orders_header)
+	for order_id: String in VaultGame.WING_ORDER_IDS:
+		var row := Button.new()
+		row.flat = true
+		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		row.clip_text = true
+		row.custom_minimum_size.y = 22
+		row.add_theme_font_size_override("font_size", 13)
+		row.pressed.connect(_on_wing_order_pressed.bind(order_id))
+		wing_order_rows[order_id] = row
+		wing_orders_box.add_child(row)
 	details_toggle = Button.new()
 	details_toggle.text = "DETAILS ▸"
 	details_toggle.tooltip_text = "Show or hide mood, power, air, hatch, and light readouts."
@@ -2209,7 +2232,7 @@ func _show_fixture_controls(building: VaultBuilding) -> void:
 
 
 func _show_fixture_upgrade(building: VaultBuilding) -> void:
-	var offered := building.can_take_upgrade() and game.breach_system.is_sealed() and not game.ended
+	var offered := building.can_take_upgrade() and game.is_upgrade_unlocked(building.kind) and game.breach_system.is_sealed() and not game.ended
 	fixture_upgrade_row.visible = offered
 	if not offered:
 		return
@@ -2217,10 +2240,19 @@ func _show_fixture_upgrade(building: VaultBuilding) -> void:
 	fixture_upgrade_button.text = "FIT MK II · %d SALVAGE" % cost
 	fixture_upgrade_button.disabled = not game.can_upgrade_building(building.building_id)
 	fixture_upgrade_button.tooltip_text = (
-		"1 raw every %d s instead of %d s · same %d power." % [roundi(VaultBuilding.GROW_MK2_SECONDS), roundi(FoodSystem.GROW_SECONDS), building.get_base_power_demand()]
+		_upgrade_benefit_text(building)
 		if not fixture_upgrade_button.disabled
 		else "Needs %d salvage (have %d)." % [cost, game.food_system.salvage]
 	)
+
+
+func _upgrade_benefit_text(building: VaultBuilding) -> String:
+	match building.kind:
+		VaultBuilding.Kind.GENERATOR:
+			return "%d power instead of %d." % [VaultBuilding.CHARGE_MK2_OUTPUT, building.get_power_output()]
+		VaultBuilding.Kind.AIR_RECYCLER:
+			return "Same air for %d power instead of %d." % [VaultBuilding.AIR_MK2_POWER, building.get_base_power_demand()]
+	return "1 raw every %d s instead of %d s · same %d power." % [roundi(VaultBuilding.GROW_MK2_SECONDS), roundi(FoodSystem.GROW_SECONDS), building.get_base_power_demand()]
 
 
 # The first tier-1 Grow Tray once the hatch is sealed; resolved at refresh and again at click time.
@@ -2228,7 +2260,7 @@ func _upgrade_offer_target() -> VaultBuilding:
 	if game.ended or not game.breach_system.is_sealed():
 		return null
 	for building: VaultBuilding in game.buildings:
-		if building.can_take_upgrade():
+		if building.kind == VaultBuilding.Kind.GROW_TRAY and building.can_take_upgrade():
 			return building
 	return null
 
@@ -2240,6 +2272,60 @@ func _refresh_upgrade_offer() -> void:
 	upgrade_offer_button.visible = target != null
 	if target != null:
 		upgrade_offer_button.text = "Optional: Grow Tray Mk II · %d salvage" % target.get_upgrade_cost()
+	_refresh_wing_orders()
+
+
+const WING_ORDER_TEXT := {
+	VaultGame.ORDER_FIT_GROW_MK2: ["Fit Grow Mk II", "Charge Mk II", "Charge Node Mk II"],
+	VaultGame.ORDER_STOCK_MEALS: ["Stock %d meals", "Air Mk II", "Air Recycler Mk II"],
+}
+const WING_ORDER_REWARD_KIND := {
+	VaultGame.ORDER_FIT_GROW_MK2: VaultBuilding.Kind.GENERATOR,
+	VaultGame.ORDER_STOCK_MEALS: VaultBuilding.Kind.AIR_RECYCLER,
+}
+
+
+func _refresh_wing_orders() -> void:
+	if wing_orders_box == null:
+		return
+	wing_orders_box.visible = game.breach_system.is_sealed() and not game.ended
+	if not wing_orders_box.visible:
+		return
+	var done := 0
+	for order_id: String in VaultGame.WING_ORDER_IDS:
+		var claimed := order_id in game.wing_orders_claimed
+		done += 1 if claimed else 0
+		var goal: String = WING_ORDER_TEXT[order_id][0]
+		var reward: String = WING_ORDER_TEXT[order_id][1]
+		var reward_full: String = WING_ORDER_TEXT[order_id][2]
+		var row: Button = wing_order_rows[order_id]
+		if order_id == VaultGame.ORDER_STOCK_MEALS:
+			goal = goal % VaultGame.ORDER_STOCK_MEALS_TARGET
+			if not claimed:
+				goal += " (%d/%d)" % [mini(game.food_system.meals, VaultGame.ORDER_STOCK_MEALS_TARGET), VaultGame.ORDER_STOCK_MEALS_TARGET]
+		row.text = ("[DONE] %s → %s" if claimed else "[  ] %s → %s") % [goal, reward]
+		row.disabled = not claimed or _wing_order_target(order_id) == null
+		row.tooltip_text = (
+			"Select a %s to fit %s." % [VaultBuilding.KIND_NAMES[WING_ORDER_REWARD_KIND[order_id]], reward_full]
+			if claimed
+			else "Wing order: %s to unlock %s." % [goal, reward_full]
+		)
+	wing_orders_header.text = "WING ORDERS · %d/%d" % [done, VaultGame.WING_ORDER_IDS.size()]
+
+
+func _wing_order_target(order_id: String) -> VaultBuilding:
+	if not order_id in game.wing_orders_claimed:
+		return null
+	for building: VaultBuilding in game.buildings:
+		if building.kind == WING_ORDER_REWARD_KIND[order_id] and building.can_take_upgrade():
+			return building
+	return null
+
+
+func _on_wing_order_pressed(order_id: String) -> void:
+	var target := _wing_order_target(order_id)
+	if target != null:
+		game.select_building(target.building_id)
 
 
 func _on_upgrade_offer_pressed() -> void:

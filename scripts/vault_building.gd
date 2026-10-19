@@ -62,6 +62,12 @@ const UPGRADE_TIER_BASE := 1
 const UPGRADE_TIER_MAX := 2
 const GROW_MK2_COST := 18
 const GROW_MK2_SECONDS := 6.0
+# Wing orders (QA 2026-10-18c #3, slice 2) unlock these Mk II fits; game.gd owns the unlock check.
+const CHARGE_MK2_COST := 18
+const CHARGE_MK2_OUTPUT := 10
+const AIR_MK2_COST := 18
+const AIR_MK2_POWER := 2
+const UPGRADABLE_KINDS := [Kind.GROW_TRAY, Kind.GENERATOR, Kind.AIR_RECYCLER]
 var upgrade_tier := UPGRADE_TIER_BASE
 
 
@@ -84,11 +90,18 @@ func get_display_name() -> String:
 
 
 func can_take_upgrade() -> bool:
-	return kind == Kind.GROW_TRAY and complete and not is_emergency_core and upgrade_tier < UPGRADE_TIER_MAX
+	return kind in UPGRADABLE_KINDS and complete and not is_emergency_core and upgrade_tier < UPGRADE_TIER_MAX
 
 
 func get_upgrade_cost() -> int:
-	return GROW_MK2_COST if kind == Kind.GROW_TRAY else 0
+	match kind:
+		Kind.GROW_TRAY:
+			return GROW_MK2_COST
+		Kind.GENERATOR:
+			return CHARGE_MK2_COST
+		Kind.AIR_RECYCLER:
+			return AIR_MK2_COST
+	return 0
 
 
 # Seconds per raw food for this tray; Mk I keeps FoodSystem.GROW_SECONDS.
@@ -118,6 +131,8 @@ func get_power_demand() -> int:
 
 
 func get_base_power_demand() -> int:
+	if kind == Kind.AIR_RECYCLER and upgrade_tier >= UPGRADE_TIER_MAX:
+		return AIR_MK2_POWER
 	return int(POWER_DEMAND.get(kind, 0))
 
 
@@ -146,7 +161,9 @@ static func get_default_power_priority(building_kind: int) -> PowerPriority:
 func get_power_output() -> int:
 	if not complete or kind != Kind.GENERATOR:
 		return 0
-	return 2 if is_emergency_core else 7
+	if is_emergency_core:
+		return 2
+	return CHARGE_MK2_OUTPUT if upgrade_tier >= UPGRADE_TIER_MAX else 7
 
 
 func needs_supply() -> bool:

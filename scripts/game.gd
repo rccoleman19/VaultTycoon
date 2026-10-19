@@ -49,6 +49,13 @@ var outcome := ""
 var status_message := "Select DIG and mark rock beside the chamber."
 var status_message_left := 0.0
 
+# Wing orders (QA 2026-10-18c #3, slice 2): post-seal goals whose rewards unlock Mk II fits.
+# A claim latches for the wing and is saved, so a reload never pays twice.
+const ORDER_FIT_GROW_MK2 := "fit_grow_mk2"
+const ORDER_STOCK_MEALS := "stock_meals"
+const WING_ORDER_IDS := [ORDER_FIT_GROW_MK2, ORDER_STOCK_MEALS]
+const ORDER_STOCK_MEALS_TARGET := 16
+var wing_orders_claimed: Array[String] = []
 var _simulation_accumulator := 0.0
 var _dragging_camera := false
 
@@ -122,6 +129,7 @@ func new_game(show_tutorial := false) -> void:
 	selected_building_id = -1
 	selected_breach = false
 	_simulation_accumulator = 0.0
+	wing_orders_claimed.clear()
 	_spawn_starting_fixture(VaultBuilding.Kind.GENERATOR, Vector2i(24, 15), true)
 	_spawn_starting_fixture(VaultBuilding.Kind.LAMP, Vector2i(22, 14), false)
 	_spawn_starting_fixture(VaultBuilding.Kind.STOCKPILE, Vector2i(19, 17), false)
@@ -226,6 +234,7 @@ func _simulation_step(delta_seconds: float) -> void:
 	power_grid.recalculate(buildings)
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
+	_check_wing_orders()
 	day_cycle.advance(delta_seconds)
 	if day_cycle.completed and breach_system.is_sealed() and oxygen_system.is_breathable():
 		_finish_win()
@@ -410,6 +419,7 @@ func can_upgrade_building(building_id: int) -> bool:
 	return (
 		building != null
 		and building.can_take_upgrade()
+		and is_upgrade_unlocked(building.kind)
 		and not ended
 		and breach_system.is_sealed()
 		and food_system.salvage >= building.get_upgrade_cost()
@@ -423,13 +433,62 @@ func upgrade_building(building_id: int) -> bool:
 	var cost := building.get_upgrade_cost()
 	if food_system.take_salvage(cost) != cost:
 		return false
-	var fraction := building.production_progress / building.get_grow_seconds()
-	building.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
-	building.production_progress = fraction * building.get_grow_seconds()
+	if building.kind == VaultBuilding.Kind.GROW_TRAY:
+		var fraction := building.production_progress / building.get_grow_seconds()
+		building.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+		building.production_progress = fraction * building.get_grow_seconds()
+		status_message = "%s fitted for %d salvage: 1 raw every %d s." % [building.get_display_name(), cost, roundi(building.get_grow_seconds())]
+		# Latch now: a paused fit followed by a removal must still count.
+		_claim_wing_order(ORDER_FIT_GROW_MK2)
+	else:
+		building.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+		if building.kind == VaultBuilding.Kind.GENERATOR:
+			status_message = "%s fitted for %d salvage: %d power." % [building.get_display_name(), cost, building.get_power_output()]
+		else:
+			status_message = "%s fitted for %d salvage: same air for %d power." % [building.get_display_name(), cost, building.get_base_power_demand()]
 	building.queue_redraw()
-	status_message = "%s fitted for %d salvage: 1 raw every %d s." % [building.get_display_name(), cost, roundi(building.get_grow_seconds())]
+	power_grid.recalculate(buildings)
+	job_system.reconcile_recreation_state()
+	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	status_message_left = 4.0
 	return true
+
+
+# Grow Tray Mk II is open to every sealed wing; Charge Node and Air Recycler Mk II need a wing order.
+# Claims from a snapshot whose shape is already validated; a save without the key claims nothing.
+func _snapshot_order_claims(snapshot: Dictionary) -> Array:
+	var orders: Variant = snapshot.get("wing_orders", {})
+	if orders is Dictionary and orders.get("claimed") is Array:
+		return orders.claimed
+	return []
+
+
+func is_upgrade_unlocked(kind: int) -> bool:
+	match kind:
+		VaultBuilding.Kind.GROW_TRAY:
+			return true
+		VaultBuilding.Kind.GENERATOR:
+			return ORDER_FIT_GROW_MK2 in wing_orders_claimed
+		VaultBuilding.Kind.AIR_RECYCLER:
+			return ORDER_STOCK_MEALS in wing_orders_claimed
+	return false
+
+
+func _claim_wing_order(order_id: String) -> void:
+	if order_id in WING_ORDER_IDS and not order_id in wing_orders_claimed:
+		wing_orders_claimed.append(order_id)
+
+
+# Orders count only while the hatch is sealed and the wing is live. Stored meals only.
+func _check_wing_orders() -> void:
+	if ended or not breach_system.is_sealed():
+		return
+	for building in buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY and building.upgrade_tier >= VaultBuilding.UPGRADE_TIER_MAX:
+			_claim_wing_order(ORDER_FIT_GROW_MK2)
+			break
+	if food_system.meals >= ORDER_STOCK_MEALS_TARGET:
+		_claim_wing_order(ORDER_STOCK_MEALS)
 
 
 func deconstruct_building(building_id: int) -> bool:
@@ -639,6 +698,7 @@ func create_snapshot() -> Dictionary:
 		"oxygen": oxygen_system.serialize(),
 		"day": day_cycle.serialize(),
 		"breach": breach_system.serialize(),
+		"wing_orders": {"claimed": wing_orders_claimed.duplicate()},
 		"jobs": job_system.serialize(),
 		"next_building_id": next_building_id,
 		"camera": [world_camera.position.x, world_camera.position.y, world_camera.zoom.x],
@@ -681,6 +741,9 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	day_cycle.deserialize(snapshot.get("day", {}))
 	breach_system.deserialize(snapshot.get("breach", {}), day_cycle.elapsed_seconds)
 	next_building_id = int(snapshot.get("next_building_id", 1))
+	wing_orders_claimed.clear()
+	for order_id: Variant in _snapshot_order_claims(snapshot):
+		wing_orders_claimed.append(str(order_id))
 	ended = bool(snapshot.get("ended", false))
 	outcome = str(snapshot.get("outcome", ""))
 	var camera_data: Array = snapshot.get("camera", [])
@@ -769,6 +832,16 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 				return false
 		if bool(entry.get("alive", true)):
 			living_residents += 1
+	if snapshot.has("wing_orders"):
+		var orders: Variant = snapshot.wing_orders
+		if not orders is Dictionary or not orders.get("claimed") is Array:
+			return false
+		var seen := {}
+		for order_id: Variant in orders.claimed:
+			if typeof(order_id) != TYPE_STRING or not order_id in WING_ORDER_IDS or seen.has(order_id):
+				return false
+			seen[order_id] = true
+	var incoming_claims := _snapshot_order_claims(snapshot)
 	for entry: Variant in building_data:
 		if not entry is Dictionary or not entry.get("cell") is Array or entry.cell.size() < 2:
 			return false
@@ -780,9 +853,15 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 			if not _is_integer_in_range(entry.upgrade_tier, VaultBuilding.UPGRADE_TIER_BASE, VaultBuilding.UPGRADE_TIER_MAX):
 				return false
 			if int(entry.upgrade_tier) > VaultBuilding.UPGRADE_TIER_BASE and (
-				int(entry.kind) != VaultBuilding.Kind.GROW_TRAY or entry.get("complete") != true or entry.get("is_emergency_core", false) == true
+				not int(entry.kind) in VaultBuilding.UPGRADABLE_KINDS or entry.get("complete") != true or entry.get("is_emergency_core", false) == true
 			):
 				return false
+			# A saved Charge Node / Air Recycler Mk II needs its order claimed in the same save.
+			if int(entry.upgrade_tier) > VaultBuilding.UPGRADE_TIER_BASE:
+				if int(entry.kind) == VaultBuilding.Kind.GENERATOR and not ORDER_FIT_GROW_MK2 in incoming_claims:
+					return false
+				if int(entry.kind) == VaultBuilding.Kind.AIR_RECYCLER and not ORDER_STOCK_MEALS in incoming_claims:
+					return false
 	if not job_system.is_serialized_breach_data_valid(jobs_data, breach_data, resident_data):
 		return false
 
