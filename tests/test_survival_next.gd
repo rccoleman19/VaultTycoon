@@ -1995,10 +1995,34 @@ func _test_charge_finish_priority() -> void:
 	game.residents[0].needs.mood = 9.0
 	# QA 2026-10-18b: an empty larder outranks the Rec tip even before anyone is critical.
 	_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
+	# QA 2026-10-18c #5: with no Nutrient Station and under 2.5 days of food, food leads.
 	game.food_system.meals = 1
+	_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
+	game.food_system.meals = game.get_alive_count()
+	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")  # 2.67 days: Rec
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 60.0
+	_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
+	_assert_true(is_equal_approx(game.player_orders._crew_food_days(), 2.0), "60 food each plus one meal each is 2 days")
+	game.food_system.meals = game.get_alive_count() + 1
 	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
 	game.food_system.meals = game.get_alive_count()
+	var station := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(30, 14))
 	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
+	game.buildings.erase(station)
+	station.queue_free()
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+	# The dead do not eat: three living at 100 with three meals is 2.67 days, so Rec.
+	var dead: VaultResident = game.residents[3]
+	dead.needs.food = 0.0
+	dead.alive = false
+	game.food_system.meals = game.get_alive_count()
+	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
+	dead.alive = true
+	dead.needs.food = 100.0
+	game.food_system.meals = game.get_alive_count()
+	game.residents[0].needs.mood = 9.0
 	game.residents[0].needs.mood = 100.0
 	game.residents[0].needs.health = 99.0
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
@@ -2009,6 +2033,28 @@ func _test_charge_finish_priority() -> void:
 	game.food_system.meals = 0
 	_assert_dig(game, "an empty larder alone, without a mood break, keeps the dig hint")
 	_dispose(game)
+	# QA 2026-10-18c #5 replay: an idle wing with no food fixtures hears about food, not Rec,
+	# from its first mood-break second while the larder is still 4 meals.
+	var idle := _spawn_game()
+	idle.begin_shift()
+	var rec_seconds := 0
+	var food_seconds := 0
+	var first_food_meals := -1
+	while idle.day_cycle.elapsed_seconds < 100.0:
+		if idle.breach_system.phase == BreachSystem.Phase.WARNING and not idle.breach_system.warning_acknowledged:
+			idle.acknowledge_breach_warning(true)
+		idle.user_paused = false
+		idle.step_simulation(0.5)
+		var text := str(idle.player_orders._primary_next_step()["text"])
+		if text == REC_NEXT:
+			rec_seconds += 1
+		elif text == KITCHEN_NEXT:
+			food_seconds += 1
+			if first_food_meals < 0:
+				first_food_meals = idle.food_system.meals
+	_assert_equal(rec_seconds, 0, "idle wing never gets the Rec tip before 100 s")
+	_assert_true(food_seconds > 0 and first_food_meals == idle.get_alive_count(), "the food tip arrives while one round of meals is left (got %d)" % first_food_meals)
+	_dispose(idle)
 
 
 func _air_ready_game() -> VaultGame:
