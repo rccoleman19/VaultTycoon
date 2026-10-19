@@ -58,6 +58,22 @@ const ORDER_STOCK_MEALS_TARGET := 16
 var wing_orders_claimed: Array[String] = []
 # Post-seal reclamation (QA-d #2): a player-started, finite salvage income after the seal.
 const RECLAIM_KEY := "post_seal_reclamation"
+# QA-d #8 idle start: a two-step card for a wing nobody has touched by 30 s. Step 1 queues the standard
+# opening (digs, two bunks, Charge Node, Nutrient Station, Grow Tray); step 2 is the Air Recycler.
+const IDLE_START_KEY := "idle_start"
+const IDLE_START_VERSION := 1
+const IDLE_START_DELAY := 30.0
+const IDLE_START_DIG_COLUMNS := [16, 15, 14, 13, 12]
+const IDLE_START_DIG_ROWS := [13, 14, 15, 16, 17]
+const IDLE_START_PIECES := [
+	[VaultBuilding.Kind.BED, Vector2i(27, 12)],
+	[VaultBuilding.Kind.BED, Vector2i(26, 12)],
+	[VaultBuilding.Kind.GENERATOR, Vector2i(21, 12)],
+	[VaultBuilding.Kind.KITCHEN, Vector2i(22, 12)],
+	[VaultBuilding.Kind.GROW_TRAY, Vector2i(23, 12)],
+]
+const IDLE_START_AIR_CELL := Vector2i(24, 12)
+const IDLE_START_PREFS_SECTION := "idle_start"
 const RECLAIM_VERSION := 1
 const RECLAIM_START_SALVAGE := 18
 const RECLAIM_DELIVERY := 18
@@ -66,6 +82,11 @@ const RECLAIM_DELIVERIES := 6
 var reclaim_active := false
 var reclaim_elapsed := 0.0
 var reclaim_paid := 0
+var idle_start_prefs_path := "user://vault_prefs.cfg"
+var idle_start_stage := 0 # 0 not taken, 1 start queued (Air pending), 2 done
+var _idle_start_next_id := -1
+var _idle_start_floor_count := -1
+var _idle_start_dismissed_cache := {}
 var _simulation_accumulator := 0.0
 var _dragging_camera := false
 
@@ -159,6 +180,9 @@ func new_game(show_tutorial := false) -> void:
 	power_grid.recalculate(buildings)
 	refresh_lighting(true)
 	oxygen_system.refresh_rates(residents, buildings, false)
+	idle_start_stage = 0
+	_idle_start_next_id = next_building_id
+	_idle_start_floor_count = map_grid.get_floor_cells().size()
 	world_camera.position = map_grid.cell_to_world(map_grid.get_chamber_center())
 	world_camera.zoom = Vector2.ONE
 	_sync_3d_play_view(true)
@@ -524,6 +548,80 @@ func _advance_reclamation(delta_seconds: float) -> void:
 		food_system.add_salvage(RECLAIM_DELIVERY)
 
 
+# Untouched means: no blueprint ever placed (ids still at the shift start), no dig mark open and no
+# rock carved since the wing began. Only a fresh New Wing qualifies; a loaded save never re-offers.
+func can_offer_idle_start() -> bool:
+	return (
+		idle_start_stage == 0
+		and not ended
+		and _idle_start_next_id > 0
+		and day_cycle.elapsed_seconds >= IDLE_START_DELAY
+		and breach_system.phase == BreachSystem.Phase.DORMANT
+		and next_building_id == _idle_start_next_id
+		and map_grid.dig_marks.is_empty()
+		and map_grid.get_floor_cells().size() == _idle_start_floor_count
+		and not idle_start_dismissed()
+	)
+
+
+func idle_start_air_pending() -> bool:
+	return idle_start_stage == 1 and not ended and not idle_start_dismissed()
+
+
+func idle_start_dismissed() -> bool:
+	if not _idle_start_dismissed_cache.has(idle_start_prefs_path):
+		var prefs := ConfigFile.new()
+		_idle_start_dismissed_cache[idle_start_prefs_path] = prefs.load(idle_start_prefs_path) == OK and bool(prefs.get_value(IDLE_START_PREFS_SECTION, "dismissed", false))
+	return bool(_idle_start_dismissed_cache[idle_start_prefs_path])
+
+
+# Dismissal is per profile: the card never comes back, on this wing or any later one.
+func dismiss_idle_start() -> void:
+	var prefs := ConfigFile.new()
+	prefs.load(idle_start_prefs_path)
+	prefs.set_value(IDLE_START_PREFS_SECTION, "dismissed", true)
+	prefs.save(idle_start_prefs_path)
+	_idle_start_dismissed_cache[idle_start_prefs_path] = true
+	idle_start_stage = 0
+	status_message = "Idle start dismissed. It will not be offered again."
+	status_message_left = 3.0
+
+
+func _idle_start_cell_free(cell: Vector2i) -> bool:
+	return cell != BreachSystem.HATCH_CELL and map_grid.is_walkable(cell) and get_building_at(cell) == null
+
+
+func apply_idle_start() -> bool:
+	if not can_offer_idle_start():
+		return false
+	for piece: Array in IDLE_START_PIECES:
+		if not _idle_start_cell_free(piece[1]):
+			status_message = "Recommended start blocked at %s; place the opening by hand." % piece[1]
+			status_message_left = 4.0
+			return false
+	for x: int in IDLE_START_DIG_COLUMNS:
+		for y: int in IDLE_START_DIG_ROWS:
+			if map_grid.queue_dig(Vector2i(x, y)):
+				job_system.queue_dig(Vector2i(x, y))
+	for piece: Array in IDLE_START_PIECES:
+		place_blueprint(int(piece[0]), piece[1])
+	idle_start_stage = 1
+	status_message = "Recommended start queued: digs, bunks, power and food. Next: an Air Recycler."
+	status_message_left = 5.0
+	return true
+
+
+func place_idle_start_air() -> bool:
+	if not idle_start_air_pending():
+		return false
+	if not _idle_start_cell_free(IDLE_START_AIR_CELL) or not place_blueprint(VaultBuilding.Kind.AIR_RECYCLER, IDLE_START_AIR_CELL):
+		status_message = "Air Recycler spot is taken; place one with [AIR]."
+		status_message_left = 4.0
+		return false
+	idle_start_stage = 2
+	return true
+
+
 func _claim_wing_order(order_id: String) -> void:
 	if order_id in WING_ORDER_IDS and not order_id in wing_orders_claimed:
 		wing_orders_claimed.append(order_id)
@@ -738,6 +836,8 @@ func create_snapshot() -> Dictionary:
 	var snapshot := _create_base_snapshot()
 	if reclaim_active:
 		snapshot[RECLAIM_KEY] = {"version": RECLAIM_VERSION, "elapsed": reclaim_elapsed, "paid": reclaim_paid}
+	if idle_start_stage == 1:
+		snapshot[IDLE_START_KEY] = {"version": IDLE_START_VERSION, "stage": idle_start_stage}
 	return snapshot
 
 
@@ -807,6 +907,9 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 		reclaim_active = true
 		reclaim_elapsed = float(snapshot[RECLAIM_KEY].elapsed)
 		reclaim_paid = int(snapshot[RECLAIM_KEY].paid)
+	idle_start_stage = int(snapshot[IDLE_START_KEY].stage) if snapshot.has(IDLE_START_KEY) else 0
+	_idle_start_next_id = -1
+	_idle_start_floor_count = -1
 	ended = bool(snapshot.get("ended", false))
 	outcome = str(snapshot.get("outcome", ""))
 	var camera_data: Array = snapshot.get("camera", [])
@@ -903,6 +1006,12 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 			return false
 		var elapsed: Variant = reclaim.get("elapsed")
 		if typeof(elapsed) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(elapsed)) or float(elapsed) < 0.0:
+			return false
+	if snapshot.has(IDLE_START_KEY):
+		var idle_start: Variant = snapshot[IDLE_START_KEY]
+		if not idle_start is Dictionary or not _is_integer_in_range(idle_start.get("version"), IDLE_START_VERSION, IDLE_START_VERSION):
+			return false
+		if not _is_integer_in_range(idle_start.get("stage"), 1, 1):
 			return false
 	if snapshot.has("wing_orders"):
 		var orders: Variant = snapshot.wing_orders
