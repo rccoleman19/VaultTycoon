@@ -24,6 +24,8 @@ var breach_focus_button: Button
 var right_scroll: ScrollContainer
 var details_box: VBoxContainer
 var details_toggle: Button
+# Divides the pinned summary from the roster; hidden while DETAILS opens at the top of the scroll.
+var summary_separator: HSeparator
 var _details_expanded := false
 var _details_urgencies: Dictionary = {}
 var _details_resident_instance_id := 0
@@ -206,10 +208,11 @@ func _build_interface() -> void:
 	details_toggle.custom_minimum_size.y = 26
 	details_toggle.pressed.connect(_toggle_details_rail)
 	summary.add_child(details_toggle)
+	# DETAILS readouts sit at the top of the roster/inspector scroll (added below), so opening them
+	# never pushes the inspector off a 1280x720 screen once the post-seal offer and orders show.
 	details_box = VBoxContainer.new()
 	details_box.add_theme_constant_override("separation", 4)
 	details_box.visible = false
-	summary.add_child(details_box)
 	var mood_header := Label.new()
 	mood_header.text = "CREW MOOD"
 	mood_header.add_theme_color_override("font_color", Color("8faeb7"))
@@ -280,7 +283,9 @@ func _build_interface() -> void:
 	breach_focus_button.custom_minimum_size.y = 26
 	breach_focus_button.pressed.connect(func() -> void: game.focus_breach())
 	details_box.add_child(breach_focus_button)
-	summary.add_child(HSeparator.new())
+	details_box.add_child(HSeparator.new())
+	summary_separator = HSeparator.new()
+	summary.add_child(summary_separator)
 	right_scroll = ScrollContainer.new()
 	right_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	right_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -290,6 +295,7 @@ func _build_interface() -> void:
 	side.add_theme_constant_override("separation", 4)
 	side.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right_scroll.add_child(side)
+	side.add_child(details_box)
 	var roster_header_row := HBoxContainer.new()
 	roster_header_row.add_theme_constant_override("separation", 6)
 	side.add_child(roster_header_row)
@@ -948,6 +954,10 @@ func _toggle_details_rail() -> void:
 		details_box.visible = _details_expanded
 	if details_toggle != null:
 		details_toggle.text = "DETAILS ▾" if _details_expanded else "DETAILS ▸"
+	if summary_separator != null:
+		summary_separator.visible = not _details_expanded
+	if _details_expanded and right_scroll != null:
+		right_scroll.scroll_vertical = 0
 
 
 func _unfinished_charge_count() -> int:
@@ -1447,6 +1457,10 @@ func _expand_details_on_urgency() -> void:
 		details_box.visible = true
 		if details_toggle != null:
 			details_toggle.text = "DETAILS ▾"
+		if summary_separator != null:
+			summary_separator.visible = false
+		if right_scroll != null:
+			right_scroll.scroll_vertical = 0
 
 
 func _refresh_roster() -> void:
