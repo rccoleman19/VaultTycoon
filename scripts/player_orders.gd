@@ -59,6 +59,13 @@ var briefing_load_button: Button
 var briefing_begin_button: Button
 var briefing_close_button: Button
 var briefing_tips_label: Label
+# Records + ladder C6: the opening briefing's sublevel stepper (only once a deeper sublevel is
+# unlocked) and the rolled wing's record line.
+var briefing_sublevel_row: HBoxContainer
+var briefing_sublevel_label: Label
+var briefing_deeper_button: Button
+var briefing_shallower_button: Button
+var briefing_record_label: Label
 var _briefing_is_opening := false
 var help_button: Button
 var breach_warning_panel: PanelContainer
@@ -683,6 +690,30 @@ func _build_briefing() -> void:
 	title.add_theme_color_override("font_color", Color("75d4b4"))
 	shell.add_child(title)
 	wing_briefing_title = title
+	briefing_sublevel_row = HBoxContainer.new()
+	briefing_sublevel_row.add_theme_constant_override("separation", 8)
+	briefing_sublevel_row.visible = false
+	shell.add_child(briefing_sublevel_row)
+	briefing_deeper_button = Button.new()
+	briefing_deeper_button.text = "◀"
+	briefing_deeper_button.tooltip_text = "Deeper sublevel"
+	briefing_deeper_button.pressed.connect(step_sublevel.bind(-1))
+	briefing_sublevel_row.add_child(briefing_deeper_button)
+	briefing_sublevel_label = Label.new()
+	briefing_sublevel_label.add_theme_color_override("font_color", Color("efc56b"))
+	briefing_sublevel_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	briefing_sublevel_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	briefing_sublevel_row.add_child(briefing_sublevel_label)
+	briefing_shallower_button = Button.new()
+	briefing_shallower_button.text = "▶"
+	briefing_shallower_button.tooltip_text = "Shallower sublevel"
+	briefing_shallower_button.pressed.connect(step_sublevel.bind(1))
+	briefing_sublevel_row.add_child(briefing_shallower_button)
+	briefing_record_label = Label.new()
+	briefing_record_label.add_theme_color_override("font_color", Color("efc56b"))
+	briefing_record_label.add_theme_font_size_override("font_size", 14)
+	briefing_record_label.visible = false
+	shell.add_child(briefing_record_label)
 	var intro := Label.new()
 	intro.text = "YOU designate dig/build/stockpile. THEY auto-claim from Dig/Haul/Craft/Cook defaults. Draft is optional. Survive seven days."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -771,7 +802,7 @@ func _build_outcome() -> void:
 	row.add_child(load_button)
 	var restart_button := Button.new()
 	restart_button.text = "NEW WING"
-	restart_button.pressed.connect(func() -> void: game.new_game(true, game.roll_wing_seed()))
+	restart_button.pressed.connect(func() -> void: game.new_wing())
 	row.add_child(restart_button)
 	outcome_replay_button = Button.new()
 	outcome_replay_button.name = "ReplayWingButton"
@@ -1976,6 +2007,7 @@ func show_briefing(visible: bool, opening := false) -> void:
 	# A replay's opening briefing hides LOAD: the checkpoint belongs to the run the player just ended.
 	if briefing_load_button != null:
 		briefing_load_button.visible = not (opening and _replay_opening)
+	_refresh_sublevel_stepper()
 	if visible:
 		show_work_priorities(false)
 		_refresh_checklist()
@@ -2277,6 +2309,50 @@ func replay_wing() -> void:
 		_replay_opening = true
 		game.new_game(true, game.wing_seed, game.sublevel)
 		_replay_opening = false
+
+
+func _refresh_sublevel_stepper() -> void:
+	if briefing_sublevel_row == null or game == null:
+		return
+	var deepest := game.unlocked_sublevel()
+	var level: int = game.sublevel
+	briefing_sublevel_row.visible = _briefing_is_opening and game.wing_seed != 0 and deepest < WingRecords.BASE_SUBLEVEL
+	var modifier := VaultGame.sublevel_modifier(level)
+	briefing_sublevel_label.text = "SUBLEVEL %02d · %s" % [level, modifier.get("name", "BASE")]
+	briefing_deeper_button.disabled = level <= deepest
+	briefing_shallower_button.disabled = level >= WingRecords.BASE_SUBLEVEL
+	briefing_record_label.text = briefing_record_text()
+	briefing_record_label.visible = _briefing_is_opening and not briefing_record_label.text.is_empty()
+
+
+# "RECORD 06-1092 · BEST ★★☆ · FURTHEST DAY 7": the rolled wing's record on this sublevel.
+func briefing_record_text() -> String:
+	if not game.records_enabled():
+		return ""
+	var record := game.wing_records().get_record(game.wing_seed, game.sublevel)
+	if record.is_empty():
+		return ""
+	var parts: Array[String] = ["RECORD %s" % wing_id(game.wing_seed, game.sublevel)]
+	if record.best_stars != null:
+		parts.append("BEST %s%s" % ["★".repeat(int(record.best_stars)), "☆".repeat(3 - int(record.best_stars))])
+	parts.append("FURTHEST DAY %d" % int(record.best_day))
+	if bool(record.annex):
+		parts.append("ANNEX")
+	return " · ".join(parts)
+
+
+# ◀ goes one sublevel deeper (down to the deepest unlocked), ▶ one shallower (up to 07). The wing is
+# rebuilt on the same seed so the new rules apply; a replay's briefing keeps LOAD hidden.
+func step_sublevel(direction: int) -> void:
+	if not _briefing_is_opening or game.wing_seed == 0:
+		return
+	var level := clampi(game.sublevel + direction, game.unlocked_sublevel(), WingRecords.BASE_SUBLEVEL)
+	if level == game.sublevel:
+		return
+	var replay := briefing_load_button != null and not briefing_load_button.visible
+	_replay_opening = replay
+	game.new_game(true, game.wing_seed, level)
+	_replay_opening = false
 
 
 static func wing_id(wing_seed: int, level := WingRecords.BASE_SUBLEVEL) -> String:

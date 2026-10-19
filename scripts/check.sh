@@ -95,6 +95,7 @@ run_godot_check records-isolation --script res://tests/test_records_isolation.gd
 run_godot_check records-finish --script res://tests/test_records_finish.gd
 run_godot_check sublevel --script res://tests/test_sublevel.gd
 run_godot_check sublevel-modifiers --script res://tests/test_sublevel_modifiers.gd
+run_godot_check sublevel-stepper --script res://tests/test_sublevel_stepper.gd
 run_godot_check replay-wing --script res://tests/test_replay_wing.gd
 
 echo "All Vault Tycoon headless checks passed."

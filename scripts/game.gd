@@ -126,12 +126,31 @@ func _process(delta: float) -> void:
 
 
 func records_enabled() -> bool:
-	if wing_seed == LEGACY_WING_SEED:
+	return _records_enabled_for(wing_seed)
+
+
+func _records_enabled_for(seed_value: int) -> bool:
+	if seed_value == LEGACY_WING_SEED:
 		return false
 	if records_path != "":
 		return true
 	var loop := Engine.get_main_loop()
 	return loop != null and loop.get_script() == null
+
+
+# Records + ladder C6: NEW WING starts on the deepest unlocked sublevel (07 when records are off).
+# new_game() itself still defaults to 07.
+func start_sublevel_for(seed_value: int) -> int:
+	return wing_records().unlocked_sublevel() if _records_enabled_for(seed_value) else WingRecords.BASE_SUBLEVEL
+
+
+func unlocked_sublevel() -> int:
+	return wing_records().unlocked_sublevel() if records_enabled() else WingRecords.BASE_SUBLEVEL
+
+
+func new_wing() -> void:
+	var rolled := roll_wing_seed()
+	new_game(true, rolled, start_sublevel_for(rolled))
 
 
 func wing_records() -> WingRecords:
