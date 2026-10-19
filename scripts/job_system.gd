@@ -876,6 +876,20 @@ func _job_claims_before(resident: VaultResident, a: Dictionary, b: Dictionary) -
 	return int(a.id) < int(b.id)
 
 
+# Post-seal (QA-d #2): while an unfinished Air Recycler or Charge Node still needs salvage, other
+# blueprints wait for theirs, so a second Grow Tray can never starve life support. Pre-seal unchanged.
+const LIFE_SUPPORT_KINDS := [VaultBuilding.Kind.AIR_RECYCLER, VaultBuilding.Kind.GENERATOR]
+
+
+func _life_support_waiting(building: VaultBuilding) -> bool:
+	if breach == null or not breach.is_sealed() or building.kind in LIFE_SUPPORT_KINDS:
+		return false
+	for other: VaultBuilding in game.buildings:
+		if other.kind in LIFE_SUPPORT_KINDS and not other.complete and not other.is_emergency_core and other.needs_supply():
+			return true
+	return false
+
+
 func _job_available(resident: VaultResident, job: Dictionary) -> bool:
 	var type := int(job.type)
 	var target: Vector2i = job.target
@@ -899,6 +913,8 @@ func _job_available(resident: VaultResident, job: Dictionary) -> bool:
 	if map_grid.find_path(resident.get_cell(map_grid), building.cell).is_empty():
 		return false
 	if type == JobType.SUPPLY_BUILD:
+		if _life_support_waiting(building):
+			return false
 		return (
 			building.needs_supply()
 			and (
