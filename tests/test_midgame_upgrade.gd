@@ -12,6 +12,7 @@ func _run() -> void:
 	_run_case("the offer sits outside Next and selects a tray; the inspector buys while paused", _test_ui_flow)
 	_run_case("a save round-trips the tier; old saves load as Mk I; bad tiers are rejected", _test_save)
 	_run_case("refunds are 6 for Mk I and 15 for Mk II; a new wing resets", _test_refund_and_new_wing)
+	_run_case("Mk II fixtures wear a glowing salvage-gold trim on the map, derived from the tier", _test_mk2_trim)
 	_run_case("a managed wing buys Mk II after the seal, grows more food and still wins", _test_playthrough)
 
 	print("")
@@ -306,3 +307,58 @@ func _test_playthrough() -> void:
 	_assert_true(bg.food_system.meals + bg.food_system.raw_food > cg.food_system.meals + cg.food_system.raw_food, "more food in stores at the end (%d vs %d)" % [bg.food_system.meals + bg.food_system.raw_food, cg.food_system.meals + cg.food_system.raw_food])
 	_dispose(cg)
 	_dispose(bg)
+
+
+# Midgame slice 4: the map shows Mk II without the inspector.
+func _trim(view: MapView3D, building: VaultBuilding) -> MeshInstance3D:
+	var root: Node3D = view._building_proxies[building.building_id]
+	return root.get_node_or_null(MapView3D.MK2_TRIM_NAME) as MeshInstance3D
+
+
+func _test_mk2_trim() -> void:
+	var setup := _tray_game(60)
+	var game: VaultGame = setup[0]
+	var tray: VaultBuilding = setup[1]
+	var view := game.get_node("MapView3D") as MapView3D
+	var node := _add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(26, 12))
+	var bunk := _add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	game.power_grid.recalculate(game.buildings)
+	view.sync_actors([], game.buildings, false)
+	var tray_parts: int = (view._building_proxies[tray.building_id] as Node3D).get_child_count()
+	_assert_true(_trim(view, tray) == null and _trim(view, node) == null and _trim(view, bunk) == null, "Mk I fixtures have no trim")
+	# A save-valid seal (the same recipe as the wing-orders suite), so the Mk II save loads.
+	game.day_cycle.deserialize({"elapsed_seconds": 70.0, "current_day": 2, "completed": false})
+	game.breach_system.advance(0.0, 70.0)
+	game.breach_system.patch_delivered = BreachSystem.PATCH_COST
+	game.breach_system.apply_patch_work(100.0)
+	game.job_system.rebuild_from_state()
+	_assert_true(game.upgrade_building(tray.building_id), "Grow Mk II bought")
+	view.sync_actors([], game.buildings, false)
+	var trim := _trim(view, tray)
+	_assert_true(trim != null, "a Mk II tray wears the trim")
+	_assert_equal((view._building_proxies[tray.building_id] as Node3D).get_child_count(), tray_parts + 1, "the trim is one extra part")
+	_assert_true(trim != null and trim.mesh is TorusMesh, "the trim is a ring at the foot")
+	var mat := trim.material_override as StandardMaterial3D
+	_assert_equal(mat.albedo_color, Color("efc56b"), "salvage-gold trim, the outcome panel's gold")
+	_assert_true(tray.powered and mat.emission_enabled, "a working Mk II tray's trim glows")
+	_assert_true(is_equal_approx(mat.emission_energy_multiplier, MapView3D.MK2_TRIM_ENERGY), "at the trim energy")
+	game.toggle_building_enabled(tray.building_id)
+	view.sync_actors([], game.buildings, false)
+	_assert_false((_trim(view, tray).material_override as StandardMaterial3D).emission_enabled, "a disabled Mk II stops glowing but keeps its trim")
+	game.toggle_building_enabled(tray.building_id)
+	node.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+	view.sync_actors([], game.buildings, false)
+	_assert_true(_trim(view, node) != null and (_trim(view, node).material_override as StandardMaterial3D).emission_enabled, "a Charge Mk II, not a consumer, still glows")
+	_assert_true(_trim(view, bunk) == null, "other fixtures stay plain")
+	var tray_id := tray.building_id
+	var snapshot: Dictionary = JSON.parse_string(JSON.stringify(game.create_snapshot()))
+	_assert_false(JSON.stringify(snapshot).contains("Trim"), "nothing about the trim is saved")
+	node.upgrade_tier = VaultBuilding.UPGRADE_TIER_BASE
+	view.sync_actors([], game.buildings, false)
+	_assert_true(_trim(view, node) == null, "back at Mk I the trim comes off")
+	_assert_true(VaultGame.ORDER_FIT_GROW_MK2 in game.wing_orders_claimed, "fitting the tray claimed its wing order")
+	snapshot = JSON.parse_string(JSON.stringify(game.create_snapshot()))
+	_assert_true(game.apply_snapshot(snapshot), "the save loads")
+	view.sync_actors([], game.buildings, false)
+	_assert_true(_trim(view, game.get_building_by_id(tray_id)) != null, "a loaded Mk II tray wears the trim again")
+	_dispose(game)
