@@ -61,6 +61,10 @@ const RECLAIM_KEY := "post_seal_reclamation"
 # QA-d #8 idle start: a two-step card for a wing nobody has touched by 30 s. Step 1 queues the standard
 # opening (digs, two bunks, Charge Node, Nutrient Station, Grow Tray); step 2 is the Air Recycler.
 const IDLE_START_KEY := "idle_start"
+# Keep running (north star slice 1): after a win the player may continue the same vault. The win is
+# recorded in this additive, versioned key, so the live wing itself is no longer "ended".
+const KEEP_RUNNING_KEY := "keep_running"
+const KEEP_RUNNING_VERSION := 1
 const IDLE_START_VERSION := 1
 const IDLE_START_VERSION_STEP3 := 2 # written only while step 3 is pending (stage 2); stage-1 saves stay version 1
 const IDLE_START_DELAY := 30.0
@@ -83,6 +87,8 @@ const RECLAIM_DELIVERY := 18
 const RECLAIM_INTERVAL := 30.0
 const RECLAIM_DELIVERIES := 6
 var reclaim_active := false
+var keep_running := false
+var keep_running_seconds := 0.0
 var reclaim_elapsed := 0.0
 var reclaim_paid := 0
 var idle_start_prefs_path := "user://vault_prefs.cfg"
@@ -165,6 +171,7 @@ func new_game(show_tutorial := false) -> void:
 	_simulation_accumulator = 0.0
 	wing_orders_claimed.clear()
 	_reset_reclamation()
+	_reset_keep_running()
 	_spawn_starting_fixture(VaultBuilding.Kind.GENERATOR, Vector2i(24, 15), true)
 	_spawn_starting_fixture(VaultBuilding.Kind.LAMP, Vector2i(22, 14), false)
 	_spawn_starting_fixture(VaultBuilding.Kind.STOCKPILE, Vector2i(19, 17), false)
@@ -275,7 +282,9 @@ func _simulation_step(delta_seconds: float) -> void:
 	_advance_reclamation(delta_seconds)
 	_check_wing_orders()
 	day_cycle.advance(delta_seconds)
-	if day_cycle.completed and breach_system.is_sealed() and oxygen_system.is_breathable():
+	if keep_running:
+		_advance_keep_running(delta_seconds)
+	elif day_cycle.completed and breach_system.is_sealed() and oxygen_system.is_breathable():
 		_finish_win()
 
 
@@ -894,6 +903,8 @@ func create_snapshot() -> Dictionary:
 		snapshot[IDLE_START_KEY] = {"version": IDLE_START_VERSION, "stage": idle_start_stage}
 	elif idle_start_stage == 2:
 		snapshot[IDLE_START_KEY] = {"version": IDLE_START_VERSION_STEP3, "stage": idle_start_stage}
+	if keep_running:
+		snapshot[KEEP_RUNNING_KEY] = {"version": KEEP_RUNNING_VERSION, "seconds": keep_running_seconds}
 	return snapshot
 
 
@@ -964,6 +975,10 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 		reclaim_elapsed = float(snapshot[RECLAIM_KEY].elapsed)
 		reclaim_paid = int(snapshot[RECLAIM_KEY].paid)
 	idle_start_stage = int(snapshot[IDLE_START_KEY].stage) if snapshot.has(IDLE_START_KEY) else 0
+	_reset_keep_running()
+	if snapshot.has(KEEP_RUNNING_KEY):
+		keep_running = true
+		keep_running_seconds = float(snapshot[KEEP_RUNNING_KEY].seconds)
 	_idle_start_next_id = -1
 	_idle_start_floor_count = -1
 	ended = bool(snapshot.get("ended", false))
@@ -1070,6 +1085,20 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 		# Version 1 carries stage 1 only; version 2 adds stage 2 (step 3 pending).
 		var max_stage := 1 if int(idle_start.version) == IDLE_START_VERSION else 2
 		if not _is_integer_in_range(idle_start.get("stage"), 1, max_stage):
+			return false
+	if snapshot.has(KEEP_RUNNING_KEY):
+		var kr: Variant = snapshot[KEEP_RUNNING_KEY]
+		if not kr is Dictionary or not _is_integer_in_range(kr.get("version"), KEEP_RUNNING_VERSION, KEEP_RUNNING_VERSION):
+			return false
+		var kr_seconds: Variant = kr.get("seconds")
+		if typeof(kr_seconds) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(kr_seconds)) or float(kr_seconds) < 0.0:
+			return false
+		# Only a won wing keeps running: Day 7 complete, and never a saved "win" panel at the same time.
+		if not day_data is Dictionary or typeof(day_data.get("elapsed_seconds")) not in [TYPE_INT, TYPE_FLOAT]:
+			return false
+		if float(day_data.elapsed_seconds) < DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE:
+			return false
+		if str(snapshot.get("outcome", "")) == "win":
 			return false
 	if snapshot.has("wing_orders"):
 		var orders: Variant = snapshot.wing_orders
@@ -1580,7 +1609,7 @@ func _on_breach_sealed() -> void:
 
 
 func _finish_win() -> void:
-	if ended:
+	if ended or keep_running:
 		return
 	ended = true
 	outcome = "win"
@@ -1597,6 +1626,8 @@ func _finish_loss() -> void:
 	outcome = "loss"
 	user_paused = true
 	player_orders.show_outcome(false, 0)
+	if keep_running:
+		player_orders.note_keep_running_loss()
 	game_lost.emit()
 
 
@@ -1623,3 +1654,40 @@ func _is_integer_in_range(value: Variant, minimum: int, maximum: int) -> bool:
 		return false
 	var number := float(value)
 	return is_finite(number) and number == floorf(number) and number >= minimum and number <= maximum
+
+
+# Keep running: offered only on the win panel. The win stays recorded (KEEP_RUNNING_KEY); the wing
+# goes live again on the same vault with the Day 7 clock frozen and a separate keep-running clock.
+func can_keep_running() -> bool:
+	return ended and outcome == "win" and not keep_running
+
+
+func start_keep_running() -> bool:
+	if not can_keep_running():
+		return false
+	keep_running = true
+	keep_running_seconds = 0.0
+	ended = false
+	outcome = ""
+	user_paused = false
+	player_orders.hide_outcome()
+	status_message = "Keep running: the seal win is recorded. The vault carries on."
+	status_message_left = 5.0
+	save_game(false)
+	return true
+
+
+func keep_running_day() -> int:
+	return DayCycle.DAYS_TO_SURVIVE + 1 + floori(keep_running_seconds / DayCycle.SECONDS_PER_DAY)
+
+
+func _advance_keep_running(delta_seconds: float) -> void:
+	var day_before := keep_running_day()
+	keep_running_seconds += delta_seconds
+	if keep_running_day() != day_before:
+		save_game(false)
+
+
+func _reset_keep_running() -> void:
+	keep_running = false
+	keep_running_seconds = 0.0

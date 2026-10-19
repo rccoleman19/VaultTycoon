@@ -896,7 +896,7 @@ func _build_breach_warning() -> void:
 func refresh() -> void:
 	if game == null or clock_label == null:
 		return
-	clock_label.text = game.day_cycle.get_clock_text()
+	clock_label.text = game.day_cycle.get_clock_text() if not game.keep_running else keep_running_clock_text()
 	resource_label.text = "MEALS %d (+%d)  RAW %d (+%d)  SALVAGE %d" % [
 		game.food_system.meals,
 		game.job_system.get_pending_meals(),
@@ -914,6 +914,8 @@ func refresh() -> void:
 	pause_button.text = "RESUME" if game.user_paused else "PAUSE"
 	var active_help := game.status_message if game.status_message_left > 0.0 else game._tool_help(game.active_tool)
 	var step: Dictionary = _primary_next_step()
+	if game.keep_running and not game.ended:
+		step = keep_running_next_step()
 	if game.status_message_left <= 0.0 and game.active_tool == "select":
 		var select_help := "Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job."
 		if not game.tutorial_open and not game.ended:
@@ -1449,6 +1451,12 @@ func _primary_next_step() -> Dictionary:
 
 
 func _refresh_objective() -> void:
+	if game.keep_running and not game.ended:
+		var kr_step := keep_running_next_step()
+		objective_label.text = str(kr_step.text)
+		objective_label.add_theme_color_override("font_color", Color("efc56b"))
+		_expand_details_on_urgency()
+		return
 	if game.day_cycle.completed and not game.ended:
 		var blockers: Array[String] = []
 		if not game.breach_system.is_sealed():
@@ -1481,7 +1489,7 @@ func _expand_details_on_urgency() -> void:
 		active["brownout"] = true
 	if game.oxygen_system.is_low():
 		active["low_o2"] = true
-	if game.day_cycle.completed and not game.ended and (
+	if game.day_cycle.completed and not game.ended and not game.keep_running and (
 		not game.breach_system.is_sealed() or not game.oxygen_system.is_breathable()
 	):
 		active["victory_pending"] = true
@@ -1690,7 +1698,7 @@ func _refresh_alerts() -> void:
 		alerts.append("DRAFTED CREW %d · AUTO WORK PAUSED" % drafted_count)
 		if game.breach_system.phase == BreachSystem.Phase.WARNING or game.breach_system.phase == BreachSystem.Phase.OPEN:
 			alerts.append("HATCH RESPONSE EXCLUDES DRAFTED CREW")
-	if game.day_cycle.completed and not game.ended:
+	if game.day_cycle.completed and not game.ended and not game.keep_running:
 		var victory_blockers: Array[String] = []
 		if not game.breach_system.is_sealed():
 			victory_blockers.append("SEAL HATCH")
@@ -2211,6 +2219,7 @@ func show_outcome(won: bool, survivors: int) -> void:
 		outcome_title.text = "WING LOST"
 		outcome_title.add_theme_color_override("font_color", Color("ef6860"))
 		outcome_text.text = "No residents remain alive. Reopen the last daily checkpoint or initialize a new wing and stabilize supplies, powered air recycling, and the pressure hatch sooner."
+	_show_keep_running_button(won)
 
 
 func hide_outcome() -> void:
@@ -2749,3 +2758,99 @@ func _panel_style(background: Color, border: Color, width := 1) -> StyleBoxFlat:
 	style.corner_radius_bottom_left = 4
 	style.corner_radius_bottom_right = 4
 	return style
+
+
+# Keep running (north star slice 1). The win panel offers KEEP RUNNING beside LOAD / NEW WING; the
+# wing then stays live past Day 7. Next keeps its survival steps, but a Med Bed / Rec Console
+# suggestion latches until that fixture exists or the need has been gone for KEEP_RUNNING_UNLATCH_S,
+# so an idle vault never flips between them.
+const KEEP_RUNNING_TEXT := {
+	"button": "KEEP RUNNING",
+	"next": "Next: YOU watch the vault · THEY keep it running",
+	"loss": "The seal win stands; the vault was lost while it kept running.",
+}
+const KEEP_RUNNING_UNLATCH_S := 10.0
+var keep_running_button: Button
+var _kr_latch_text := ""
+var _kr_latch_tool := ""
+var _kr_latch_clear_at := -1.0
+
+
+func keep_running_clock_text() -> String:
+	return "DAY %d · LIVE" % game.keep_running_day()
+
+
+func _show_keep_running_button(won: bool) -> void:
+	if keep_running_button == null:
+		var row: Node = null
+		for node: Node in outcome_panel.find_children("*", "HBoxContainer", true, false):
+			for child: Node in node.get_children():
+				if child is Button and (child as Button).text == "NEW WING":
+					row = node
+		if row == null:
+			return
+		# Its own centred row under LOAD / NEW WING (/ REPLAY), so the first row never grows.
+		var own_row := HBoxContainer.new()
+		own_row.name = "KeepRunningRow"
+		own_row.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.get_parent().add_child(own_row)
+		keep_running_button = Button.new()
+		keep_running_button.name = "KeepRunningButton"
+		keep_running_button.text = KEEP_RUNNING_TEXT.button
+		keep_running_button.pressed.connect(func() -> void: game.start_keep_running())
+		own_row.add_child(keep_running_button)
+	keep_running_button.visible = won and game.can_keep_running()
+
+
+func note_keep_running_loss() -> void:
+	outcome_text.text += " " + KEEP_RUNNING_TEXT.loss
+
+
+func _is_latchable_step(step: Dictionary) -> bool:
+	return str(step.get("tool", "")) in ["medical", "rec"] or (
+		str(step.get("text", "")).contains("Med Bed") or str(step.get("text", "")).contains("Rec Console")
+	)
+
+
+func keep_running_next_step() -> Dictionary:
+	var step := _primary_next_step()
+	var now := game.keep_running_seconds
+	var latchable := _is_latchable_step(step)
+	if _kr_latch_text != "":
+		var kind := VaultBuilding.Kind.MEDICAL_BED if _kr_latch_tool == "medical" or _kr_latch_text.contains("Med Bed") else VaultBuilding.Kind.RECREATION_CONSOLE
+		var resolved: bool = game.get_completed_building_count(kind) > 0 and str(step.get("text", "")) != _kr_latch_text
+		if latchable or resolved:
+			_kr_latch_clear_at = -1.0
+		elif _kr_latch_clear_at < 0.0:
+			_kr_latch_clear_at = now + KEEP_RUNNING_UNLATCH_S
+		if resolved or (_kr_latch_clear_at >= 0.0 and now >= _kr_latch_clear_at):
+			_kr_latch_text = ""
+			_kr_latch_tool = ""
+			_kr_latch_clear_at = -1.0
+		elif latchable or _is_default_step(step):
+			return {"text": _kr_latch_text, "tool": _kr_latch_tool}
+	if latchable:
+		_kr_latch_text = str(step.text)
+		_kr_latch_tool = str(step.get("tool", ""))
+		_kr_latch_clear_at = -1.0
+		return step
+	if _is_default_step(step):
+		return keep_running_default_step()
+	return step
+
+
+# Past Day 7 only life-support steps pass through (food chain, power, air, care); opening steps
+# such as marking rock or placing the first bunks give way to the keep-running Next.
+const KEEP_RUNNING_PASS := ["Air Recycler", "Nutrient Station", "Charge Node", "power", "Med Bed", "Rec Console"]
+
+
+func _is_default_step(step: Dictionary) -> bool:
+	var text := str(step.get("text", ""))
+	for word: String in KEEP_RUNNING_PASS:
+		if text.contains(word):
+			return false
+	return true
+
+
+func keep_running_default_step() -> Dictionary:
+	return {"text": KEEP_RUNNING_TEXT.next, "tool": "select"}
