@@ -2110,6 +2110,11 @@ static func wing_id(wing_seed: int) -> String:
 	return "07" if wing_seed == 0 else "07-%04X" % wing_seed
 
 
+# "2 ROCK POCKETS · 3 SALVAGE VEINS": what a seeded wing holds, named on the NEW WING briefing.
+static func wing_layout_summary(wing_seed: int) -> String:
+	return "%d ROCK POCKETS · %d SALVAGE VEINS" % [MapGrid.pocket_count_for_seed(wing_seed), MapGrid.vein_count_for_seed(wing_seed)]
+
+
 func show_wing_id(wing_seed: int) -> void:
 	if wing_brand_label != null:
 		wing_brand_label.text = "VAULT WING // SUBLEVEL 07" if wing_seed == 0 else "VAULT WING // %s" % wing_id(wing_seed)
@@ -2118,6 +2123,7 @@ func show_wing_id(wing_seed: int) -> void:
 		if wing_seed != 0:
 			var warn := roundi(BreachSystem.warning_at_for_seed(wing_seed))
 			wing_briefing_title.text += "\nHATCH TEST AT %02d:%02d" % [warn / 60, warn % 60]
+			wing_briefing_title.text += "\n%s" % wing_layout_summary(wing_seed)
 
 
 func _get_recreation_user(building_id: int) -> VaultResident:

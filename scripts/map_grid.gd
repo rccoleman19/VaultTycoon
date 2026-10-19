@@ -503,13 +503,23 @@ static func _offset_neighbors(cell: Vector2i) -> Array[Vector2i]:
 	return result
 
 
+# How many rock pockets / salvage-vein runs a seed opens (0 for the legacy wing). The NEW WING
+# briefing names these so each seed's variety shows before the first dig.
+static func pocket_count_for_seed(wing_seed: int) -> int:
+	return 0 if wing_seed == 0 else 2 + BreachSystem.seed_hash(wing_seed, 100) % 2
+
+
+static func vein_count_for_seed(wing_seed: int) -> int:
+	return 0 if wing_seed == 0 else 2 + BreachSystem.seed_hash(wing_seed, 200) % 2
+
+
 static func generate_layout(wing_seed: int) -> Dictionary:
 	var pockets: Array[Vector2i] = []
 	if wing_seed == 0:
 		return {"pockets": pockets}
 	var opened: Dictionary = {}
 	var walls := ["left", "right", "bottom"]
-	var count := 2 + BreachSystem.seed_hash(wing_seed, 100) % 2
+	var count := pocket_count_for_seed(wing_seed)
 	var first_wall := BreachSystem.seed_hash(wing_seed, 101) % walls.size()
 	for index in count:
 		var salt := 110 + index * 20
@@ -575,7 +585,7 @@ static func _generate_veins(wing_seed: int, opened: Dictionary) -> Array[Vector2
 			var cell := Vector2i(x, y)
 			if not is_layout_protected(cell) and not opened.has(cell):
 				starts.append(cell)
-	var count := 2 + BreachSystem.seed_hash(wing_seed, 200) % 2
+	var count := vein_count_for_seed(wing_seed)
 	for index in count:
 		var salt := 210 + index * 20
 		var cursor := starts[BreachSystem.seed_hash(wing_seed, salt) % starts.size()]

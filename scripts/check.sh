@@ -84,5 +84,6 @@ echo "Cold-boot class-cache check passed."
 # Wing seed (QA 2026-10-18c #2) runs last so no merge-plan check.sh context moves.
 run_godot_check wing-seed --script res://tests/test_wing_seed.gd
 run_godot_check wing-layout --script res://tests/test_wing_layout.gd
+run_godot_check seed-visible --script res://tests/test_seed_visible.gd
 
 echo "All Vault Tycoon headless checks passed."

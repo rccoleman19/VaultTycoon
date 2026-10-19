@@ -148,7 +148,7 @@ func _test_seeded_round_trip() -> void:
 	_assert_equal(game.breach_system.warning_at, 45.0, "window restored from the seed")
 	_assert_equal(game.breach_system.phase, BreachSystem.Phase.WARNING, "seeded WARNING at 52 s restored")
 	_assert_equal(game.player_orders.wing_brand_label.text, "VAULT WING // 07-%04X" % s, "top bar names the seeded wing")
-	_assert_equal(game.player_orders.wing_briefing_title.text, "VAULT WING 07-%04X // SEAL STABILIZATION\nHATCH TEST AT 00:45" % s, "briefing names the seeded wing and its test time")
+	_assert_equal(game.player_orders.wing_briefing_title.text, "VAULT WING 07-%04X // SEAL STABILIZATION\nHATCH TEST AT 00:45\n3 ROCK POCKETS · 2 SALVAGE VEINS" % s, "briefing names the seeded wing, its test time and contents")
 	_assert_equal(JSON.stringify(game.create_snapshot()), snap, "round trip is byte-identical")
 	_dispose(game)
 
@@ -182,7 +182,7 @@ func _test_new_wing_button() -> void:
 		_assert_equal(game.wing_seed, rolled, "new wing takes the rolled seed")
 		_assert_equal(game.breach_system.warning_at, BreachSystem.warning_at_for_seed(rolled), "window follows the seed")
 		var warn := roundi(BreachSystem.warning_at_for_seed(rolled))
-		_assert_equal(game.player_orders.wing_briefing_title.text, "VAULT WING 07-%04X // SEAL STABILIZATION\nHATCH TEST AT %02d:%02d" % [rolled, warn / 60, warn % 60], "briefing shows the wing id and test time")
+		_assert_equal(game.player_orders.wing_briefing_title.text, "VAULT WING 07-%04X // SEAL STABILIZATION\nHATCH TEST AT %02d:%02d\n%s" % [rolled, warn / 60, warn % 60, PlayerOrders.wing_layout_summary(rolled)], "briefing shows the wing id, test time and contents")
 	_assert_true(seen.size() >= 2, "rolls vary")
 	_dispose(game)
 
