@@ -103,7 +103,7 @@ func _test_next_alerts() -> void:
 	_assert_false(next.contains("Day 7"), "no 'hold Day 7' text: %s" % next)
 	_assert_false(next.contains("VICTORY"), "no VICTORY PENDING in Next")
 	_assert_false(next.contains("check blockers"), "no 'check blockers' text")
-	_assert_equal(next, PlayerOrders.KEEP_RUNNING_TEXT.next, "a calm vault shows the keep-running Next")
+	_assert_equal(next, str(game.player_orders.keep_running_default_step().text), "a calm vault shows the keep-running Next")
 	_assert_false(game.player_orders.alert_label.text.contains("VICTORY PENDING"), "no VICTORY PENDING alert")
 	game.status_message_left = 0.0
 	game.player_orders.refresh()
@@ -146,7 +146,7 @@ func _test_latch() -> void:
 	game.food_system.meals = 20
 	game.keep_running_seconds += PlayerOrders.KEEP_RUNNING_UNLATCH_S + 1.0
 	game.player_orders.refresh()
-	_assert_equal(game.player_orders.objective_label.text, PlayerOrders.KEEP_RUNNING_TEXT.next, "after the unlatch window the calm Next returns")
+	_assert_equal(game.player_orders.objective_label.text, str(game.player_orders.keep_running_default_step().text), "after the unlatch window the calm Next returns")
 	ari.needs.health = 50.0
 	game.player_orders.refresh()
 	_assert_true(game.player_orders.objective_label.text.contains("Med Bed"), "a fresh injury latches again")

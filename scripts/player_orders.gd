@@ -190,6 +190,7 @@ func _build_interface() -> void:
 	alert_label.custom_minimum_size.y = 34
 	summary.add_child(alert_label)
 	_build_idle_start_card(summary)
+	_build_annex_card(summary)
 	upgrade_offer_button = Button.new()
 	upgrade_offer_button.visible = false
 	upgrade_offer_button.custom_minimum_size.y = 26
@@ -961,6 +962,7 @@ func refresh() -> void:
 		)
 	_refresh_upgrade_offer()
 	_refresh_idle_start()
+	_refresh_annex()
 	_refresh_roster()
 	_refresh_work_priorities_board()
 	_refresh_crew_mood()
@@ -2853,4 +2855,80 @@ func _is_default_step(step: Dictionary) -> bool:
 
 
 func keep_running_default_step() -> Dictionary:
+	if game.annex_active():
+		return {"text": ANNEX_TEXT.next, "tool": "select"}
 	return {"text": KEEP_RUNNING_TEXT.next, "tool": "select"}
+
+
+# Annex card (north star slice 2): progress bar, the two quotas, and a meal-reserve stepper.
+const ANNEX_TEXT := {
+	"header": "ANNEX · meals %d/%d · salvage %d/%d",
+	"reserve": "Keep %d meals",
+	"minus": "−",
+	"plus": "+",
+	"next": "Next: YOU set the meal reserve · THEY build the Annex",
+	"done": "ANNEX COMPLETE",
+}
+var annex_box: VBoxContainer
+var annex_header: Label
+var annex_bar: ProgressBar
+var annex_reserve_label: Label
+var annex_minus_button: Button
+var annex_plus_button: Button
+
+
+func _build_annex_card(parent: Control) -> void:
+	annex_box = VBoxContainer.new()
+	annex_box.name = "AnnexCard"
+	annex_box.visible = false
+	annex_box.add_theme_constant_override("separation", 2)
+	parent.add_child(annex_box)
+	annex_header = Label.new()
+	annex_header.add_theme_color_override("font_color", Color("8faeb7"))
+	annex_header.add_theme_font_size_override("font_size", 13)
+	annex_box.add_child(annex_header)
+	annex_bar = ProgressBar.new()
+	annex_bar.min_value = 0.0
+	annex_bar.max_value = 1.0
+	annex_bar.step = 0.0
+	annex_bar.show_percentage = false
+	annex_bar.custom_minimum_size.y = 8
+	annex_bar.modulate = Color("75d4b4")
+	annex_box.add_child(annex_bar)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	annex_box.add_child(row)
+	annex_minus_button = Button.new()
+	annex_minus_button.text = ANNEX_TEXT.minus
+	annex_minus_button.custom_minimum_size = Vector2(26, 22)
+	annex_minus_button.tooltip_text = "Keep fewer meals back: more go to the Annex."
+	annex_minus_button.pressed.connect(func() -> void: game.set_annex_reserve(game.annex_reserve - VaultGame.ANNEX_RESERVE_STEP))
+	row.add_child(annex_minus_button)
+	annex_reserve_label = Label.new()
+	annex_reserve_label.add_theme_font_size_override("font_size", 13)
+	annex_reserve_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	annex_reserve_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(annex_reserve_label)
+	annex_plus_button = Button.new()
+	annex_plus_button.text = ANNEX_TEXT.plus
+	annex_plus_button.custom_minimum_size = Vector2(26, 22)
+	annex_plus_button.tooltip_text = "Keep more meals back for the crew."
+	annex_plus_button.pressed.connect(func() -> void: game.set_annex_reserve(game.annex_reserve + VaultGame.ANNEX_RESERVE_STEP))
+	row.add_child(annex_plus_button)
+
+
+func annex_header_text() -> String:
+	return ANNEX_TEXT.header % [game.annex_meals, VaultGame.ANNEX_MEALS, game.annex_salvage, VaultGame.ANNEX_SALVAGE]
+
+
+func _refresh_annex() -> void:
+	if annex_box == null:
+		return
+	annex_box.visible = game.annex_active()
+	if not annex_box.visible:
+		return
+	annex_header.text = annex_header_text()
+	annex_bar.value = game.annex_progress()
+	annex_reserve_label.text = ANNEX_TEXT.reserve % game.annex_reserve
+	annex_minus_button.disabled = game.annex_reserve <= VaultGame.ANNEX_RESERVE_MIN
+	annex_plus_button.disabled = game.annex_reserve >= VaultGame.ANNEX_RESERVE_MAX

@@ -89,6 +89,24 @@ const RECLAIM_DELIVERIES := 6
 var reclaim_active := false
 var keep_running := false
 var keep_running_seconds := 0.0
+# Annex (north star slice 2): one keep-running project fed with meals above a reserve plus salvage.
+const ANNEX_KEY := "annex"
+const ANNEX_VERSION := 1
+const ANNEX_MEALS := 30
+const ANNEX_SALVAGE := 150
+const ANNEX_TICK := 5.0
+const ANNEX_HUNGRY_FOOD := 30.0
+const ANNEX_RESERVE_DEFAULT := 8
+const ANNEX_RESERVE_MIN := 4
+const ANNEX_RESERVE_MAX := 20
+const ANNEX_RESERVE_STEP := 2
+const ANNEX_TRICKLE_INTERVAL := 20.0
+var annex_meals := 0
+var annex_salvage := 0
+var annex_reserve := ANNEX_RESERVE_DEFAULT
+var annex_done := false
+var _annex_tick_left := ANNEX_TICK
+var _annex_trickle_left := ANNEX_TRICKLE_INTERVAL
 var reclaim_elapsed := 0.0
 var reclaim_paid := 0
 var idle_start_prefs_path := "user://vault_prefs.cfg"
@@ -905,6 +923,13 @@ func create_snapshot() -> Dictionary:
 		snapshot[IDLE_START_KEY] = {"version": IDLE_START_VERSION_STEP3, "stage": idle_start_stage}
 	if keep_running:
 		snapshot[KEEP_RUNNING_KEY] = {"version": KEEP_RUNNING_VERSION, "seconds": keep_running_seconds}
+		snapshot[ANNEX_KEY] = {
+			"version": ANNEX_VERSION,
+			"meals": annex_meals,
+			"salvage": annex_salvage,
+			"reserve": annex_reserve,
+			"done": annex_done,
+		}
 	return snapshot
 
 
@@ -979,6 +1004,13 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	if snapshot.has(KEEP_RUNNING_KEY):
 		keep_running = true
 		keep_running_seconds = float(snapshot[KEEP_RUNNING_KEY].seconds)
+		if snapshot.has(ANNEX_KEY):
+			var annex: Dictionary = snapshot[ANNEX_KEY]
+			annex_meals = int(annex.meals)
+			annex_salvage = int(annex.salvage)
+			annex_reserve = int(annex.reserve)
+			annex_done = bool(annex.done)
+		_reconcile_annex()
 	_idle_start_next_id = -1
 	_idle_start_floor_count = -1
 	ended = bool(snapshot.get("ended", false))
@@ -1099,6 +1131,20 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 		if float(day_data.elapsed_seconds) < DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE:
 			return false
 		if str(snapshot.get("outcome", "")) == "win":
+			return false
+	if snapshot.has(ANNEX_KEY):
+		var annex: Variant = snapshot[ANNEX_KEY]
+		if not snapshot.has(KEEP_RUNNING_KEY) or not annex is Dictionary:
+			return false
+		if not _is_integer_in_range(annex.get("version"), ANNEX_VERSION, ANNEX_VERSION):
+			return false
+		if not _is_integer_in_range(annex.get("meals"), 0, ANNEX_MEALS) or not _is_integer_in_range(annex.get("salvage"), 0, ANNEX_SALVAGE):
+			return false
+		if not _is_integer_in_range(annex.get("reserve"), ANNEX_RESERVE_MIN, ANNEX_RESERVE_MAX) or int(annex.reserve) % ANNEX_RESERVE_STEP != 0:
+			return false
+		if typeof(annex.get("done")) != TYPE_BOOL:
+			return false
+		if bool(annex.done) and (int(annex.meals) < ANNEX_MEALS or int(annex.salvage) < ANNEX_SALVAGE):
 			return false
 	if snapshot.has("wing_orders"):
 		var orders: Variant = snapshot.wing_orders
@@ -1684,6 +1730,7 @@ func keep_running_day() -> int:
 func _advance_keep_running(delta_seconds: float) -> void:
 	var day_before := keep_running_day()
 	keep_running_seconds += delta_seconds
+	_advance_annex(delta_seconds)
 	if keep_running_day() != day_before:
 		save_game(false)
 
@@ -1691,3 +1738,61 @@ func _advance_keep_running(delta_seconds: float) -> void:
 func _reset_keep_running() -> void:
 	keep_running = false
 	keep_running_seconds = 0.0
+	annex_meals = 0
+	annex_salvage = 0
+	annex_reserve = ANNEX_RESERVE_DEFAULT
+	annex_done = false
+	_annex_tick_left = ANNEX_TICK
+	_annex_trickle_left = ANNEX_TRICKLE_INTERVAL
+
+
+# Annex: every ANNEX_TICK one meal (only above the reserve, and never while someone is hungry) and
+# one salvage go in until each quota is met. Salvage competes with the Mk II fits; a slow upkeep
+# trickle (+1 per ANNEX_TRICKLE_INTERVAL) keeps an idle vault from dead-ending on salvage.
+func annex_active() -> bool:
+	return keep_running and not ended and not annex_done
+
+
+func annex_progress() -> float:
+	return float(annex_meals + annex_salvage) / float(ANNEX_MEALS + ANNEX_SALVAGE)
+
+
+func set_annex_reserve(value: int) -> void:
+	annex_reserve = clampi(value - value % ANNEX_RESERVE_STEP, ANNEX_RESERVE_MIN, ANNEX_RESERVE_MAX)
+
+
+func _annex_crew_hungry() -> bool:
+	for resident in residents:
+		if resident.alive and resident.needs.food < ANNEX_HUNGRY_FOOD:
+			return true
+	return false
+
+
+func _advance_annex(delta_seconds: float) -> void:
+	if not annex_active():
+		return
+	_annex_trickle_left -= delta_seconds
+	while _annex_trickle_left <= 0.0001:
+		_annex_trickle_left += ANNEX_TRICKLE_INTERVAL
+		food_system.add_salvage(1)
+	_annex_tick_left -= delta_seconds
+	while _annex_tick_left <= 0.0001 and not annex_done:
+		_annex_tick_left += ANNEX_TICK
+		if annex_meals < ANNEX_MEALS and food_system.meals > annex_reserve and not _annex_crew_hungry():
+			food_system.meals -= 1
+			annex_meals += 1
+		if annex_salvage < ANNEX_SALVAGE and food_system.salvage > 0:
+			food_system.salvage -= 1
+			annex_salvage += 1
+		_reconcile_annex()
+
+
+func _reconcile_annex() -> void:
+	if annex_meals >= ANNEX_MEALS and annex_salvage >= ANNEX_SALVAGE and not annex_done:
+		annex_done = true
+		_on_annex_completed()
+
+
+func _on_annex_completed() -> void:
+	status_message = "Annex complete."
+	status_message_left = 6.0
