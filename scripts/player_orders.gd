@@ -100,26 +100,24 @@ func _build_interface() -> void:
 	root.add_child(top_panel)
 	var top_row := HBoxContainer.new()
 	top_row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 10)
-	top_row.add_theme_constant_override("separation", 14)
+	top_row.add_theme_constant_override("separation", TOP_ROW_SEPARATION)
 	top_panel.add_child(top_row)
 	var brand := Label.new()
 	brand.text = "VAULT WING // SUBLEVEL 07"
 	brand.add_theme_color_override("font_color", Color("77d3bc"))
-	brand.add_theme_font_size_override("font_size", 17)
-	brand.custom_minimum_size.x = 262
+	brand.add_theme_font_size_override("font_size", 15)
 	top_row.add_child(brand)
 	clock_label = Label.new()
-	clock_label.custom_minimum_size.x = 170
 	top_row.add_child(clock_label)
+	# Top-bar fit: the resource stats take the free width and clip past it, so PAUSE and 1x-3x always
+	# stay on screen; the power status (BROWNOUT, shed load) always reads in full at its own width.
 	resource_label = Label.new()
-	resource_label.custom_minimum_size.x = 185
+	resource_label.custom_minimum_size.x = TOP_RESOURCE_MIN_WIDTH
+	resource_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	resource_label.clip_text = true
 	top_row.add_child(resource_label)
 	power_label = Label.new()
-	power_label.custom_minimum_size.x = 210
 	top_row.add_child(power_label)
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	top_row.add_child(spacer)
 	pause_button = Button.new()
 	pause_button.text = "PAUSE"
 	pause_button.pressed.connect(func() -> void: game.toggle_pause())
@@ -2196,6 +2194,10 @@ func _hide_fixture_controls() -> void:
 
 func _on_tool_pressed(tool: String) -> void:
 	game.set_tool(tool)
+
+
+const TOP_RESOURCE_MIN_WIDTH := 200.0
+const TOP_ROW_SEPARATION := 8
 
 
 func _on_speed_pressed(speed: int) -> void:
