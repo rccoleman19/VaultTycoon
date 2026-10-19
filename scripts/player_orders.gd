@@ -46,6 +46,10 @@ var fixture_deconstruct_button: Button
 # inspector purchase row. Both stay hidden until the hatch is sealed.
 var upgrade_offer_button: Button
 var reclaim_button: Button
+var idle_start_box: VBoxContainer
+var idle_start_header: Label
+var idle_start_button: Button
+var idle_start_dismiss_button: Button
 var fixture_upgrade_row: HBoxContainer
 var fixture_upgrade_button: Button
 # Wing orders (QA 2026-10-18c #3, slice 2): a compact post-seal panel under the offer, outside
@@ -179,6 +183,7 @@ func _build_interface() -> void:
 	alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	alert_label.custom_minimum_size.y = 34
 	summary.add_child(alert_label)
+	_build_idle_start_card(summary)
 	upgrade_offer_button = Button.new()
 	upgrade_offer_button.visible = false
 	upgrade_offer_button.custom_minimum_size.y = 26
@@ -947,6 +952,7 @@ func refresh() -> void:
 			or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
 		)
 	_refresh_upgrade_offer()
+	_refresh_idle_start()
 	_refresh_roster()
 	_refresh_work_priorities_board()
 	_refresh_crew_mood()
@@ -2435,6 +2441,68 @@ func _order_hatch_block(first: bool) -> void:
 	for node: Node in block:
 		details_box.move_child(node, previous.get_index())
 		previous = node
+
+
+# QA-d #8: the idle start card (hidden unless the wing is untouched at 30 s, or step 2 is pending).
+const IDLE_START_TEXT := {
+	"header_1": "IDLE START · 1/2 · beds, food, power",
+	"header_2": "IDLE START · 2/2 · air",
+	"start": "Recommended start",
+	"air": "Place Air Recycler · %d salvage",
+	"dismiss": "Dismiss · don't offer again",
+}
+
+
+func _build_idle_start_card(parent: Control) -> void:
+	idle_start_box = VBoxContainer.new()
+	idle_start_box.visible = false
+	idle_start_box.add_theme_constant_override("separation", 2)
+	parent.add_child(idle_start_box)
+	idle_start_header = Label.new()
+	idle_start_header.add_theme_color_override("font_color", Color("8faeb7"))
+	idle_start_header.add_theme_font_size_override("font_size", 13)
+	idle_start_box.add_child(idle_start_header)
+	idle_start_button = Button.new()
+	idle_start_button.clip_text = true
+	idle_start_button.custom_minimum_size.y = 26
+	idle_start_button.tooltip_text = "Queues the standard opening: dig marks, two Bunks, a Charge Node, a Nutrient Station and a Grow Tray. Step 2 offers the Air Recycler."
+	idle_start_button.pressed.connect(_on_idle_start_pressed)
+	idle_start_box.add_child(idle_start_button)
+	idle_start_dismiss_button = Button.new()
+	idle_start_dismiss_button.clip_text = true
+	idle_start_dismiss_button.custom_minimum_size.y = 22
+	idle_start_dismiss_button.add_theme_font_size_override("font_size", 12)
+	idle_start_dismiss_button.text = IDLE_START_TEXT.dismiss
+	idle_start_dismiss_button.pressed.connect(_on_idle_start_dismissed)
+	idle_start_box.add_child(idle_start_dismiss_button)
+
+
+func _refresh_idle_start() -> void:
+	if idle_start_box == null:
+		return
+	var offer := game.can_offer_idle_start()
+	# The hatch warning owns the panel (its readouts and FOCUS HATCH must stay in view).
+	var air := game.idle_start_air_pending() and game.breach_system.phase != BreachSystem.Phase.WARNING
+	idle_start_box.visible = offer or air
+	if offer:
+		idle_start_header.text = IDLE_START_TEXT.header_1
+		idle_start_button.text = IDLE_START_TEXT.start
+	elif air:
+		idle_start_header.text = IDLE_START_TEXT.header_2
+		idle_start_button.text = IDLE_START_TEXT.air % int(VaultBuilding.COSTS[VaultBuilding.Kind.AIR_RECYCLER])
+
+
+func _on_idle_start_pressed() -> void:
+	if game.can_offer_idle_start():
+		game.apply_idle_start()
+	elif game.idle_start_air_pending():
+		game.place_idle_start_air()
+	refresh()
+
+
+func _on_idle_start_dismissed() -> void:
+	game.dismiss_idle_start()
+	refresh()
 
 
 func _refresh_upgrade_offer() -> void:

@@ -13,6 +13,9 @@ func _run() -> void:
 	_run_case("a blocked cell refuses step 1 and places nothing", _test_blocked)
 	_run_case("dismissal is per profile and final", _test_dismiss)
 	_run_case("the idle start save key is additive, versioned and validated", _test_save)
+	_run_case("the right-panel card walks step 1, step 2 and dismissal", _test_card)
+	_run_case("the card never changes the Next hint", _test_next_unchanged)
+	_run_case("every card text fits the right panel with 12 px to spare", _test_texts_fit)
 	_finish()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
 
@@ -213,4 +216,102 @@ func _test_save() -> void:
 	_assert_true(game.apply_snapshot(plain), "an untouched save loads")
 	_advance_to(game, 31.0)
 	_assert_false(game.can_offer_idle_start(), "a loaded save never re-offers step 1")
+	_dispose(game)
+
+
+func _card(game: VaultGame) -> String:
+	var orders := game.player_orders
+	orders.refresh()
+	if orders.idle_start_box == null or not orders.idle_start_box.visible:
+		return "<hidden>"
+	return "%s | %s" % [orders.idle_start_header.text, orders.idle_start_button.text]
+
+
+func _test_card() -> void:
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+	var game := _game()
+	_assert_true(game.player_orders.get("idle_start_box") != null, "the card exists")
+	if game.player_orders.get("idle_start_box") == null:
+		_dispose(game)
+		return
+	_assert_equal(_card(game), "<hidden>", "hidden at 0 s")
+	_advance_to(game, 30.0)
+	_assert_equal(_card(game), "IDLE START · 1/2 · beds, food, power | Recommended start", "step 1 at 30 s")
+	_assert_true(game.player_orders.idle_start_box.get_parent() == game.player_orders.alert_label.get_parent(), "in the right-panel summary")
+	_assert_equal(game.player_orders.idle_start_box.get_index(), game.player_orders.alert_label.get_index() + 1, "directly under the alerts")
+	game.player_orders.idle_start_button.pressed.emit()
+	_assert_equal(game.idle_start_stage, 1, "the button applies step 1")
+	_assert_equal(_card(game), "IDLE START · 2/2 · air | Place Air Recycler · 14 salvage", "then names the Air Recycler")
+	var orders = game.player_orders
+	_assert_equal(orders.idle_start_box.get_parent(), orders.alert_label.get_parent(), "the card shares the alert's summary block")
+	_assert_equal(orders.idle_start_box.get_index(), orders.alert_label.get_index() + 1, "directly under the alert, ahead of the upgrade offer")
+	game.breach_system.phase = BreachSystem.Phase.WARNING
+	_assert_equal(_card(game), "<hidden>", "the hatch warning hides the card")
+	game.breach_system.phase = BreachSystem.Phase.OPEN
+	_assert_equal(_card(game), "IDLE START · 2/2 · air | Place Air Recycler · 14 salvage", "and it returns after")
+	game.breach_system.phase = BreachSystem.Phase.DORMANT
+	game.player_orders.idle_start_button.pressed.emit()
+	_assert_equal(game.idle_start_stage, 2, "the button applies step 2")
+	_assert_equal(_card(game), "<hidden>", "done: hidden")
+	_dispose(game)
+	game = _game()
+	_advance_to(game, 30.0)
+	_assert_equal(_card(game), "IDLE START · 1/2 · beds, food, power | Recommended start", "offered")
+	_assert_equal(game.player_orders.idle_start_dismiss_button.text, "Dismiss · don't offer again", "dismiss is labelled")
+	game.player_orders.idle_start_dismiss_button.pressed.emit()
+	_assert_equal(_card(game), "<hidden>", "dismissed: hidden")
+	_assert_equal(game.buildings.size(), 3, "dismiss places nothing")
+	_assert_true(game.map_grid.dig_marks.is_empty(), "and marks nothing")
+	_advance_to(game, 45.0)
+	_assert_equal(_card(game), "<hidden>", "and stays hidden")
+	_dispose(game)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+
+
+func _test_next_unchanged() -> void:
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+	var game := _game()
+	_advance_to(game, 30.0)
+	game.player_orders.refresh()
+	var with_card := game.player_orders.objective_label.text
+	var alert := game.player_orders.alert_label.text
+	_assert_true(game.player_orders.idle_start_box.visible, "card visible")
+	game.dismiss_idle_start()
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, with_card, "Next text identical with and without the card")
+	_assert_equal(game.player_orders.alert_label.text, alert, "alert text identical")
+	_dispose(game)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+
+
+func _panel_width(orders: PlayerOrders) -> float:
+	var width := VaultGame.RIGHT_PANEL_WIDTH
+	var node: Node = orders.idle_start_box.get_parent()
+	while node is Control:
+		if node is PanelContainer:
+			width -= (node as PanelContainer).get_theme_stylebox("panel").get_minimum_size().x
+			break
+		if node is MarginContainer:
+			width -= (node as Control).get_theme_constant("margin_left") + (node as Control).get_theme_constant("margin_right")
+		node = node.get_parent()
+	return width
+
+
+func _text_width(control: Control, text: String) -> float:
+	return control.get_theme_font("font").get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, control.get_theme_font_size("font_size")).x
+
+
+func _test_texts_fit() -> void:
+	var game := _spawn_game()
+	var orders := game.player_orders
+	var width := _panel_width(orders)
+	var button_chrome := orders.idle_start_button.get_theme_stylebox("normal").get_minimum_size().x
+	for text: String in ["Recommended start", "Place Air Recycler · 14 salvage", "Place Air Recycler · 999 salvage"]:
+		var room := width - button_chrome - _text_width(orders.idle_start_button, text)
+		_assert_true(room >= 12.0, "button '%s' fits with %.0f px to spare" % [text, room])
+	var dismiss_room := width - orders.idle_start_dismiss_button.get_theme_stylebox("normal").get_minimum_size().x - _text_width(orders.idle_start_dismiss_button, "Dismiss · don't offer again")
+	_assert_true(dismiss_room >= 12.0, "dismiss fits with %.0f px to spare" % dismiss_room)
+	for text: String in ["IDLE START · 1/2 · beds, food, power", "IDLE START · 2/2 · air"]:
+		var room := width - _text_width(orders.idle_start_header, text)
+		_assert_true(room >= 12.0, "header '%s' fits with %.0f px to spare" % [text, room])
 	_dispose(game)
