@@ -144,6 +144,8 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED) -> void:
 		resident.needs.rest = starting_rest[index]
 		resident.died.connect(_on_resident_died)
 		residents.append(resident)
+	crew_traits_version = CREW_TRAITS_V1 if wing_seed != LEGACY_WING_SEED else 0
+	apply_crew_traits()
 	power_grid.recalculate(buildings)
 	refresh_lighting(true)
 	oxygen_system.refresh_rates(residents, buildings, false)
@@ -627,6 +629,9 @@ func create_snapshot() -> Dictionary:
 	# Wing-seed slice 2: additive, written only for a seeded layout, so legacy saves keep their bytes.
 	if map_grid.layout_seed != LEGACY_WING_SEED:
 		snapshot["map_layout"] = MAP_LAYOUT_SEEDED
+	# Wing-seed slice 3: additive marker; traits themselves are derived from seed + resident id.
+	if crew_traits_version == CREW_TRAITS_V1:
+		snapshot["crew_traits"] = CREW_TRAITS_V1
 	return snapshot
 
 
@@ -666,6 +671,8 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	breach_system.warning_at = BreachSystem.warning_at_for_seed(wing_seed)
 	player_orders.show_wing_id(wing_seed)
 	map_grid.apply_layout_seed(wing_seed if int(snapshot.get("map_layout", 0)) == MAP_LAYOUT_SEEDED else LEGACY_WING_SEED)
+	crew_traits_version = CREW_TRAITS_V1 if wing_seed != LEGACY_WING_SEED and int(snapshot.get("crew_traits", 0)) == CREW_TRAITS_V1 else 0
+	apply_crew_traits()
 	breach_system.deserialize(snapshot.get("breach", {}), day_cycle.elapsed_seconds)
 	next_building_id = int(snapshot.get("next_building_id", 1))
 	ended = bool(snapshot.get("ended", false))
@@ -700,6 +707,16 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 
 # Wing seed (QA 2026-10-18c #2, slice 1). Additive snapshot key: a save without it is the legacy wing.
 const MAP_LAYOUT_SEEDED := 1
+const CREW_TRAITS_V1 := 1
+var crew_traits_version := 0
+
+
+# Gives every resident its seeded trait (or none): new games, and loads after the seed is known.
+func apply_crew_traits() -> void:
+	var crew := VaultResident.crew_traits_for_seed(wing_seed if crew_traits_version == CREW_TRAITS_V1 else LEGACY_WING_SEED)
+	for resident: VaultResident in residents:
+		var slot := resident.resident_id - 1
+		resident.set_trait(crew[slot] if slot >= 0 and slot < crew.size() else "")
 
 
 func _snapshot_wing_seed(snapshot: Dictionary) -> int:
@@ -753,6 +770,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 		return false
 	# Wing-seed slice 2: a seeded layout is only valid on a seeded wing, and only version 1 exists.
 	if snapshot.has("map_layout") and (not _is_integer_in_range(snapshot.map_layout, MAP_LAYOUT_SEEDED, MAP_LAYOUT_SEEDED)):
+		return false
+	if snapshot.has("crew_traits") and not _is_integer_in_range(snapshot.crew_traits, CREW_TRAITS_V1, CREW_TRAITS_V1):
 		return false
 	# A seeded save is always new, so it must carry a real breach state and clock; only the legacy
 	# wing may fall back to the historical synthesis.
