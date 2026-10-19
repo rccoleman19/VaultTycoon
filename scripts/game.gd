@@ -57,7 +57,10 @@ const EARLY_HATCH_ADVANCE_SECONDS := 10.0
 # Ladder QA: 05 starts lean instead of with thin veins (the default digs never reach a vein, so
 # THIN VEINS played exactly like 07). 30 of the usual 48 lands 05 between 06 and 04.
 const LEAN_STORES_SALVAGE := 30
-const FIFTH_MOUTH_CREW_SIZE := 5
+# Crew size, shared by NEW WING and the LOAD validator: 4, +1 on 03 (Fen), +1 for VOLUNTEER (Gil),
+# and LOAD also leaves room for the Annex resident (Eko) that Keep Running can add later.
+const BASE_CREW_SIZE := 4
+const ANNEX_RESIDENT_ROOM := 1
 const SUBLEVEL_MODIFIERS := {
 	6: {"name": "EARLY HATCH", "detail": "hatch test 10 s earlier"},
 	5: {"name": "LEAN STORES", "detail": "start with 30 salvage"},
@@ -244,16 +247,12 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 	var cells := [Vector2i(20, 15), Vector2i(21, 16), Vector2i(22, 17), Vector2i(23, 18)]
 	var starting_food := [65.0, 72.0, 79.0, 86.0]
 	var starting_rest := [55.0, 70.0, 82.0, 94.0]
-	if sublevel == 3 and FIFTH_MOUTH_CREW_SIZE > names.size():
-		names.append("Fen")
-		cells.append(Vector2i(24, 19))
-		starting_food.append(72.0)
-		starting_rest.append(76.0)
-	if wing_perk == PERK_VOLUNTEER:
-		names.append("Gil")
-		cells.append(Vector2i(21, 19))
-		starting_food.append(70.0)
-		starting_rest.append(72.0)
+	var extra_crew := {"Fen": [Vector2i(24, 19), 72.0, 76.0], "Gil": [Vector2i(21, 19), 70.0, 72.0]}
+	for extra: String in extra_crew_names(sublevel, wing_perk):
+		names.append(extra)
+		cells.append(extra_crew[extra][0])
+		starting_food.append(extra_crew[extra][1])
+		starting_rest.append(extra_crew[extra][2])
 	for index in names.size():
 		var resident := VaultResident.new()
 		resident_root.add_child(resident)
@@ -919,6 +918,30 @@ func _is_perk_data_valid(data: Variant, seed_value: int) -> bool:
 	return _is_integer_in_range(data.get("version"), PERK_SAVE_VERSION, PERK_SAVE_VERSION) and typeof(data.get("id")) == TYPE_STRING and PERKS.has(data.id)
 
 
+# The residents a wing adds to the base four: Fen on 03, Gil with VOLUNTEER.
+static func extra_crew_names(level: int, perk: String) -> Array:
+	var extra := []
+	if level == 3:
+		extra.append("Fen")
+	if perk == PERK_VOLUNTEER:
+		extra.append("Gil")
+	return extra
+
+
+static func starting_crew_size(level: int, perk: String) -> int:
+	return BASE_CREW_SIZE + extra_crew_names(level, perk).size()
+
+
+# LOAD's cap: the wing's starting crew plus room for the Annex resident.
+static func max_crew_size(level: int, perk: String) -> int:
+	return starting_crew_size(level, perk) + ANNEX_RESIDENT_ROOM
+
+
+func _snapshot_perk(snapshot: Dictionary) -> String:
+	var data: Variant = snapshot.get("perk")
+	return str(data.get("id", "")) if data is Dictionary else ""
+
+
 func _snapshot_sublevel(snapshot: Dictionary) -> int:
 	var data: Variant = snapshot.get("sublevel")
 	return int(data.level) if data is Dictionary else WingRecords.BASE_SUBLEVEL
@@ -1002,7 +1025,7 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 			return false
 	if snapshot.has("oxygen") and not oxygen_system.is_serialized_data_valid(oxygen_data):
 		return false
-	if resident_data.is_empty() or resident_data.size() > 5:
+	if resident_data.is_empty() or resident_data.size() > max_crew_size(_snapshot_sublevel(snapshot), _snapshot_perk(snapshot)):
 		return false
 	var saved_cells: Variant = map_data.get("cells")
 	if not saved_cells is Array or saved_cells.size() != MapGrid.WIDTH * MapGrid.HEIGHT:
