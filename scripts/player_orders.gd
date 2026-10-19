@@ -2146,7 +2146,10 @@ func show_wing_id(wing_seed: int) -> void:
 		if wing_seed != 0:
 			var warn := roundi(BreachSystem.warning_at_for_seed(wing_seed))
 			wing_briefing_title.text += "\nHATCH TEST AT %02d:%02d" % [warn / 60, warn % 60]
-			wing_briefing_title.text += "\n%s" % wing_layout_summary(wing_seed)
+			# Contents name the applied layout. A pre-layout seeded save keeps wing_seed but
+			# loads with layout_seed 0, so the briefing must not advertise pockets/veins.
+			if game != null and game.map_grid.layout_seed != 0:
+				wing_briefing_title.text += "\n%s" % wing_layout_summary(wing_seed)
 
 
 func _get_recreation_user(building_id: int) -> VaultResident:

@@ -85,6 +85,7 @@ echo "Cold-boot class-cache check passed."
 run_godot_check wing-seed --script res://tests/test_wing_seed.gd
 run_godot_check wing-layout --script res://tests/test_wing_layout.gd
 run_godot_check seed-visible --script res://tests/test_seed_visible.gd
+run_godot_check pre-layout-contents --script res://tests/test_pre_layout_contents.gd
 run_godot_check crew-traits --script res://tests/test_crew_traits.gd
 run_godot_check crew-roster --script res://tests/test_crew_roster.gd
 run_godot_check trait-text-fit --script res://tests/test_trait_text_fit.gd

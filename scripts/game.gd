@@ -669,8 +669,8 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	day_cycle.deserialize(snapshot.get("day", {}))
 	wing_seed = _snapshot_wing_seed(snapshot)
 	breach_system.warning_at = BreachSystem.warning_at_for_seed(wing_seed)
-	player_orders.show_wing_id(wing_seed)
 	map_grid.apply_layout_seed(wing_seed if int(snapshot.get("map_layout", 0)) == MAP_LAYOUT_SEEDED else LEGACY_WING_SEED)
+	player_orders.show_wing_id(wing_seed)
 	crew_traits_version = CREW_TRAITS_V1 if wing_seed != LEGACY_WING_SEED and int(snapshot.get("crew_traits", 0)) == CREW_TRAITS_V1 else 0
 	apply_crew_traits()
 	breach_system.deserialize(snapshot.get("breach", {}), day_cycle.elapsed_seconds)
