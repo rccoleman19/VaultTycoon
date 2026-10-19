@@ -1931,6 +1931,7 @@ func _refresh_checklist() -> void:
 		var marker := "[color=#75d4b4][DONE][/color]" if check[0] else "[color=#efc56b][    ][/color]"
 		lines.append("%s  %s" % [marker, check[1]])
 	if not _briefing_is_opening:
+		lines.append_array(postseal_checklist_lines())
 		var rec_done := game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) >= 1
 		var rec_marker := "[color=#75d4b4][DONE][/color]" if rec_done else "[color=#8faeb7][OPTIONAL][/color]"
 		lines.append("%s  Power a Rec Console; free 1 power if shed" % rec_marker)
@@ -1945,6 +1946,34 @@ func _refresh_checklist() -> void:
 			briefing_tips_label.text = "Tips: YOU designate · THEY auto-work · HELP · P specialize · R draft optional"
 		else:
 			briefing_tips_label.text = "Tips: Esc closes Help · P priorities · L light map · R draft / force orders"
+
+
+# QA-e #2: after the seal, HELP names the post-seal economy the right panel offers.
+func postseal_checklist_lines() -> Array[String]:
+	var lines: Array[String] = []
+	if game.ended or not game.breach_system.is_sealed():
+		return lines
+	var done_marker := "[color=#75d4b4][DONE][/color]"
+	var open_marker := "[color=#efc56b][    ][/color]"
+	lines.append("[color=#8faeb7]AFTER THE SEAL[/color]")
+	for order_id: String in VaultGame.WING_ORDER_IDS:
+		var goal: String = WING_ORDER_TEXT[order_id][0]
+		var claimed := order_id in game.wing_orders_claimed
+		if order_id == VaultGame.ORDER_STOCK_MEALS:
+			goal = goal % VaultGame.ORDER_STOCK_MEALS_TARGET
+			if not claimed:
+				goal += " (%d/%d)" % [mini(game.food_system.meals, VaultGame.ORDER_STOCK_MEALS_TARGET), VaultGame.ORDER_STOCK_MEALS_TARGET]
+		lines.append("%s  Wing order: %s → unlocks %s" % [done_marker if claimed else open_marker, goal, WING_ORDER_TEXT[order_id][1]])
+	var reclaim_marker := open_marker
+	if game.reclaim_active:
+		reclaim_marker = done_marker if game.reclaim_paid >= VaultGame.RECLAIM_DELIVERIES else "[color=#75d4b4][ACTIVE][/color]"
+	lines.append("%s  %s" % [reclaim_marker, reclaim_button_text()])
+	var target := _upgrade_offer_target()
+	if target != null:
+		lines.append("[color=#efc56b][OFFER][/color]  Mk II: %s" % upgrade_offer_text(target))
+	else:
+		lines.append("[color=#8faeb7][OFFER][/color]  Mk II: nothing to fit right now")
+	return lines
 
 
 func _has_eligible_worker(work_type: String) -> bool:
