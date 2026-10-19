@@ -40,6 +40,11 @@ var fixture_header: Label
 var fixture_controls: HBoxContainer
 var fixture_power_button: Button
 var fixture_deconstruct_button: Button
+# Mid-game salvage sink (QA 2026-10-18c #3, slice 1): an optional offer outside Next, plus the
+# inspector purchase row. Both stay hidden until the hatch is sealed.
+var upgrade_offer_button: Button
+var fixture_upgrade_row: HBoxContainer
+var fixture_upgrade_button: Button
 var need_labels: Dictionary = {}
 var need_bars: Dictionary = {}
 var work_buttons: Dictionary = {}
@@ -166,6 +171,12 @@ func _build_interface() -> void:
 	alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	alert_label.custom_minimum_size.y = 34
 	summary.add_child(alert_label)
+	upgrade_offer_button = Button.new()
+	upgrade_offer_button.visible = false
+	upgrade_offer_button.custom_minimum_size.y = 26
+	upgrade_offer_button.tooltip_text = "Optional: select a Grow Tray to fit Mk II (1 raw every 6 s, same power)."
+	upgrade_offer_button.pressed.connect(_on_upgrade_offer_pressed)
+	summary.add_child(upgrade_offer_button)
 	details_toggle = Button.new()
 	details_toggle.text = "DETAILS ▸"
 	details_toggle.tooltip_text = "Show or hide mood, power, air, hatch, and light readouts."
@@ -354,6 +365,13 @@ func _build_interface() -> void:
 	fixture_deconstruct_button.pressed.connect(_on_fixture_deconstruct_pressed)
 	fixture_controls.add_child(fixture_deconstruct_button)
 	side.add_child(fixture_controls)
+	fixture_upgrade_row = HBoxContainer.new()
+	fixture_upgrade_row.visible = false
+	fixture_upgrade_button = Button.new()
+	fixture_upgrade_button.custom_minimum_size = Vector2(189, 28)
+	fixture_upgrade_button.pressed.connect(_on_fixture_upgrade_pressed)
+	fixture_upgrade_row.add_child(fixture_upgrade_button)
+	side.add_child(fixture_upgrade_row)
 	_hide_fixture_controls()
 
 	bottom_panel = PanelContainer.new()
@@ -872,6 +890,7 @@ func refresh() -> void:
 			or game.ended
 			or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
 		)
+	_refresh_upgrade_offer()
 	_refresh_roster()
 	_refresh_work_priorities_board()
 	_refresh_crew_mood()
@@ -1539,7 +1558,7 @@ func _refresh_inspector() -> void:
 				]
 			elif building.kind == VaultBuilding.Kind.GROW_TRAY:
 				inspector_state.text += "\nGrowth: %d%% · yields 1 raw\nAwaiting Haul: %d raw" % [
-					floori(building.production_progress / FoodSystem.GROW_SECONDS * 100.0),
+					floori(building.production_progress / building.get_grow_seconds() * 100.0),
 					game.job_system.get_pending_raw_food_at(building.cell),
 				]
 			elif building.kind == VaultBuilding.Kind.KITCHEN:
@@ -2176,6 +2195,7 @@ func _show_fixture_controls(building: VaultBuilding) -> void:
 	fixture_header.visible = visible
 	fixture_controls.visible = visible
 	if not visible:
+		fixture_upgrade_row.visible = false
 		return
 	var is_consumer := building.is_power_consumer() or building.kind == VaultBuilding.Kind.MEDICAL_BED
 	fixture_header.text = "FIXTURE CONTROLS"
@@ -2185,6 +2205,53 @@ func _show_fixture_controls(building: VaultBuilding) -> void:
 	fixture_power_button.tooltip_text = "Allow or deny medical care." if building.kind == VaultBuilding.Kind.MEDICAL_BED else "Remove or restore this fixture's power demand."
 	fixture_deconstruct_button.disabled = building.is_emergency_core
 	fixture_deconstruct_button.tooltip_text = "Emergency core cannot be deconstructed." if building.is_emergency_core else "Recover %d salvage and remove this fixture." % building.get_deconstruct_refund()
+	_show_fixture_upgrade(building)
+
+
+func _show_fixture_upgrade(building: VaultBuilding) -> void:
+	var offered := building.can_take_upgrade() and game.breach_system.is_sealed() and not game.ended
+	fixture_upgrade_row.visible = offered
+	if not offered:
+		return
+	var cost := building.get_upgrade_cost()
+	fixture_upgrade_button.text = "FIT MK II · %d SALVAGE" % cost
+	fixture_upgrade_button.disabled = not game.can_upgrade_building(building.building_id)
+	fixture_upgrade_button.tooltip_text = (
+		"1 raw every %d s instead of %d s · same %d power." % [roundi(VaultBuilding.GROW_MK2_SECONDS), roundi(FoodSystem.GROW_SECONDS), building.get_base_power_demand()]
+		if not fixture_upgrade_button.disabled
+		else "Needs %d salvage (have %d)." % [cost, game.food_system.salvage]
+	)
+
+
+# The first tier-1 Grow Tray once the hatch is sealed; resolved at refresh and again at click time.
+func _upgrade_offer_target() -> VaultBuilding:
+	if game.ended or not game.breach_system.is_sealed():
+		return null
+	for building: VaultBuilding in game.buildings:
+		if building.can_take_upgrade():
+			return building
+	return null
+
+
+func _refresh_upgrade_offer() -> void:
+	if upgrade_offer_button == null:
+		return
+	var target := _upgrade_offer_target()
+	upgrade_offer_button.visible = target != null
+	if target != null:
+		upgrade_offer_button.text = "Optional: Grow Tray Mk II · %d salvage" % target.get_upgrade_cost()
+
+
+func _on_upgrade_offer_pressed() -> void:
+	var target := _upgrade_offer_target()
+	if target != null:
+		game.select_building(target.building_id)
+
+
+func _on_fixture_upgrade_pressed() -> void:
+	var building := game.get_building_by_id(game.selected_building_id)
+	if building != null:
+		game.upgrade_building(building.building_id)
 
 
 func _hide_fixture_controls() -> void:
@@ -2192,6 +2259,8 @@ func _hide_fixture_controls() -> void:
 		fixture_header.visible = false
 	if fixture_controls != null:
 		fixture_controls.visible = false
+	if fixture_upgrade_row != null:
+		fixture_upgrade_row.visible = false
 
 
 func _on_tool_pressed(tool: String) -> void:

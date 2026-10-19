@@ -403,6 +403,35 @@ func toggle_building_enabled(building_id: int) -> bool:
 	return true
 
 
+# Mid-game salvage sink (QA 2026-10-18c #3, slice 1). Unlocked by a sealed hatch; one explicit
+# purchase, paid in full from stored salvage, installs instantly and keeps the growth fraction.
+func can_upgrade_building(building_id: int) -> bool:
+	var building := get_building_by_id(building_id)
+	return (
+		building != null
+		and building.can_take_upgrade()
+		and not ended
+		and breach_system.is_sealed()
+		and food_system.salvage >= building.get_upgrade_cost()
+	)
+
+
+func upgrade_building(building_id: int) -> bool:
+	if not can_upgrade_building(building_id):
+		return false
+	var building := get_building_by_id(building_id)
+	var cost := building.get_upgrade_cost()
+	if food_system.take_salvage(cost) != cost:
+		return false
+	var fraction := building.production_progress / building.get_grow_seconds()
+	building.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+	building.production_progress = fraction * building.get_grow_seconds()
+	building.queue_redraw()
+	status_message = "%s fitted for %d salvage: 1 raw every %d s." % [building.get_display_name(), cost, roundi(building.get_grow_seconds())]
+	status_message_left = 4.0
+	return true
+
+
 func deconstruct_building(building_id: int) -> bool:
 	var building := get_building_by_id(building_id)
 	if building == null or not building.complete or building.is_emergency_core:
@@ -747,6 +776,13 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 			return false
 		if entry.has("manually_disabled") and typeof(entry.manually_disabled) != TYPE_BOOL:
 			return false
+		if entry.has("upgrade_tier"):
+			if not _is_integer_in_range(entry.upgrade_tier, VaultBuilding.UPGRADE_TIER_BASE, VaultBuilding.UPGRADE_TIER_MAX):
+				return false
+			if int(entry.upgrade_tier) > VaultBuilding.UPGRADE_TIER_BASE and (
+				int(entry.kind) != VaultBuilding.Kind.GROW_TRAY or entry.get("complete") != true or entry.get("is_emergency_core", false) == true
+			):
+				return false
 	if not job_system.is_serialized_breach_data_valid(jobs_data, breach_data, resident_data):
 		return false
 
