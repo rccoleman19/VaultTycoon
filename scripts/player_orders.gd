@@ -67,6 +67,7 @@ var outcome_panel: PanelContainer
 var outcome_title: Label
 var outcome_text: Label
 var outcome_grade: Label
+var outcome_record: Label
 var work_priorities_overlay: Control
 var work_priorities_panel: PanelContainer
 var work_priorities_button: Button
@@ -750,6 +751,12 @@ func _build_outcome() -> void:
 	outcome_grade.add_theme_font_size_override("font_size", 17)
 	outcome_grade.visible = false
 	content.add_child(outcome_grade)
+	outcome_record = Label.new()
+	outcome_record.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	outcome_record.add_theme_font_size_override("font_size", 15)
+	outcome_record.add_theme_color_override("font_color", Color("efc56b"))
+	outcome_record.visible = false
+	content.add_child(outcome_record)
 	outcome_text = Label.new()
 	outcome_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	outcome_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -2111,6 +2118,35 @@ func show_outcome(won: bool, survivors: int) -> void:
 		outcome_title.text = "WING LOST"
 		outcome_title.add_theme_color_override("font_color", Color("ef6860"))
 		outcome_text.text = "No residents remain alive. Reopen the last daily checkpoint or initialize a new wing and stabilize supplies, powered air recycling, and the pressure hatch sooner."
+	outcome_record.text = record_line(won)
+	outcome_record.visible = not outcome_record.text.is_empty()
+
+
+# Records + ladder C3: the wing's record under the crew rating. A win shows the best grade, a loss
+# the furthest day; NEW RECORD only right after the finish that raised it (a LOAD shows the plain
+# record). Empty for seed 0, in tests without an injected store, and with no record.
+func record_line(won: bool) -> String:
+	if not game.records_enabled():
+		return ""
+	var fresh: bool = not game.finish_record.is_empty()
+	var current: Dictionary = game.finish_record.current if fresh else game.wing_records().get_record(game.wing_seed)
+	var previous: Dictionary = game.finish_record.previous if fresh else {}
+	if current.is_empty():
+		return ""
+	var text := ""
+	var raised := false
+	if won:
+		if current.best_stars == null:
+			return ""
+		var best := int(current.best_stars)
+		text = "BEST %s%s" % ["★".repeat(best), "☆".repeat(3 - best)]
+		raised = previous.is_empty() or previous.best_stars == null or best > int(previous.best_stars)
+	else:
+		text = "FURTHEST DAY %d" % int(current.best_day)
+		raised = previous.is_empty() or int(current.best_day) > int(previous.best_day)
+	if fresh and raised:
+		text += " · NEW RECORD"
+	return text
 
 
 # Win-screen crew rating (QA 2026-10-18b #8). A win starts at 3 stars and loses one per failed

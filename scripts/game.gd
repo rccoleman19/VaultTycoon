@@ -15,6 +15,9 @@ var wing_seed := LEGACY_WING_SEED
 # test or tool ever touches the player's user://wing_records.json.
 var records_path := ""
 var _wing_records: WingRecords = null
+# Records + ladder C3: this run's record as written at the finish transition, for the outcome
+# panel's NEW RECORD mark. Transient: never saved, cleared by NEW WING and LOAD.
+var finish_record := {}
 const BUILD_KIND_BY_TOOL := {
 	"bed": VaultBuilding.Kind.BED,
 	"lamp": VaultBuilding.Kind.LAMP,
@@ -145,6 +148,7 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED) -> void:
 	player_orders.show_wing_id(wing_seed)
 	ended = false
 	outcome = ""
+	finish_record = {}
 	active_tool = "select"
 	selected_resident_id = -1
 	selected_building_id = -1
@@ -698,6 +702,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	next_building_id = int(snapshot.get("next_building_id", 1))
 	ended = bool(snapshot.get("ended", false))
 	outcome = str(snapshot.get("outcome", ""))
+	finish_record = {}
 	var camera_data: Array = snapshot.get("camera", [])
 	if camera_data.size() >= 3:
 		world_camera.position = Vector2(float(camera_data[0]), float(camera_data[1]))
@@ -1328,6 +1333,7 @@ func _finish_win() -> void:
 	ended = true
 	outcome = "win"
 	user_paused = true
+	_record_finish(true)
 	save_game(false)
 	player_orders.show_outcome(true, get_alive_count())
 	game_won.emit(get_alive_count())
@@ -1339,8 +1345,25 @@ func _finish_loss() -> void:
 	ended = true
 	outcome = "loss"
 	user_paused = true
+	_record_finish(false)
 	player_orders.show_outcome(false, 0)
 	game_lost.emit()
+
+
+# Records + ladder C3: a finished seeded run merges into its wing record once, here at the
+# transition (show_outcome also runs on LOAD, so it never writes). A win carries the crew grade,
+# a loss the day reached. A failed or refused write never blocks the outcome.
+func _record_finish(won: bool) -> void:
+	finish_record = {}
+	if not records_enabled():
+		return
+	var store := wing_records()
+	var level := WingRecords.BASE_SUBLEVEL
+	var previous := store.get_record(wing_seed, level)
+	var stars: Variant = int(player_orders.crew_grade()["stars"]) if won else null
+	var day := clampi(day_cycle.current_day, 1, WingRecords.MAX_DAY)
+	if store.record(wing_seed, won, stars, day, level):
+		finish_record = {"previous": previous, "current": store.get_record(wing_seed, level)}
 
 
 func _tool_help(tool: String) -> String:
