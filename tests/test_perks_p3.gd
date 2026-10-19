@@ -1,17 +1,18 @@
 extends "res://tests/test_runner.gd"
 
 # Meta perks P3: FLOODLIGHT (first win on 05) lights a second starter Lumen on the core's last spare
-# power for salvage. A trade-off that leaves the hatch clock, the stores it does not name and the work
-# rates alone.
+# power; VOLUNTEER (first win on 03) adds one more hand for 8 salvage. Both are trade-offs that leave
+# the hatch clock, the stores they do not name and the work rates alone.
 
 var _path := ""
 
 
 func _run() -> void:
 	_path = "user://test_perks_p3_%d.json" % OS.get_process_id()
-	_run_case("a win on 05 unlocks FLOODLIGHT after PROVISIONING; test runs stay on NONE", _test_unlock)
+	_run_case("wins on 05 and 03 unlock FLOODLIGHT and VOLUNTEER, in order; test runs stay on NONE", _test_unlock)
 	_run_case("FLOODLIGHT buys a second lit Lumen with salvage; it takes the spare power but sheds first", _test_floodlight)
-	_run_case("FLOODLIGHT survives save and load without being granted twice", _test_save_load)
+	_run_case("VOLUNTEER adds a fifth (or sixth) resident and costs 8 salvage, nothing else", _test_volunteer)
+	_run_case("both perks survive save and load without being granted twice", _test_save_load)
 	print("")
 	if _failure_count == 0:
 		print("PERKS P3 TESTS PASSED: %d cases, %d assertions" % [_case_count, _assertion_count])
@@ -38,8 +39,8 @@ func _game(won_levels: Array) -> VaultGame:
 
 
 func _guard(game: VaultGame) -> bool:
-	var ok := VaultGame.PERKS.has("floodlight")
-	_assert_true(ok, "VaultGame has FLOODLIGHT")
+	var ok := VaultGame.PERKS.has("floodlight") and VaultGame.PERKS.has("volunteer")
+	_assert_true(ok, "VaultGame has the P3 perks")
 	return ok
 
 
@@ -63,18 +64,18 @@ func _test_unlock() -> void:
 	game.new_game(false, 4242)
 	_assert_equal(game.unlocked_perks(), ["floodlight"], "a win on 05 alone unlocks FLOODLIGHT only")
 	_dispose(game)
-	game = _game([7, 5])
+	game = _game([7, 5, 3])
 	game.new_game(false, 4242)
-	_assert_equal(game.unlocked_perks(), ["provisioning", "floodlight"], "07 and 05 unlock both in order")
-	_assert_equal(VaultGame.perk_name("floodlight"), "FLOODLIGHT", "named")
-	_assert_equal(int(VaultGame.PERKS.floodlight.unlock_level), 5, "unlock level")
+	_assert_equal(game.unlocked_perks(), ["provisioning", "floodlight", "volunteer"], "07, 05, 03 unlock all three in order")
+	_assert_equal([VaultGame.perk_name("floodlight"), VaultGame.perk_name("volunteer")], ["FLOODLIGHT", "VOLUNTEER"], "named")
+	_assert_equal([int(VaultGame.PERKS.floodlight.unlock_level), int(VaultGame.PERKS.volunteer.unlock_level)], [5, 3], "unlock levels")
 	game.records_path = ""
-	game.equipped_perk = "floodlight"
+	game.equipped_perk = "volunteer"
 	game.new_game(false, 4242)
-	_assert_equal([game.wing_perk, game.get_building_at(VaultGame.FLOODLIGHT_CELL) == null], ["", true], "records off: NONE, no FLOODLIGHT Lumen")
+	_assert_equal([game.wing_perk, game.residents.size()], ["", 4], "records off: NONE, four crew")
 	game.records_path = _path
 	game.new_game(false, 0)
-	_assert_equal([game.wing_perk, game.get_building_at(VaultGame.FLOODLIGHT_CELL) == null], ["", true], "seed 0: NONE, no FLOODLIGHT Lumen")
+	_assert_equal([game.wing_perk, game.residents.size()], ["", 4], "seed 0: NONE, four crew")
 	_dispose(game)
 	_clean()
 
@@ -99,7 +100,27 @@ func _test_floodlight() -> void:
 			_assert_true(flood != null and flood.shed_first and flood.get_power_priority() == VaultBuilding.PowerPriority.OPTIONAL, label + ": the FLOODLIGHT Lumen sheds first")
 			_assert_true(game.map_grid.is_walkable(VaultGame.FLOODLIGHT_CELL) or game.get_building_at(VaultGame.FLOODLIGHT_CELL) != null, label + ": the Lumen stands in the chamber")
 			_assert_equal([game.power_grid.supply, game.power_grid.demand], [2, 2], label + ": the core's 2 power is all used")
-	_assert_true(VaultGame.FLOODLIGHT_SALVAGE_COST > 0, "a trade-off, not a gift")
+	_dispose(game)
+	_clean()
+
+
+func _test_volunteer() -> void:
+	var game := _game([3])
+	if not _guard(game):
+		_dispose(game)
+		return
+	for level: int in [7, 4, 3]:
+		game.equipped_perk = ""
+		game.new_game(false, 4242, level)
+		var base := _shape(game)
+		game.equipped_perk = "volunteer"
+		game.new_game(false, 4242, level)
+		var label := "%02d" % level
+		_assert_equal(_shape(game), [base[0], maxi(0, base[1] - VaultGame.VOLUNTEER_SALVAGE_COST), base[2] + 1, base[3], base[4]], label + ": one more resident, 8 less salvage, same meals, light and hatch")
+		var last: VaultResident = game.residents[-1]
+		_assert_equal(last.resident_name, "Gil", label + ": the volunteer is Gil")
+		_assert_true(game.map_grid.is_walkable(game.map_grid.world_to_cell(last.position)), label + ": standing on floor")
+	_assert_true(VaultGame.VOLUNTEER_SALVAGE_COST > 0 and VaultGame.FLOODLIGHT_SALVAGE_COST > 0, "trade-offs, not gifts")
 	game.equipped_perk = ""
 	game.new_game(false, 4242)
 	_assert_false(game.get_building_at(VaultGame.FLOODLIGHT_CELL) != null, "NONE: no Lumen at the FLOODLIGHT cell")
@@ -112,11 +133,11 @@ func _test_floodlight() -> void:
 
 
 func _test_save_load() -> void:
-	var game := _game([5])
+	var game := _game([5, 3])
 	if not _guard(game):
 		_dispose(game)
 		return
-	for perk: String in ["floodlight"]:
+	for perk: String in ["floodlight", "volunteer"]:
 		game.equipped_perk = perk
 		game.new_game(false, 4242)
 		var shape := _shape(game)

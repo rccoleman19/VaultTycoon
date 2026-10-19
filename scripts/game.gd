@@ -24,14 +24,19 @@ const PROVISIONING_SALVAGE_COST := 8
 # Meta perks P3: FLOODLIGHT (power/light) buys a second lit starter Lumen with salvage; it takes the
 # core's last spare power but sheds first, so food and air still get power. It does not touch the
 # hatch clock or work rates. Ladder QA: v1 (Lumen at HIGH, free) cost idle 05/03 2-3 wins in 6.
+# VOLUNTEER (crew/labor) adds one more hand who eats from the stores; outfitting Gil costs 8 salvage.
+# Work rates and the hatch clock are untouched. QA: -6 / -2 meals wiped 05 (2/6); -8 salvage keeps 4/6+.
 const PERK_FLOODLIGHT := "floodlight"
 const FLOODLIGHT_CELL := Vector2i(20, 14)
+const PERK_VOLUNTEER := "volunteer"
 const FLOODLIGHT_SALVAGE_COST := 6
+const VOLUNTEER_SALVAGE_COST := 8
 const PERKS := {
 	PERK_PROVISIONING: {"name": "PROVISIONING", "unlock_level": 7, "detail": "+4 meals, -8 salvage"},
 	PERK_FLOODLIGHT: {"name": "FLOODLIGHT", "unlock_level": 5, "detail": "+1 lit Lumen (sheds first), -6 salvage"},
+	PERK_VOLUNTEER: {"name": "VOLUNTEER", "unlock_level": 3, "detail": "+1 resident, -8 salvage"},
 }
-const PERK_ORDER := [PERK_PROVISIONING, PERK_FLOODLIGHT]
+const PERK_ORDER := [PERK_PROVISIONING, PERK_FLOODLIGHT, PERK_VOLUNTEER]
 # The player's choice for the next wings (kept across NEW WING / REPLAY / stepping).
 var equipped_perk := ""
 # The perk this wing started with ("" = NONE); saved, shown on the outcome.
@@ -236,6 +241,11 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 		cells.append(Vector2i(24, 19))
 		starting_food.append(72.0)
 		starting_rest.append(76.0)
+	if wing_perk == PERK_VOLUNTEER:
+		names.append("Gil")
+		cells.append(Vector2i(21, 19))
+		starting_food.append(70.0)
+		starting_rest.append(72.0)
 	for index in names.size():
 		var resident := VaultResident.new()
 		resident_root.add_child(resident)
@@ -879,6 +889,8 @@ func _apply_perk_start() -> void:
 		PERK_FLOODLIGHT:
 			_spawn_starting_fixture(VaultBuilding.Kind.LAMP, FLOODLIGHT_CELL, false)
 			food_system.salvage = maxi(0, food_system.salvage - FLOODLIGHT_SALVAGE_COST)
+		PERK_VOLUNTEER:
+			food_system.salvage = maxi(0, food_system.salvage - VOLUNTEER_SALVAGE_COST)
 	_mark_floodlight()
 
 
