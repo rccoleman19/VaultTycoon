@@ -564,8 +564,17 @@ func can_offer_idle_start() -> bool:
 	)
 
 
+# Step 2 stays pending only while the wing has no Air Recycler at all: one placed with [AIR], on any
+# cell, as a blueprint or finished, satisfies it (and a reloaded save re-checks the same way).
 func idle_start_air_pending() -> bool:
-	return idle_start_stage == 1 and not ended and not idle_start_dismissed()
+	return idle_start_stage == 1 and not ended and not idle_start_dismissed() and not _idle_start_air_placed()
+
+
+func _idle_start_air_placed() -> bool:
+	for building in buildings:
+		if building.kind == VaultBuilding.Kind.AIR_RECYCLER:
+			return true
+	return false
 
 
 func idle_start_dismissed() -> bool:

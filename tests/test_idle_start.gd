@@ -16,6 +16,11 @@ func _run() -> void:
 	_run_case("the right-panel card walks step 1, step 2 and dismissal", _test_card)
 	_run_case("the card never changes the Next hint", _test_next_unchanged)
 	_run_case("every card text fits the right panel with 12 px to spare", _test_texts_fit)
+	_run_case("an [AIR] recycler on the recommended cell completes step 2, across a disk reload", _test_manual_air_recommended)
+	_run_case("an [AIR] recycler elsewhere completes step 2; the card never queues a second", _test_manual_air_elsewhere)
+	_run_case("a finished Air Recycler anywhere completes step 2, across a disk reload", _test_finished_air_elsewhere)
+	_run_case("a genuinely pending step 2 survives a disk reload and still places at its cell", _test_pending_air_reload)
+	_run_case("Dismiss still writes the profile pref while step 2 is genuinely pending", _test_pending_air_dismiss)
 	_finish()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
 
@@ -315,3 +320,117 @@ func _test_texts_fit() -> void:
 		var room := width - _text_width(orders.idle_start_header, text)
 		_assert_true(room >= 12.0, "header '%s' fits with %.0f px to spare" % [text, room])
 	_dispose(game)
+
+
+const AIR_SAVE := "user://test_idle_start_air.json"
+
+
+func _air_count(game: VaultGame) -> int:
+	var count := 0
+	for building in game.buildings:
+		if building.kind == VaultBuilding.Kind.AIR_RECYCLER:
+			count += 1
+	return count
+
+
+func _air_game() -> VaultGame:
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+	var game := _game()
+	_advance_to(game, 30.0)
+	game.player_orders.idle_start_button.pressed.emit()
+	return game
+
+
+func _reload(game: VaultGame) -> void:
+	_remove_test_save(AIR_SAVE)
+	_assert_true(game.save_game(false, AIR_SAVE), "saved to a test file")
+	game.new_game(false)
+	game.idle_start_prefs_path = PREFS
+	_assert_true(game.load_game(AIR_SAVE), "loaded from the test file")
+	_remove_test_save(AIR_SAVE)
+
+
+func _assert_air_satisfied(game: VaultGame, where: String) -> void:
+	_assert_false(game.idle_start_air_pending(), "%s: step 2 is not pending" % where)
+	_assert_equal(_card(game), "<hidden>", "%s: the card is hidden" % where)
+	game.player_orders.idle_start_button.pressed.emit()
+	_assert_false(game.place_idle_start_air(), "%s: step 2 refuses to place" % where)
+	_assert_equal(_air_count(game), 1, "%s: still exactly one Air Recycler" % where)
+	_assert_false(FileAccess.file_exists(PREFS), "%s: the profile pref is untouched" % where)
+	_assert_false(game.idle_start_dismissed(), "%s: not dismissed" % where)
+
+
+func _test_manual_air_recommended() -> void:
+	var game := _air_game()
+	_assert_equal(game.idle_start_stage, 1, "step 1 taken from the card")
+	_assert_true(game.idle_start_air_pending(), "step 2 pending")
+	game.set_tool("air")
+	_assert_true(game.issue_order(VaultGame.IDLE_START_AIR_CELL), "[AIR] places on the recommended cell")
+	_assert_air_satisfied(game, "manual at (24,12)")
+	_reload(game)
+	_assert_air_satisfied(game, "manual at (24,12) after reload")
+	game.set_tool("cancel")
+	_assert_true(game.issue_order(VaultGame.IDLE_START_AIR_CELL), "the manual recycler is cancelled")
+	_assert_true(game.idle_start_air_pending(), "with no recycler left, step 2 is pending again")
+	_dispose(game)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+
+
+func _test_manual_air_elsewhere() -> void:
+	var game := _air_game()
+	var elsewhere := Vector2i(25, 12)
+	game.set_tool("air")
+	_assert_true(game.issue_order(elsewhere), "[AIR] places at (25,12)")
+	_assert_air_satisfied(game, "manual at (25,12)")
+	_assert_true(game.get_building_at(VaultGame.IDLE_START_AIR_CELL) == null, "nothing queued at the recommended cell")
+	_reload(game)
+	_assert_air_satisfied(game, "manual at (25,12) after reload")
+	_assert_true(game.get_building_at(VaultGame.IDLE_START_AIR_CELL) == null, "still nothing at the recommended cell after reload")
+	_dispose(game)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+
+
+func _test_finished_air_elsewhere() -> void:
+	var game := _air_game()
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(25, 12))
+	_assert_air_satisfied(game, "finished at (25,12)")
+	_reload(game)
+	_assert_air_satisfied(game, "finished at (25,12) after reload")
+	_assert_true(game.get_building_at(VaultGame.IDLE_START_AIR_CELL) == null, "nothing at the recommended cell")
+	_dispose(game)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+
+
+func _test_pending_air_reload() -> void:
+	var game := _air_game()
+	_assert_equal(_air_count(game), 0, "no Air Recycler yet")
+	_reload(game)
+	_assert_equal(game.idle_start_stage, 1, "stage 1 restored")
+	_assert_true(game.idle_start_air_pending(), "step 2 still pending")
+	_assert_equal(_card(game), "IDLE START · 2/2 · air | Place Air Recycler · 14 salvage", "the card offers step 2")
+	game.player_orders.idle_start_button.pressed.emit()
+	var air := game.get_building_at(VaultGame.IDLE_START_AIR_CELL)
+	_assert_true(air != null and air.kind == VaultBuilding.Kind.AIR_RECYCLER, "the second tap places at (24,12)")
+	_assert_equal(_air_count(game), 1, "exactly one")
+	_assert_equal(game.idle_start_stage, 2, "stage 2: done")
+	_assert_equal(_card(game), "<hidden>", "done: hidden")
+	_dispose(game)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+
+
+func _test_pending_air_dismiss() -> void:
+	var game := _air_game()
+	_assert_equal(_card(game), "IDLE START · 2/2 · air | Place Air Recycler · 14 salvage", "step 2 offered")
+	game.player_orders.idle_start_dismiss_button.pressed.emit()
+	var prefs := ConfigFile.new()
+	_assert_equal(prefs.load(PREFS), OK, "the profile pref file is written")
+	_assert_true(bool(prefs.get_value(VaultGame.IDLE_START_PREFS_SECTION, "dismissed", false)), "dismissed = true")
+	_assert_equal(_card(game), "<hidden>", "dismissed: hidden")
+	_assert_equal(_air_count(game), 0, "dismiss places no recycler")
+	game.new_game(false)
+	game.idle_start_prefs_path = PREFS
+	game.begin_shift()
+	_advance_to(game, 30.0)
+	_assert_false(game.can_offer_idle_start(), "a later wing is not offered the start")
+	_dispose(game)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
