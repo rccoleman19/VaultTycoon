@@ -1469,6 +1469,11 @@ func _refresh_inspector() -> void:
 			resident.needs.get_mood_state(),
 			mood_factors,
 		]
+		if not resident.alive:
+			# A corpse has no mood tier either (QA 2026-10-18c #6).
+			var inspector_lines := inspector_state.text.split("\n")
+			inspector_lines[2] = "Mood: none"
+			inspector_state.text = "\n".join(inspector_lines)
 		_set_need("food", "FOOD", resident.needs.food)
 		_set_need("rest", "REST", resident.needs.rest)
 		_set_need("mood", "MOOD", resident.needs.mood)
