@@ -1733,6 +1733,7 @@ func _advance_keep_running(delta_seconds: float) -> void:
 	_advance_annex(delta_seconds)
 	annex_welcome_left = maxf(0.0, annex_welcome_left - delta_seconds)
 	if keep_running_day() != day_before:
+		_maybe_feast()
 		save_game(false)
 
 
@@ -1848,6 +1849,37 @@ func apply_comfort() -> bool:
 
 
 const COMFORT_STATUS := "Comfort queued: Rec Console, Med Bed and their power and light."
+
+
+# Feast (north star slice 5): surplus meals become morale. At each keep-running day rollover, with
+# meals at the Annex reserve + max(30, 2 per crew) or more and nobody hungry, every living resident
+# eats 2 meals' worth of feast for +12 mood. Self-limiting: 5 crew spend 10 meals a day, more than two
+# Grow Trays' surplus, so stock settles near the threshold instead of piling up. No save key.
+const FEAST_MEALS_PER_CREW := 2
+const FEAST_MOOD := 12.0
+const FEAST_STOCK_FLOOR := 30
+const FEAST_STATUS := "FEAST: %d meals shared · crew mood +%d"
+
+
+func feast_threshold() -> int:
+	return annex_reserve + maxi(FEAST_STOCK_FLOOR, FEAST_MEALS_PER_CREW * get_alive_count())
+
+
+func _maybe_feast() -> bool:
+	var alive := get_alive_count()
+	if not keep_running or ended or alive <= 0 or food_system.meals < feast_threshold():
+		return false
+	for resident in residents:
+		if resident.alive and resident.needs.food < ANNEX_HUNGRY_FOOD:
+			return false
+	var cost := FEAST_MEALS_PER_CREW * alive
+	food_system.meals -= cost
+	for resident in residents:
+		if resident.alive:
+			resident.needs.mood = minf(100.0, resident.needs.mood + FEAST_MOOD)
+	status_message = FEAST_STATUS % [cost, roundi(FEAST_MOOD)]
+	status_message_left = 4.0
+	return true
 
 
 # Construction goes first: the Annex waits for salvage while any blueprint is unbuilt.
