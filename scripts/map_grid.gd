@@ -28,6 +28,7 @@ var reserved_cell_check := Callable()
 # Wing-seed slice 2: the seed whose layout this map carries (0 = the legacy, hand-made wing).
 var layout_seed := 0
 var layout_pocket_count := 0
+var vein_cells: Dictionary = {}
 
 
 func _ready() -> void:
@@ -120,7 +121,7 @@ func apply_dig_work(cell: Vector2i, amount: float) -> bool:
 	dig_marks.erase(cell)
 	dig_progress.erase(cell)
 	tile_changed.emit(cell)
-	rubble_created.emit(cell, 3)
+	rubble_created.emit(cell, get_dig_yield(cell))
 	queue_redraw()
 	return true
 
@@ -556,13 +557,58 @@ static func generate_layout(wing_seed: int) -> Dictionary:
 	for cell: Vector2i in opened:
 		pockets.append(cell)
 	pockets.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.y * WIDTH + a.x < b.y * WIDTH + b.x)
-	return {"pockets": pockets}
+	return {"pockets": pockets, "veins": _generate_veins(wing_seed, opened)}
+
+
+# Salvage veins: 2-3 short runs (3-5 rock cells) of richer rock that yield VEIN_SALVAGE_YIELD
+# rubble when dug instead of 3. Derived from the seed, never saved; a dug vein is simply floor.
+# They start beside a pocket or within a few cells of the chamber, never on protected rock.
+const VEIN_SALVAGE_YIELD := 6
+const VEIN_REACH := 6
+
+
+static func _generate_veins(wing_seed: int, opened: Dictionary) -> Array[Vector2i]:
+	var veins: Dictionary = {}
+	var starts: Array[Vector2i] = []
+	for y in range(CHAMBER.position.y - VEIN_REACH, CHAMBER.end.y + VEIN_REACH):
+		for x in range(CHAMBER.position.x - VEIN_REACH, CHAMBER.end.x + VEIN_REACH):
+			var cell := Vector2i(x, y)
+			if not is_layout_protected(cell) and not opened.has(cell):
+				starts.append(cell)
+	var count := 2 + BreachSystem.seed_hash(wing_seed, 200) % 2
+	for index in count:
+		var salt := 210 + index * 20
+		var cursor := starts[BreachSystem.seed_hash(wing_seed, salt) % starts.size()]
+		var length := 3 + BreachSystem.seed_hash(wing_seed, salt + 1) % 3
+		var placed := 0
+		var walk := 0
+		while placed < length and walk < 16:
+			if not veins.has(cursor):
+				veins[cursor] = true
+				placed += 1
+			var options: Array[Vector2i] = []
+			for neighbor in _offset_neighbors(cursor):
+				if not is_layout_protected(neighbor) and not opened.has(neighbor) and not veins.has(neighbor):
+					options.append(neighbor)
+			if options.is_empty():
+				break
+			cursor = options[BreachSystem.seed_hash(wing_seed, salt + 2 + walk) % options.size()]
+			walk += 1
+	var result: Array[Vector2i] = []
+	for cell: Vector2i in veins:
+		result.append(cell)
+	result.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.y * WIDTH + a.x < b.y * WIDTH + b.x)
+	return result
 
 
 # Re-derives the seeded layers after new_wing or a load. The saved cells stay authoritative.
 func apply_layout_seed(wing_seed: int) -> void:
 	layout_seed = wing_seed
-	layout_pocket_count = generate_layout(wing_seed)["pockets"].size()
+	var layout := generate_layout(wing_seed)
+	layout_pocket_count = layout["pockets"].size()
+	vein_cells.clear()
+	for cell: Vector2i in layout.get("veins", []):
+		vein_cells[cell] = true
 	topology_revision += 1
 	queue_redraw()
 
@@ -571,3 +617,12 @@ func apply_layout_seed(wing_seed: int) -> void:
 # progress (the 12-dig objective) counts floor beyond this, so pockets never count as digging.
 func get_initial_floor_count() -> int:
 	return CHAMBER.size.x * CHAMBER.size.y + layout_pocket_count
+
+
+func is_vein(cell: Vector2i) -> bool:
+	return vein_cells.has(cell) and get_tile(cell) == Tile.ROCK
+
+
+# Rubble a dug cell leaves: veins are tracked by cell, so this holds before and after the dig.
+func get_dig_yield(cell: Vector2i) -> int:
+	return VEIN_SALVAGE_YIELD if vein_cells.has(cell) else 3

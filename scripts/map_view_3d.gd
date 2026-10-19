@@ -38,6 +38,7 @@ var _hatch_proxy: MeshInstance3D
 var _shared_hex_mesh: CylinderMesh
 var _mat_rock: StandardMaterial3D
 var _mat_rock_border: StandardMaterial3D
+var _mat_vein: StandardMaterial3D
 var _mat_wall: StandardMaterial3D
 var _wall_rock_meshes: Dictionary = {}
 var _chamber_fill: OmniLight3D
@@ -105,6 +106,8 @@ func _ensure_materials() -> void:
 	if _mat_rock == null:
 		_mat_rock = _make_terrain_mat(Color(0.16, 0.14, 0.13))
 		_mat_rock_border = _make_terrain_mat(Color(0.125, 0.12, 0.11))
+		# Wing-seed salvage veins: copper-streaked rock that yields double rubble.
+		_mat_vein = _make_terrain_mat(Color(0.42, 0.27, 0.15))
 		_mat_floor = _make_terrain_mat(Color(0.43, 0.42, 0.39))
 		_mat_floor_dark = _make_terrain_mat(Color(0.27, 0.26, 0.24))
 		_mat_floor_lit = _make_terrain_mat(_mat_floor.albedo_color.lerp(Color(1.0, 0.78, 0.28), 0.12))
@@ -318,6 +321,8 @@ func _make_hex_instance(cell: Vector2i) -> MeshInstance3D:
 			mat = _mat_rock_border
 		elif map_grid.dig_marks.has(cell):
 			mat = _mat_dig
+		elif map_grid.is_vein(cell):
+			mat = _mat_vein
 		else:
 			mat = _mat_rock
 	else:

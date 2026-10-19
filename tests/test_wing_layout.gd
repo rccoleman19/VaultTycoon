@@ -13,6 +13,8 @@ func _run() -> void:
 	_run_case("a seeded save reloads to the same map and layout", _test_save_round_trip)
 	_run_case("pre-layout seeded saves and bad layout keys", _test_compat_and_validation)
 	_run_case("pockets never count as excavation; the 12-dig path still clears the objective", _test_objective)
+	_run_case("seeded salvage veins: placement, double yield, save and render", _test_veins)
+	_run_case("every seed's veins stay off pockets and protected rock", _test_all_seed_veins)
 	_finish()
 
 
@@ -180,3 +182,73 @@ func _test_objective() -> void:
 	var big := _seeded(big_seed)
 	_assert_true(String(big.player_orders._primary_next_step().get("text", "")).contains("mark rock"), "a wing with 12+ pocket cells still asks for the first dig")
 	_dispose(big)
+
+
+func _rubble_for(game: VaultGame, cell: Vector2i) -> int:
+	var amounts: Array[int] = []
+	var capture := func(_cell: Vector2i, amount: int) -> void: amounts.append(amount)
+	game.map_grid.rubble_created.connect(capture)
+	# A deep vein may not touch floor yet; mark it directly so only the yield is under test.
+	game.map_grid.dig_marks[cell] = true
+	game.map_grid.apply_dig_work(cell, 8.0)
+	game.map_grid.rubble_created.disconnect(capture)
+	return amounts[0] if amounts.size() == 1 else -1
+
+
+func _hex_material(game: VaultGame, cell: Vector2i) -> Material:
+	var view := game.get_node("MapView3D") as MapView3D
+	var instance := view._make_hex_instance(cell)
+	var mat := instance.material_override if instance.material_override != null else instance.get_surface_override_material(0)
+	instance.free()
+	return mat
+
+
+func _test_veins() -> void:
+	var legacy := _spawn_game()
+	_assert_true(legacy.map_grid.vein_cells.is_empty(), "the legacy wing has no veins")
+	_assert_equal(_rubble_for(legacy, MapGrid.get_protected_dig_path()[0]), 3, "legacy rock yields 3")
+	_dispose(legacy)
+	var game := _seeded(4242)
+	var veins: Array = MapGrid.generate_layout(4242)["veins"]
+	_assert_equal(game.map_grid.vein_cells.size(), veins.size(), "the wing carries its seeded veins")
+	var vein: Vector2i = veins[0]
+	_assert_true(game.map_grid.is_vein(vein) and game.map_grid.get_tile(vein) == MapGrid.Tile.ROCK, "a vein starts as rock")
+	var view := game.get_node("MapView3D") as MapView3D
+	_assert_true(_hex_material(game, vein) == view._mat_vein, "a vein renders copper")
+	_assert_true(_hex_material(game, MapGrid.get_protected_dig_path()[0]) == view._mat_rock, "plain rock stays plain")
+	var snapshot: Dictionary = JSON.parse_string(JSON.stringify(game.create_snapshot()))
+	_assert_false(JSON.stringify(snapshot).contains("vein"), "veins are never saved")
+	game.new_game(false, 77)
+	_assert_true(game.apply_snapshot(snapshot), "the seeded save loads")
+	_assert_equal(game.map_grid.vein_cells.size(), veins.size(), "veins come back from the seed")
+	_assert_equal(_rubble_for(game, vein), 6, "a dug vein yields 6 rubble")
+	_assert_false(game.map_grid.is_vein(vein), "a dug vein is plain floor")
+	var jobs_before := game.job_system.jobs.size()
+	game.map_grid.queue_dig(MapGrid.get_protected_dig_path()[1])
+	game.map_grid.apply_dig_work(MapGrid.get_protected_dig_path()[1], 8.0)
+	_assert_equal(game.job_system.jobs.size(), jobs_before + 1, "the dig queues one rubble haul")
+	_assert_equal(_rubble_for(game, MapGrid.get_protected_dig_path()[2]), 3, "plain rock still yields 3 on a seeded wing")
+	var pre_layout: Dictionary = snapshot.duplicate(true)
+	pre_layout.erase("map_layout")
+	_assert_true(game.apply_snapshot(pre_layout), "a #110 seeded save loads")
+	_assert_true(game.map_grid.vein_cells.is_empty(), "and keeps no veins")
+	_dispose(game)
+
+
+func _test_all_seed_veins() -> void:
+	var protected := MapGrid.get_protected_dig_path()
+	var bad := 0
+	var bad_size := 0
+	for wing_seed in range(1, 65536, 7):
+		var layout: Dictionary = MapGrid.generate_layout(wing_seed)
+		var open: Dictionary = {}
+		for cell: Vector2i in layout["pockets"]:
+			open[cell] = true
+		var veins: Array = layout["veins"]
+		if veins.size() < 3 or veins.size() > 15:
+			bad_size += 1
+		for cell: Vector2i in veins:
+			if open.has(cell) or MapGrid.is_layout_protected(cell) or protected.has(cell):
+				bad += 1
+	_assert_equal(bad, 0, "no vein sits on a pocket, the 12-dig row, the chamber, the hatch or the border")
+	_assert_equal(bad_size, 0, "every sampled seed has 3..15 vein cells")
