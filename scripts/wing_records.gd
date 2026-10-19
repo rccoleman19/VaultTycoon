@@ -64,6 +64,15 @@ func unlocked_sublevel() -> int:
 	return deepest
 
 
+# Meta perks P1: true once any wing has been won on this sublevel (derived, no schema change).
+func has_win_on(sublevel: int) -> bool:
+	var wings: Dictionary = read().wings
+	for key: String in wings:
+		if int(key.substr(0, 2)) == sublevel and bool(wings[key].ever_won):
+			return true
+	return false
+
+
 # Merges one finished run into the wing's record: ever_won ORs, best_stars keeps the highest known
 # grade (null = no graded win yet), best_day keeps the highest day reached and annex ORs. Seed 0
 # does no I/O.

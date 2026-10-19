@@ -14,6 +14,21 @@ var wing_seed := LEGACY_WING_SEED
 # Saved only below 07, as the additive "sublevel" key, so 07 and legacy saves keep their bytes.
 var sublevel := WingRecords.BASE_SUBLEVEL
 const SUBLEVEL_SAVE_VERSION := 1
+# Meta perks P1: one trade-off perk per wing, unlocked by the first win on a sublevel (derived from
+# WingRecords, so records keep their format). "" is NONE: the default, and the only choice for seed 0
+# and test runs (records off). The perk is applied once by new_game and saved as an additive key.
+const PERK_SAVE_VERSION := 1
+const PERK_PROVISIONING := "provisioning"
+const PROVISIONING_MEALS := 4
+const PROVISIONING_SALVAGE_COST := 8
+const PERKS := {
+	PERK_PROVISIONING: {"name": "PROVISIONING", "unlock_level": 7, "detail": "+4 meals, -8 salvage"},
+}
+const PERK_ORDER := [PERK_PROVISIONING]
+# The player's choice for the next wings (kept across NEW WING / REPLAY / stepping).
+var equipped_perk := ""
+# The perk this wing started with ("" = NONE); saved, shown on the outcome.
+var wing_perk := ""
 # Records + ladder C5: each sublevel below 07 carries one named modifier (not cumulative), applied
 # at NEW WING and, for the rule-based ones, restored on LOAD from the saved sublevel.
 # Ladder QA: 10, not 15, so the earliest seeded hatch (45 s) still warns after #111's 30 s idle-start
@@ -202,6 +217,8 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 		_spawn_starting_fixture(VaultBuilding.Kind.LAMP, Vector2i(22, 14), false)
 	if sublevel == 5:
 		food_system.salvage = LEAN_STORES_SALVAGE
+	wing_perk = equipped_perk if equipped_perk in unlocked_perks_for(seed_value) else ""
+	_apply_perk_start()
 	_spawn_starting_fixture(VaultBuilding.Kind.STOCKPILE, Vector2i(19, 17), false)
 	var names := ["Ari", "Bo", "Cyra", "Dax"]
 	var cells := [Vector2i(20, 15), Vector2i(21, 16), Vector2i(22, 17), Vector2i(23, 18)]
@@ -711,6 +728,9 @@ func create_snapshot() -> Dictionary:
 	# Records + ladder C4: additive, written only below 07.
 	if sublevel != WingRecords.BASE_SUBLEVEL:
 		snapshot["sublevel"] = {"version": SUBLEVEL_SAVE_VERSION, "level": sublevel}
+	# Meta perks P1: additive, written only when the wing started with a perk.
+	if wing_perk != "":
+		snapshot["perk"] = {"version": PERK_SAVE_VERSION, "id": wing_perk}
 	return snapshot
 
 
@@ -748,6 +768,8 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	day_cycle.deserialize(snapshot.get("day", {}))
 	wing_seed = _snapshot_wing_seed(snapshot)
 	sublevel = _snapshot_sublevel(snapshot)
+	# LOAD restores which perk the wing started with; its start is in the saved stores, never re-granted.
+	wing_perk = str(snapshot.perk.id) if snapshot.get("perk") is Dictionary else ""
 	map_grid.apply_layout_seed(wing_seed if int(snapshot.get("map_layout", 0)) == MAP_LAYOUT_SEEDED else LEGACY_WING_SEED)
 	_apply_sublevel_rules()
 	player_orders.show_wing_id(wing_seed)
@@ -820,6 +842,41 @@ func _apply_sublevel_rules() -> void:
 	breach_system.warning_at = warning_at_for(wing_seed, sublevel)
 
 
+# Meta perks P1: the perks the player has unlocked, in display order. Empty when records are off
+# (seed 0, tests), so those wings always start on NONE.
+func unlocked_perks() -> Array:
+	return unlocked_perks_for(wing_seed)
+
+
+func unlocked_perks_for(seed_value: int) -> Array:
+	var unlocked := []
+	if not _records_enabled_for(seed_value):
+		return unlocked
+	var store := wing_records()
+	for id: String in PERK_ORDER:
+		if store.has_win_on(int(PERKS[id].unlock_level)):
+			unlocked.append(id)
+	return unlocked
+
+
+static func perk_name(id: String) -> String:
+	return str(PERKS[id].name) if PERKS.has(id) else "NONE"
+
+
+func _apply_perk_start() -> void:
+	match wing_perk:
+		PERK_PROVISIONING:
+			food_system.meals += PROVISIONING_MEALS
+			food_system.salvage = maxi(0, food_system.salvage - PROVISIONING_SALVAGE_COST)
+
+
+# Only {"version": 1, "id": <known perk>} on a seeded wing; NONE is never written.
+func _is_perk_data_valid(data: Variant, seed_value: int) -> bool:
+	if not data is Dictionary or (data as Dictionary).size() != 2 or seed_value == LEGACY_WING_SEED:
+		return false
+	return _is_integer_in_range(data.get("version"), PERK_SAVE_VERSION, PERK_SAVE_VERSION) and typeof(data.get("id")) == TYPE_STRING and PERKS.has(data.id)
+
+
 func _snapshot_sublevel(snapshot: Dictionary) -> int:
 	var data: Variant = snapshot.get("sublevel")
 	return int(data.level) if data is Dictionary else WingRecords.BASE_SUBLEVEL
@@ -883,6 +940,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	if snapshot.has("crew_traits") and not _is_integer_in_range(snapshot.crew_traits, CREW_TRAITS_V1, CREW_TRAITS_V1):
 		return false
 	if snapshot.has("sublevel") and not _is_sublevel_data_valid(snapshot.sublevel, _snapshot_wing_seed(snapshot)):
+		return false
+	if snapshot.has("perk") and not _is_perk_data_valid(snapshot.perk, _snapshot_wing_seed(snapshot)):
 		return false
 	# A seeded save is always new, so it must carry a real breach state and clock; only the legacy
 	# wing may fall back to the historical synthesis.
