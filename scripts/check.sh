@@ -86,5 +86,6 @@ run_godot_check wing-seed --script res://tests/test_wing_seed.gd
 run_godot_check wing-layout --script res://tests/test_wing_layout.gd
 run_godot_check seed-visible --script res://tests/test_seed_visible.gd
 run_godot_check crew-traits --script res://tests/test_crew_traits.gd
+run_godot_check crew-roster --script res://tests/test_crew_roster.gd
 
 echo "All Vault Tycoon headless checks passed."

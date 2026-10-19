@@ -1412,7 +1412,7 @@ func _expand_details_on_urgency() -> void:
 func _refresh_roster() -> void:
 	var parts: Array[String] = []
 	for resident in game.residents:
-		parts.append("%d:%d:%d:%d:%d:%s:%s:%s:%s" % [
+		parts.append("%d:%d:%d:%d:%d:%s:%s:%s:%s:%s" % [
 			resident.resident_id,
 			floori(resident.needs.food),
 			floori(resident.needs.rest),
@@ -1422,6 +1422,7 @@ func _refresh_roster() -> void:
 			str(resident.drafted),
 			str(resident.has_manual_move_order()),
 			str(resident.is_forced_job),
+			resident.trait_id,
 		])
 	var signature := "|".join(parts)
 	if signature == _last_roster_signature:
@@ -1439,6 +1440,9 @@ func _refresh_roster() -> void:
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.disabled = not resident.alive
 		button.pressed.connect(_on_resident_pressed.bind(resident.resident_id))
+		if resident.alive and resident.trait_id != "":
+			button.text = _roster_text_with_trait(button.text, resident.trait_id)
+			button.tooltip_text = "%s\n%s: %s" % [button.text, resident.trait_id, VaultResident.TRAIT_EFFECTS[resident.trait_id]]
 		roster_box.add_child(button)
 
 
@@ -1473,6 +1477,8 @@ func _refresh_inspector() -> void:
 		_set_need("mood", "MOOD", resident.needs.mood)
 		_set_need("health", "HEALTH", resident.needs.health)
 		_show_resident_commands(resident)
+		if resident.trait_id != "":
+			inspector_state.text += "\nTrait: %s · %s" % [resident.trait_id, VaultResident.TRAIT_EFFECTS[resident.trait_id]]
 		work_header.text = "WORK PRIORITIES · APPLY AFTER UNDRAFT" if resident.drafted else "WORK PRIORITIES · 1 HIGHEST"
 		for key: String in work_buttons:
 			var button: Button = work_buttons[key]
@@ -2143,6 +2149,16 @@ func _get_resident_order_status(resident: VaultResident) -> String:
 		status_parts.append("FORCED")
 	status_parts.append(resident.state)
 	return " · ".join(status_parts)
+
+
+# Wing-seed slice 3: a seeded trait leads the row's second line (what they do) when the row has
+# two lines, otherwise it follows the name. Unseeded rows are never touched.
+static func _roster_text_with_trait(text: String, trait_name: String) -> String:
+	var newline := text.find("\n")
+	if newline >= 0:
+		return "%s\n%s · %s" % [text.substr(0, newline), trait_name, text.substr(newline + 1)]
+	var name_end := text.find(" · ")
+	return "%s · %s%s" % [text.substr(0, name_end), trait_name, text.substr(name_end)]
 
 
 func _show_resident_commands(resident: VaultResident) -> void:
