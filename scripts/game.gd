@@ -1756,6 +1756,7 @@ func _reset_keep_running() -> void:
 	annex_welcome_left = 0.0
 	_annex_tick_left = ANNEX_TICK
 	_annex_trickle_left = ANNEX_TRICKLE_INTERVAL
+	_annex_room_noted = 0
 	_apply_recreation_seek()
 
 
@@ -1920,6 +1921,9 @@ func _annex_crew_hungry() -> bool:
 
 
 func _advance_annex(delta_seconds: float) -> void:
+	# A paid Annex waiting on floor room re-checks every tick (done or not), so freeing room opens it.
+	if annex_waiting_for_room():
+		_reconcile_annex()
 	if not annex_active():
 		return
 	_annex_trickle_left -= delta_seconds
@@ -1939,11 +1943,44 @@ func _advance_annex(delta_seconds: float) -> void:
 
 
 func _reconcile_annex() -> void:
-	if annex_meals >= ANNEX_MEALS and annex_salvage >= ANNEX_SALVAGE and not annex_done:
+	if not annex_quotas_met() or (annex_done and annex_resident() != null):
+		return
+	if annex_resident() == null:
+		var short := annex_room_short()
+		if short > 0:
+			_note_annex_room(short)
+			return
+	if annex_done:
+		_grant_annex_payoff()
+	else:
 		annex_done = true
 		_on_annex_completed()
-	elif annex_done and annex_resident() == null:
-		_grant_annex_payoff()
+
+
+func annex_quotas_met() -> bool:
+	return annex_meals >= ANNEX_MEALS and annex_salvage >= ANNEX_SALVAGE
+
+
+# The payoff is all or nothing: one free floor cell (not the hatch, a fixture or a stockpile zone)
+# per fixture. Until then the paid Annex waits; nothing is saved, it is derived from the world.
+func annex_room_short() -> int:
+	return maxi(0, ANNEX_FIXTURES.size() - _annex_free_cell_count(ANNEX_FIXTURES.size()))
+
+
+func annex_waiting_for_room() -> bool:
+	return keep_running and not ended and annex_quotas_met() and annex_resident() == null
+
+
+static func annex_room_cells_text(short: int) -> String:
+	return "%d floor cell%s" % [short, "" if short == 1 else "s"]
+
+
+func _note_annex_room(short: int) -> void:
+	if short == _annex_room_noted:
+		return
+	_annex_room_noted = short
+	status_message = ANNEX_ROOM_STATUS % annex_room_cells_text(short)
+	status_message_left = 6.0
 
 
 # Payoff (north star slice 3): the Annex opens with a bunk, a Grow Tray, a Nutrient Station and a
@@ -1953,10 +1990,13 @@ const ANNEX_RESIDENT_ID := 5
 const ANNEX_FIXTURES := [VaultBuilding.Kind.BED, VaultBuilding.Kind.GROW_TRAY, VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GENERATOR]
 const ANNEX_WELCOME_SECONDS := 30.0
 const ANNEX_OPEN_STATUS := "ANNEX OPEN: %s moves in. +Bunk, Grow Tray, Nutrient Station, Charge Node."
+const ANNEX_ROOM_STATUS := "ANNEX READY: free %s for its bunk, Grow Tray, Nutrient Station and Charge Node."
 var annex_welcome_left := 0.0
+var _annex_room_noted := 0
 
 
 func _on_annex_completed() -> void:
+	_annex_room_noted = 0
 	_grant_annex_payoff()
 	annex_welcome_left = ANNEX_WELCOME_SECONDS
 	status_message = ANNEX_OPEN_STATUS % ANNEX_RESIDENT_NAME
@@ -1970,9 +2010,10 @@ func annex_resident() -> VaultResident:
 	return null
 
 
-# Idempotent: a vault that already has resident 5 gets nothing twice.
+# Idempotent: a vault that already has resident 5 gets nothing twice. All or nothing: without a
+# free cell for every fixture it grants nothing (the caller waits, see annex_room_short).
 func _grant_annex_payoff() -> void:
-	if annex_resident() != null:
+	if annex_resident() != null or annex_room_short() > 0:
 		return
 	var cells := _annex_free_cells(ANNEX_FIXTURES.size() + 1)
 	for index in mini(ANNEX_FIXTURES.size(), cells.size()):
@@ -2005,3 +2046,18 @@ func _annex_free_cells(count: int) -> Array[Vector2i]:
 		return da < db or (da == db and (a.y < b.y or (a.y == b.y and a.x < b.x)))
 	)
 	return free.slice(0, count)
+
+
+# Same cells as _annex_free_cells without the sort, stopping at `limit` (cheap enough every tick).
+func _annex_free_cell_count(limit: int) -> int:
+	var taken := {}
+	for building in buildings:
+		taken[building.cell] = true
+	var count := 0
+	for cell: Vector2i in map_grid.get_floor_cells():
+		if cell == BreachSystem.HATCH_CELL or taken.has(cell) or map_grid.stockpile_cells.has(cell):
+			continue
+		count += 1
+		if count >= limit:
+			break
+	return count

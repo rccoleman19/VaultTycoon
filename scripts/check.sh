@@ -48,6 +48,7 @@ run_godot_check keep-running --script res://tests/test_keep_running.gd
 run_godot_check keep-running-food --script res://tests/test_keep_running_food.gd
 run_godot_check annex --script res://tests/test_annex.gd
 run_godot_check annex-payoff --script res://tests/test_annex_payoff.gd
+run_godot_check annex-room --script res://tests/test_annex_room.gd
 run_godot_check comfort --script res://tests/test_comfort.gd
 run_godot_check feast --script res://tests/test_feast.gd
 run_godot_check kr-wellbeing --script res://tests/test_kr_wellbeing.gd

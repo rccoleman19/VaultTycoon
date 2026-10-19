@@ -2830,6 +2830,9 @@ func keep_running_next_step() -> Dictionary:
 		# The comfort card covers Rec and Med: Next points at it over those steps (latched or not)
 		# and over the calm default; other life-support steps (air, food, power) still lead.
 		var primary := _primary_next_step()
+		# A paid Annex waiting on floor comes first: the comfort blueprints would take cells it needs.
+		if _is_default_step(primary) and game.annex_waiting_for_room() and game.annex_room_short() > 0:
+			return keep_running_default_step()
 		if _is_latchable_step(primary) or _is_default_step(primary):
 			return {"text": COMFORT_TEXT.next, "tool": "select"}
 		return primary
@@ -2884,6 +2887,13 @@ func _is_default_step(step: Dictionary) -> bool:
 
 
 func keep_running_default_step() -> Dictionary:
+	var room_short := game.annex_room_short() if game.annex_waiting_for_room() else 0
+	if room_short > 0:
+		return {
+			"text": ANNEX_TEXT.room_next % VaultGame.annex_room_cells_text(room_short),
+			"help": ANNEX_TEXT.room_help % VaultGame.annex_room_cells_text(room_short),
+			"tool": "dig",
+		}
 	if game.comfort_pending():
 		return {"text": COMFORT_TEXT.next, "tool": "select"}
 	if game.annex_active():
@@ -2904,6 +2914,9 @@ const ANNEX_TEXT := {
 	"open": "ANNEX OPEN · %d crew · vault stable",
 	"stable_next": "Next: YOU enjoy a stable vault · THEY run all of it",
 	"welcome": "NEW CREW · %s MOVES IN",
+	"room": "ANNEX READY · free %s",
+	"room_next": "Next: YOU free %s · THEY open the Annex",
+	"room_help": "The Annex needs %s more without a fixture or stockpile zone. Dig rock [E] or clear a zone.",
 }
 var annex_box: VBoxContainer
 var annex_header: Label
@@ -3023,7 +3036,12 @@ func _refresh_annex() -> void:
 	if not annex_box.visible:
 		return
 	var open := game.annex_done
-	annex_minus_button.get_parent().visible = not open
+	var room_short := game.annex_room_short() if game.annex_waiting_for_room() else 0
+	annex_minus_button.get_parent().visible = not open and room_short == 0
+	if room_short > 0:
+		annex_header.text = ANNEX_TEXT.room % VaultGame.annex_room_cells_text(room_short)
+		annex_bar.value = 1.0
+		return
 	if open:
 		annex_header.text = ANNEX_TEXT.open % game.get_alive_count()
 		annex_bar.value = 1.0
