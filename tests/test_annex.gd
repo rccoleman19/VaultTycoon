@@ -74,7 +74,11 @@ func _test_card() -> void:
 	_fed(game)
 	game.food_system.meals = 20
 	game.player_orders.refresh()
-	_assert_equal(game.player_orders.objective_label.text, "Next: YOU set the meal reserve · THEY build the Annex", "Next points at the Annex")
+	_assert_equal(game.player_orders.objective_label.text, PlayerOrders.COMFORT_TEXT.next, "comfort comes first")
+	_add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, game._annex_free_cells(1)[0])
+	_add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, game._annex_free_cells(1)[0])
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, "Next: YOU set the meal reserve · THEY build the Annex", "then Next points at the Annex")
 	_dispose(game)
 	game = _spawn_game()
 	game.begin_shift()

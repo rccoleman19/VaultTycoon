@@ -84,6 +84,9 @@ func _test_payoff() -> void:
 func _test_celebration() -> void:
 	var game := _running()
 	game.food_system.meals = 30
+	# Comfort already queued (slice 4), so Next can read the stable end state.
+	_add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, game._annex_free_cells(1)[0])
+	_add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, game._annex_free_cells(1)[0])
 	_finish(game)
 	game.player_orders.refresh()
 	_assert_true(game.status_message.begins_with("ANNEX OPEN: Eko moves in"), "status toast: %s" % game.status_message)

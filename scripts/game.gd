@@ -1751,6 +1751,113 @@ func _reset_keep_running() -> void:
 # Annex: every ANNEX_TICK one meal (only above the reserve, and never while someone is hungry) and
 # one salvage go in until each quota is met. Salvage competes with the Mk II fits; a slow upkeep
 # trickle (+1 per ANNEX_TRICKLE_INTERVAL) keeps an idle vault from dead-ending on salvage.
+# Comfort (north star slice 4): after KEEP RUNNING one tap queues what a won vault needs to stay
+# well: a Rec Console and a Med Bed, a Charge Node when planned power cannot carry them, and a Lumen
+# by any dark bunk. Derived from the world, no save key: it is offered while the vault keeps
+# running without a Rec Console or Med Bed (built or queued).
+const COMFORT_KINDS := [VaultBuilding.Kind.RECREATION_CONSOLE, VaultBuilding.Kind.MEDICAL_BED]
+
+
+func comfort_pending() -> bool:
+	if not keep_running or ended:
+		return false
+	for kind: int in COMFORT_KINDS:
+		if _count_buildings(kind) == 0:
+			return true
+	return false
+
+
+func _count_buildings(kind: int) -> int:
+	var count := 0
+	for building in buildings:
+		if building.kind == kind:
+			count += 1
+	return count
+
+
+func _planned_power_spare() -> int:
+	var spare := 0
+	for building in buildings:
+		if building.kind == VaultBuilding.Kind.GENERATOR:
+			spare += building.get_power_output() if building.complete else 7
+		elif not building.manually_disabled:
+			spare -= building.get_base_power_demand()
+	return spare
+
+
+func _comfort_dark_bunk() -> VaultBuilding:
+	for building in buildings:
+		if building.kind == VaultBuilding.Kind.BED and lighting_system.is_floor_dark(building.cell):
+			return building
+	return null
+
+
+# The comfort pieces still missing, in build order: [kind, cell] pairs ([] if there is no room).
+func comfort_plan() -> Array:
+	var kinds: Array[int] = []
+	for kind: int in COMFORT_KINDS:
+		if _count_buildings(kind) == 0:
+			kinds.append(kind)
+	var dark_bunk := _comfort_dark_bunk()
+	var demand := 0
+	for kind in kinds:
+		demand += int(VaultBuilding.POWER_DEMAND.get(kind, 0))
+	if dark_bunk != null:
+		demand += int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.LAMP])
+	if _planned_power_spare() < demand:
+		kinds.push_front(VaultBuilding.Kind.GENERATOR)
+	var plan: Array = []
+	var cells := _annex_free_cells(kinds.size())
+	if cells.size() < kinds.size():
+		return []
+	for index in kinds.size():
+		plan.append([kinds[index], cells[index]])
+	if dark_bunk != null:
+		var lamp_cell := Vector2i(-1, -1)
+		var used: Array[Vector2i] = cells
+		for d: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN, Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1)]:
+			var cell := dark_bunk.cell + d
+			if cell != BreachSystem.HATCH_CELL and map_grid.is_walkable(cell) and get_building_at(cell) == null and not map_grid.stockpile_cells.has(cell) and not used.has(cell):
+				lamp_cell = cell
+				break
+		if lamp_cell.x >= 0:
+			plan.append([VaultBuilding.Kind.LAMP, lamp_cell])
+	return plan
+
+
+func comfort_cost() -> int:
+	var cost := 0
+	for piece: Array in comfort_plan():
+		cost += int(VaultBuilding.COSTS[piece[0]])
+	return cost
+
+
+func apply_comfort() -> bool:
+	if not comfort_pending():
+		return false
+	var plan := comfort_plan()
+	if plan.is_empty():
+		status_message = "No free floor for comfort fixtures; place a Rec Console and Med Bed by hand."
+		status_message_left = 4.0
+		return false
+	for piece: Array in plan:
+		place_blueprint(int(piece[0]), piece[1])
+	status_message = COMFORT_STATUS
+	status_message_left = 5.0
+	return true
+
+
+const COMFORT_STATUS := "Comfort queued: Rec Console, Med Bed and their power and light."
+
+
+# Construction goes first: the Annex waits for salvage while any blueprint is unbuilt.
+func _blueprints_unbuilt() -> bool:
+	for building in buildings:
+		if not building.complete:
+			return true
+	return false
+
+
 func annex_active() -> bool:
 	return keep_running and not ended and not annex_done
 
@@ -1783,7 +1890,7 @@ func _advance_annex(delta_seconds: float) -> void:
 		if annex_meals < ANNEX_MEALS and food_system.meals > annex_reserve and not _annex_crew_hungry():
 			food_system.meals -= 1
 			annex_meals += 1
-		if annex_salvage < ANNEX_SALVAGE and food_system.salvage > 0:
+		if annex_salvage < ANNEX_SALVAGE and food_system.salvage > 0 and not _blueprints_unbuilt():
 			food_system.salvage -= 1
 			annex_salvage += 1
 		_reconcile_annex()

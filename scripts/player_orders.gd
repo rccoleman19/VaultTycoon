@@ -190,6 +190,7 @@ func _build_interface() -> void:
 	alert_label.custom_minimum_size.y = 34
 	summary.add_child(alert_label)
 	_build_idle_start_card(summary)
+	_build_comfort_card(summary)
 	_build_annex_card(summary)
 	upgrade_offer_button = Button.new()
 	upgrade_offer_button.visible = false
@@ -962,6 +963,7 @@ func refresh() -> void:
 		)
 	_refresh_upgrade_offer()
 	_refresh_idle_start()
+	_refresh_comfort()
 	_refresh_annex()
 	_refresh_roster()
 	_refresh_work_priorities_board()
@@ -1776,6 +1778,8 @@ func _refresh_alerts() -> void:
 			alerts.append("MOOD BREAK RISK · %s" % lowest_mood_resident.resident_name)
 		elif lowest_mood_resident.needs.mood < 40.0:
 			alerts.append("MOOD STRESSED · %s" % lowest_mood_resident.resident_name)
+	if game.keep_running and not game.ended:
+		_keep_running_injury_alert(alerts, free_medical)
 	var cook_enabled := _has_eligible_worker("cook")
 	if not cook_enabled:
 		alerts.append("NO COOK ENABLED")
@@ -2858,6 +2862,8 @@ func _is_default_step(step: Dictionary) -> bool:
 
 
 func keep_running_default_step() -> Dictionary:
+	if game.comfort_pending():
+		return {"text": COMFORT_TEXT.next, "tool": "select"}
 	if game.annex_active():
 		return {"text": ANNEX_TEXT.next, "tool": "select"}
 	if game.annex_done:
@@ -2883,6 +2889,65 @@ var annex_bar: ProgressBar
 var annex_reserve_label: Label
 var annex_minus_button: Button
 var annex_plus_button: Button
+
+
+const COMFORT_TREATABLE_HP := 95.0
+const COMFORT_TEXT := {
+	"header": "AFTER THE WIN · comfort",
+	"button": "Rec, Med Bed, power, light · %d",
+	"next": "Next: YOU queue comfort · THEY build care and Rec",
+}
+var comfort_box: VBoxContainer
+var comfort_header: Label
+var comfort_button: Button
+
+
+# A won vault only flags injuries a Med Bed will treat (95 HP or below); with none, no INJURED line.
+func _keep_running_injury_alert(alerts: Array[String], free_medical: int) -> void:
+	var index := -1
+	for i in alerts.size():
+		if alerts[i].begins_with("INJURED "):
+			index = i
+			break
+	if index < 0:
+		return
+	var injured := 0
+	for resident: VaultResident in game.residents:
+		if resident.alive and resident.needs.health <= COMFORT_TREATABLE_HP:
+			injured += 1
+	if injured > 0:
+		alerts[index] = "INJURED %d · MED BEDS FREE %d" % [injured, free_medical]
+	else:
+		alerts.remove_at(index)
+
+
+func _build_comfort_card(parent: Control) -> void:
+	comfort_box = VBoxContainer.new()
+	comfort_box.name = "ComfortCard"
+	comfort_box.visible = false
+	comfort_box.add_theme_constant_override("separation", 2)
+	parent.add_child(comfort_box)
+	comfort_header = Label.new()
+	comfort_header.text = COMFORT_TEXT.header
+	comfort_header.add_theme_color_override("font_color", Color("8faeb7"))
+	comfort_header.add_theme_font_size_override("font_size", 13)
+	comfort_box.add_child(comfort_header)
+	comfort_button = Button.new()
+	comfort_button.clip_text = true
+	comfort_button.custom_minimum_size.y = 26
+	comfort_button.tooltip_text = "Queues a Rec Console and a Med Bed, plus a Charge Node and a Lumen if power or a dark bunk needs them. Crew build them from salvage."
+	comfort_button.pressed.connect(func() -> void:
+		game.apply_comfort()
+		refresh())
+	comfort_box.add_child(comfort_button)
+
+
+func _refresh_comfort() -> void:
+	if comfort_box == null:
+		return
+	comfort_box.visible = game.comfort_pending()
+	if comfort_box.visible:
+		comfort_button.text = COMFORT_TEXT.button % game.comfort_cost()
 
 
 func _build_annex_card(parent: Control) -> void:
