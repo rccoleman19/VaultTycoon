@@ -934,6 +934,26 @@ func _salvage_dig_tiles(shortfall: int) -> int:
 	return ceili(float(after_rubble) / DIG_SALVAGE_YIELD) - game.map_grid.dig_marks.size()
 
 
+# Building a Nutrient Station and cooking takes most of a day; 2.5 days of food is the lead
+# time an idle wing needs to hear about food before the Rec tip (QA 2026-10-18c #5).
+const FOOD_LEAD_DAYS := 2.5
+const FOOD_PER_DAY := 60.0
+const FOOD_PER_MEAL := 60.0
+
+
+# Days the living crew can eat from stored meals plus what is already in their bellies.
+func _crew_food_days() -> float:
+	var alive := 0
+	var belly := 0.0
+	for resident: VaultResident in game.residents:
+		if resident.alive:
+			alive += 1
+			belly += resident.needs.food
+	if alive == 0:
+		return INF
+	return (belly + game.food_system.meals * FOOD_PER_MEAL) / (FOOD_PER_DAY * alive)
+
+
 func _charge_finish_step() -> Dictionary:
 	var shortfall := _salvage_shortfall(VaultBuilding.Kind.GENERATOR)
 	if shortfall == 0:
@@ -995,7 +1015,17 @@ func _primary_next_step() -> Dictionary:
 			rec_wanted = true
 		if resident.needs.health < 100.0 and resident.medical_bed_id < 0:
 			injured_without_reservation = true
-	if critical_resident and game.food_system.meals < game.get_alive_count():
+	# An empty larder outranks the mood tips: a stress break passes, starvation does not.
+	var empty_larder_break := mood_break_risk and game.food_system.meals == 0
+	# With no Nutrient Station the larder only falls. Once the crew's stored meals and
+	# bellies cover less than FOOD_LEAD_DAYS, food outranks the Rec tip (QA 2026-10-18c #5).
+	var unfed_larder_break := (
+		mood_break_risk
+		and game.food_system.meals <= game.get_alive_count()
+		and game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) < 1
+		and _crew_food_days() < FOOD_LEAD_DAYS
+	)
+	if unfed_larder_break or ((critical_resident or empty_larder_break) and game.food_system.meals < game.get_alive_count()):
 		var completed_kitchens := game.get_completed_building_count(VaultBuilding.Kind.KITCHEN)
 		if completed_kitchens < 1:
 			var unfinished_kitchens := 0
