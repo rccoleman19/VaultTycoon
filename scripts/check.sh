@@ -62,6 +62,7 @@ run_godot_check fresh-wing-air-finish --script res://tests/test_fresh_wing_air_f
 run_godot_check lighting-darkness --script res://tests/test_lighting_darkness.gd
 run_godot_check manual-draft-forced-orders --script res://tests/test_manual_draft_forced_orders.gd
 run_godot_check boot --quit-after 5
+run_godot_check topbar-fit --script res://tests/test_topbar_fit.gd
 
 # Fresh-clone cold boot: class cache must resolve global GDScript classes without an editor visit.
 COLD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vault-tycoon-cold.XXXXXX")"
