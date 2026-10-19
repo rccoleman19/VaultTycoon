@@ -758,6 +758,12 @@ func _build_outcome() -> void:
 	restart_button.text = "NEW WING"
 	restart_button.pressed.connect(func() -> void: game.new_game(true, game.roll_wing_seed()))
 	row.add_child(restart_button)
+	outcome_replay_button = Button.new()
+	outcome_replay_button.name = "ReplayWingButton"
+	outcome_replay_button.text = "REPLAY WING"
+	outcome_replay_button.visible = false
+	outcome_replay_button.pressed.connect(replay_wing)
+	row.add_child(outcome_replay_button)
 	outcome_panel.visible = false
 
 
@@ -2074,6 +2080,7 @@ func _reveal_fixture_controls() -> void:
 
 
 func show_outcome(won: bool, survivors: int) -> void:
+	outcome_replay_button.visible = game.wing_seed != 0
 	show_briefing(false)
 	show_work_priorities(false)
 	show_breach_warning(false)
@@ -2110,6 +2117,16 @@ func _set_need(key: String, label_text: String, value: float) -> void:
 # bar and the briefing. The legacy wing (seed 0) keeps today's labels exactly.
 var wing_brand_label: Label
 var wing_briefing_title: Label
+
+
+# Wing-seed slice 4: REPLAY WING starts a fresh run of the seeded wing on screen (same seed,
+# current rules). Seed 0 never shows it, so legacy outcome panels keep their two buttons.
+var outcome_replay_button: Button
+
+
+func replay_wing() -> void:
+	if game.wing_seed != 0:
+		game.new_game(true, game.wing_seed)
 
 
 static func wing_id(wing_seed: int) -> String:
