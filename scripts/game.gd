@@ -10,6 +10,11 @@ const RIGHT_PANEL_WIDTH := 310.0
 const LEGACY_WING_SEED := 0
 const MAX_WING_SEED := 0xFFFF
 var wing_seed := LEGACY_WING_SEED
+# Records + ladder: the per-wing sidecar store (scripts/wing_records.gd). Off for seed 0, and off
+# whenever the main loop runs a script (tests, QA drivers) unless records_path is injected, so no
+# test or tool ever touches the player's user://wing_records.json.
+var records_path := ""
+var _wing_records: WingRecords = null
 const BUILD_KIND_BY_TOOL := {
 	"bed": VaultBuilding.Kind.BED,
 	"lamp": VaultBuilding.Kind.LAMP,
@@ -99,6 +104,22 @@ func _process(delta: float) -> void:
 				_simulation_accumulator = 0.0
 				break
 	player_orders.refresh()
+
+
+func records_enabled() -> bool:
+	if wing_seed == LEGACY_WING_SEED:
+		return false
+	if records_path != "":
+		return true
+	var loop := Engine.get_main_loop()
+	return loop != null and loop.get_script() == null
+
+
+func wing_records() -> WingRecords:
+	if _wing_records == null:
+		_wing_records = WingRecords.new()
+	_wing_records.path = records_path if records_path != "" else WingRecords.DEFAULT_PATH
+	return _wing_records
 
 
 func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED) -> void:

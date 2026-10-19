@@ -91,6 +91,7 @@ run_godot_check crew-traits --script res://tests/test_crew_traits.gd
 run_godot_check crew-roster --script res://tests/test_crew_roster.gd
 run_godot_check trait-text-fit --script res://tests/test_trait_text_fit.gd
 run_godot_check wing-records --script res://tests/test_wing_records.gd
+run_godot_check records-isolation --script res://tests/test_records_isolation.gd
 run_godot_check replay-wing --script res://tests/test_replay_wing.gd
 
 echo "All Vault Tycoon headless checks passed."
