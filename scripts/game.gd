@@ -10,6 +10,10 @@ const RIGHT_PANEL_WIDTH := 310.0
 const LEGACY_WING_SEED := 0
 const MAX_WING_SEED := 0xFFFF
 var wing_seed := LEGACY_WING_SEED
+# Records + ladder C4: the sublevel this wing runs on (07 base, down to 03). Seed 0 is always 07.
+# Saved only below 07, as the additive "sublevel" key, so 07 and legacy saves keep their bytes.
+var sublevel := WingRecords.BASE_SUBLEVEL
+const SUBLEVEL_SAVE_VERSION := 1
 # Records + ladder: the per-wing sidecar store (scripts/wing_records.gd). Off for seed 0, and off
 # whenever the main loop runs a script (tests, QA drivers) unless records_path is injected, so no
 # test or tool ever touches the player's user://wing_records.json.
@@ -125,8 +129,9 @@ func wing_records() -> WingRecords:
 	return _wing_records
 
 
-func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED) -> void:
+func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_sublevel := WingRecords.BASE_SUBLEVEL) -> void:
 	var seed_value := clampi(start_seed, LEGACY_WING_SEED, MAX_WING_SEED)
+	var level := WingRecords.BASE_SUBLEVEL if seed_value == LEGACY_WING_SEED else clampi(start_sublevel, WingRecords.DEEPEST_SUBLEVEL, WingRecords.BASE_SUBLEVEL)
 	player_orders.show_work_priorities(false)
 	for building in buildings:
 		building.free()
@@ -143,6 +148,7 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED) -> void:
 	oxygen_system.reset()
 	day_cycle.reset()
 	wing_seed = seed_value
+	sublevel = level
 	breach_system.warning_at = BreachSystem.warning_at_for_seed(wing_seed)
 	breach_system.reset()
 	player_orders.show_wing_id(wing_seed)
@@ -657,6 +663,9 @@ func create_snapshot() -> Dictionary:
 	# Wing-seed slice 3: additive marker; traits themselves are derived from seed + resident id.
 	if crew_traits_version == CREW_TRAITS_V1:
 		snapshot["crew_traits"] = CREW_TRAITS_V1
+	# Records + ladder C4: additive, written only below 07.
+	if sublevel != WingRecords.BASE_SUBLEVEL:
+		snapshot["sublevel"] = {"version": SUBLEVEL_SAVE_VERSION, "level": sublevel}
 	return snapshot
 
 
@@ -693,6 +702,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	oxygen_system.deserialize(snapshot.get("oxygen", {}))
 	day_cycle.deserialize(snapshot.get("day", {}))
 	wing_seed = _snapshot_wing_seed(snapshot)
+	sublevel = _snapshot_sublevel(snapshot)
 	breach_system.warning_at = BreachSystem.warning_at_for_seed(wing_seed)
 	map_grid.apply_layout_seed(wing_seed if int(snapshot.get("map_layout", 0)) == MAP_LAYOUT_SEEDED else LEGACY_WING_SEED)
 	player_orders.show_wing_id(wing_seed)
@@ -749,6 +759,18 @@ func _snapshot_wing_seed(snapshot: Dictionary) -> int:
 	return int(snapshot.get("wing_seed", LEGACY_WING_SEED))
 
 
+func _snapshot_sublevel(snapshot: Dictionary) -> int:
+	var data: Variant = snapshot.get("sublevel")
+	return int(data.level) if data is Dictionary else WingRecords.BASE_SUBLEVEL
+
+
+# Only {"version": 1, "level": 03..06} on a seeded wing; 07 is never written.
+func _is_sublevel_data_valid(data: Variant, seed_value: int) -> bool:
+	if not data is Dictionary or (data as Dictionary).size() != 2 or seed_value == LEGACY_WING_SEED:
+		return false
+	return _is_integer_in_range(data.get("version"), SUBLEVEL_SAVE_VERSION, SUBLEVEL_SAVE_VERSION) and _is_integer_in_range(data.get("level"), WingRecords.DEEPEST_SUBLEVEL, WingRecords.BASE_SUBLEVEL - 1)
+
+
 # The only entropy in the game: the NEW WING button reads the clock once and hands it to the pure
 # pick_wing_seed(). Load, snapshot, simulation and UI refresh never roll.
 func roll_wing_seed() -> int:
@@ -798,6 +820,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	if snapshot.has("map_layout") and (not _is_integer_in_range(snapshot.map_layout, MAP_LAYOUT_SEEDED, MAP_LAYOUT_SEEDED)):
 		return false
 	if snapshot.has("crew_traits") and not _is_integer_in_range(snapshot.crew_traits, CREW_TRAITS_V1, CREW_TRAITS_V1):
+		return false
+	if snapshot.has("sublevel") and not _is_sublevel_data_valid(snapshot.sublevel, _snapshot_wing_seed(snapshot)):
 		return false
 	# A seeded save is always new, so it must carry a real breach state and clock; only the legacy
 	# wing may fall back to the historical synthesis.
@@ -1358,7 +1382,7 @@ func _record_finish(won: bool) -> void:
 	if not records_enabled():
 		return
 	var store := wing_records()
-	var level := WingRecords.BASE_SUBLEVEL
+	var level := sublevel
 	var previous := store.get_record(wing_seed, level)
 	var stars: Variant = int(player_orders.crew_grade()["stars"]) if won else null
 	var day := clampi(day_cycle.current_day, 1, WingRecords.MAX_DAY)

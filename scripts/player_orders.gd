@@ -2129,7 +2129,7 @@ func record_line(won: bool) -> String:
 	if not game.records_enabled():
 		return ""
 	var fresh: bool = not game.finish_record.is_empty()
-	var current: Dictionary = game.finish_record.current if fresh else game.wing_records().get_record(game.wing_seed)
+	var current: Dictionary = game.finish_record.current if fresh else game.wing_records().get_record(game.wing_seed, game.sublevel)
 	var previous: Dictionary = game.finish_record.previous if fresh else {}
 	if current.is_empty():
 		return ""
@@ -2272,12 +2272,12 @@ var _replay_opening := false
 func replay_wing() -> void:
 	if game.wing_seed != 0:
 		_replay_opening = true
-		game.new_game(true, game.wing_seed)
+		game.new_game(true, game.wing_seed, game.sublevel)
 		_replay_opening = false
 
 
-static func wing_id(wing_seed: int) -> String:
-	return "07" if wing_seed == 0 else "07-%04X" % wing_seed
+static func wing_id(wing_seed: int, level := WingRecords.BASE_SUBLEVEL) -> String:
+	return "07" if wing_seed == 0 else WingRecords.key_for_seed(wing_seed, level)
 
 
 # "2 ROCK POCKETS · 3 SALVAGE VEINS": what a seeded wing holds, named on the NEW WING briefing.
@@ -2285,11 +2285,15 @@ static func wing_layout_summary(wing_seed: int) -> String:
 	return "%d ROCK POCKETS · %d SALVAGE VEINS" % [MapGrid.pocket_count_for_seed(wing_seed), MapGrid.vein_count_for_seed(wing_seed)]
 
 
+func _sublevel() -> int:
+	return game.sublevel if game != null else WingRecords.BASE_SUBLEVEL
+
+
 func show_wing_id(wing_seed: int) -> void:
 	if wing_brand_label != null:
-		wing_brand_label.text = "VAULT WING // SUBLEVEL 07" if wing_seed == 0 else "VAULT WING // %s" % wing_id(wing_seed)
+		wing_brand_label.text = "VAULT WING // SUBLEVEL 07" if wing_seed == 0 else "VAULT WING // %s" % wing_id(wing_seed, _sublevel())
 	if wing_briefing_title != null:
-		wing_briefing_title.text = "VAULT WING %s // SEAL STABILIZATION" % wing_id(wing_seed)
+		wing_briefing_title.text = "VAULT WING %s // SEAL STABILIZATION" % wing_id(wing_seed, _sublevel())
 		if wing_seed != 0:
 			var warn := roundi(BreachSystem.warning_at_for_seed(wing_seed))
 			wing_briefing_title.text += "\nHATCH TEST AT %02d:%02d" % [warn / 60, warn % 60]
