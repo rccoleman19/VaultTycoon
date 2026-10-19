@@ -17,6 +17,9 @@ func _run() -> void:
 	_run_case("a future-version sidecar is never overwritten", _test_future_version)
 	_run_case("malformed entries make the file corrupt, not half-read", _test_malformed)
 	_run_case("a failed write at any step leaves the last record intact", _test_failures)
+	_run_case("a version 1 file migrates on read and upgrades only on write", _test_migration)
+	_run_case("sublevels keep separate records and open the next one down", _test_sublevels)
+	_run_case("kept-running days and the annex badge are kept", _test_long_days_and_annex)
 	_finish()
 
 
@@ -78,22 +81,22 @@ func _test_missing() -> void:
 func _test_maxima() -> void:
 	var store := _store()
 	_assert_true(store.record(4242, false, null, 3), "a day-3 loss records")
-	_assert_equal(store.get_record(4242), {"ever_won": false, "best_stars": null, "best_day": 3}, "loss only: no win, no grade")
+	_assert_equal(store.get_record(4242), {"ever_won": false, "best_stars": null, "best_day": 3, "annex": false}, "loss only: no win, no grade")
 	_assert_true(store.record(4242, false, null, 7), "a day-7 loss records")
 	_assert_false(bool(store.get_record(4242).ever_won), "a day-7 loss is still not a win")
 	_assert_true(store.record(4242, true, 2, 7), "a 2-star win records")
 	_assert_true(store.record(4242, false, null, 2), "a later early loss records")
 	_assert_true(store.record(4242, true, 1, 7), "a worse win records")
-	_assert_equal(store.get_record(4242), {"ever_won": true, "best_stars": 2, "best_day": 7}, "best grade and day survive worse runs")
+	_assert_equal(store.get_record(4242), {"ever_won": true, "best_stars": 2, "best_day": 7, "annex": false}, "best grade and day survive worse runs")
 	_assert_true(store.record(4242, true, 3, 7), "a 3-star win records")
 	_assert_equal(int(store.get_record(4242).best_stars), 3, "three stars kept")
 	_assert_true(store.record(1, true, null, 7), "an ungraded win records")
-	_assert_equal(store.get_record(1), {"ever_won": true, "best_stars": null, "best_day": 7}, "an ungraded win stays ungraded")
+	_assert_equal(store.get_record(1), {"ever_won": true, "best_stars": null, "best_day": 7, "annex": false}, "an ungraded win stays ungraded")
 	_assert_equal(int(store.get_record(4242).best_stars), 3, "another wing is untouched")
 	_assert_equal(int(store.read().status), WingRecords.Status.VALID, "file is valid")
 	_assert_equal(_files(), PackedStringArray(["wing_records.json"]), "no tmp or backup left behind")
 	var parsed: Dictionary = JSON.parse_string(_bytes(store.path))
-	_assert_equal(int(parsed.version), 1, "versioned document")
+	_assert_equal(int(parsed.version), 2, "versioned document")
 	_assert_true((parsed.wings as Dictionary).has("07-1092"), "keyed by wing id")
 	_cleanup()
 
@@ -105,7 +108,10 @@ func _test_bad_inputs() -> void:
 	_assert_false(store.record(4242, true, 0, 7), "zero stars are refused")
 	_assert_false(store.record(4242, true, 2.0, 7), "non-integer stars are refused")
 	_assert_false(store.record(4242, false, null, 0), "day 0 is refused")
-	_assert_false(store.record(4242, false, null, 8), "day 8 is refused")
+	_assert_false(store.record(4242, false, null, 1000), "day 1000 is refused")
+	_assert_false(store.record(4242, false, null, 3, 8), "sublevel 8 is refused")
+	_assert_false(store.record(4242, true, 3, 7, 2), "sublevel 2 is refused")
+	_assert_false(store.record(4242, false, null, 7, 7, true), "a loss cannot carry the annex badge")
 	_assert_false(store.record(70000, false, null, 3), "out-of-range seed is refused")
 	_assert_equal(_files().size(), 0, "nothing was written")
 	_cleanup()
@@ -118,7 +124,7 @@ func _test_corrupt() -> void:
 	_assert_equal(store.get_record(4242), {}, "corrupt sidecar shows no record")
 	_assert_equal(_bytes(store.path), "{not json", "reading never repairs or deletes")
 	_assert_true(store.record(4242, true, 3, 7), "the next record replaces it")
-	_assert_equal(store.get_record(4242), {"ever_won": true, "best_stars": 3, "best_day": 7}, "fresh record")
+	_assert_equal(store.get_record(4242), {"ever_won": true, "best_stars": 3, "best_day": 7, "annex": false}, "fresh record")
 	var kept := ""
 	for name in _files():
 		if name.begins_with("wing_records.json.corrupt-"):
@@ -145,7 +151,7 @@ func _test_corrupt_with_backup() -> void:
 	_assert_equal(int(read.status), WingRecords.Status.RECOVERED, "the valid backup is used")
 	_assert_equal(int(store.get_record(4242).best_stars), 2, "recovered record")
 	_assert_true(store.record(4242, false, null, 4), "recording over a recovered file works")
-	_assert_equal(store.get_record(4242), {"ever_won": true, "best_stars": 2, "best_day": 7}, "recovered data is merged, not lost")
+	_assert_equal(store.get_record(4242), {"ever_won": true, "best_stars": 2, "best_day": 7, "annex": false}, "recovered data is merged, not lost")
 	_assert_false(FileAccess.file_exists(store.path + ".bak"), "the stale backup is retired after promotion")
 	_cleanup()
 
@@ -161,7 +167,7 @@ func _test_backup_only() -> void:
 
 func _test_future_version() -> void:
 	var store := _store()
-	var future := JSON.stringify({"version": 2, "wings": {"07-1092": {"something": "new"}}})
+	var future := JSON.stringify({"version": 3, "wings": {"07-1092": {"something": "new"}}})
 	_put(store.path, future)
 	_assert_equal(int(store.read().status), WingRecords.Status.UNSUPPORTED, "future version is unsupported")
 	_assert_equal(store.get_record(4242), {}, "and shows no record")
@@ -195,6 +201,23 @@ func _test_malformed() -> void:
 		_assert_equal(store.get_record(4242), {}, "malformed case %d shows nothing" % index)
 	_put(store.path, JSON.stringify({"version": 1, "wings": {"07-1092": good}}))
 	_assert_equal(int(store.read().status), WingRecords.Status.VALID, "a well-formed file is valid")
+	var good2 := {"ever_won": true, "best_stars": 2, "best_day": 12, "annex": true}
+	var cases2 := [
+		{"version": 2, "wings": {"07-1092": good}},
+		{"version": 2, "wings": {"08-1092": good2}},
+		{"version": 2, "wings": {"02-1092": good2}},
+		{"version": 2, "wings": {"7-01092": good2}},
+		{"version": 2, "wings": {"07-1092": {"ever_won": true, "best_stars": 2, "best_day": 1000, "annex": false}}},
+		{"version": 2, "wings": {"07-1092": {"ever_won": false, "best_stars": null, "best_day": 7, "annex": true}}},
+		{"version": 2, "wings": {"07-1092": {"ever_won": true, "best_stars": 2, "best_day": 7, "annex": 1}}},
+		{"version": 1, "wings": {"06-1092": good}},
+		{"version": 1, "wings": {"07-1092": good2}},
+	]
+	for index in cases2.size():
+		_put(store.path, JSON.stringify(cases2[index]))
+		_assert_equal(int(store.read().status), WingRecords.Status.CORRUPT, "malformed v2 case %d is corrupt" % index)
+	_put(store.path, JSON.stringify({"version": 2, "wings": {"03-1092": good2}}))
+	_assert_equal(int(store.read().status), WingRecords.Status.VALID, "a well-formed v2 file is valid")
 	_cleanup()
 
 
@@ -210,3 +233,54 @@ func _test_failures() -> void:
 		_assert_equal(int(store.get_record(4242).best_stars), 2, "%s: the last record still reads" % step)
 		_assert_false(FileAccess.file_exists(store.path + ".tmp"), "%s: no temporary file is left" % step)
 		_cleanup()
+
+
+func _test_migration() -> void:
+	var store := _store()
+	var legacy := JSON.stringify({"version": 1, "wings": {"07-1092": {"ever_won": true, "best_stars": 2, "best_day": 7}}})
+	_put(store.path, legacy)
+	_assert_equal(int(store.read().status), WingRecords.Status.VALID, "a version 1 file is valid")
+	_assert_equal(store.get_record(4242), {"ever_won": true, "best_stars": 2, "best_day": 7, "annex": false}, "migrated in memory without an annex badge")
+	_assert_equal(_bytes(store.path), legacy, "reading never rewrites")
+	_assert_equal(store.unlocked_sublevel(), 6, "an existing 07 win opens 06")
+	_assert_true(store.record(4242, false, null, 3), "a later loss records")
+	var parsed: Dictionary = JSON.parse_string(_bytes(store.path))
+	_assert_equal(int(parsed.version), 2, "the next write upgrades the file")
+	_assert_equal(store.get_record(4242), {"ever_won": true, "best_stars": 2, "best_day": 7, "annex": false}, "with the old record kept")
+	_assert_equal(_files(), PackedStringArray(["wing_records.json"]), "the upgrade leaves no side files")
+	_cleanup()
+
+
+func _test_sublevels() -> void:
+	var store := _store()
+	_assert_equal(store.unlocked_sublevel(), 7, "no records: only 07")
+	_assert_true(store.record(4242, false, null, 5), "a 07 loss records")
+	_assert_equal(store.unlocked_sublevel(), 7, "a loss opens nothing")
+	_assert_true(store.record(4242, true, 1, 7), "a 07 win records")
+	_assert_equal(store.unlocked_sublevel(), 6, "a 07 win opens 06")
+	_assert_true(store.record(4242, true, 3, 7, 6), "a 06 win on the same seed records")
+	_assert_equal(store.get_record(4242, 6).best_stars, 3, "06 has its own record")
+	_assert_equal(store.get_record(4242).best_stars, 1, "07 is untouched")
+	_assert_equal(store.get_record(4242, 5), {}, "05 has none")
+	_assert_equal(store.unlocked_sublevel(), 5, "a 06 win opens 05")
+	_assert_true(store.record(7, true, 2, 7, 3), "a 03 win records")
+	_assert_equal(store.unlocked_sublevel(), 3, "03 is the floor")
+	var parsed: Dictionary = JSON.parse_string(_bytes(store.path))
+	_assert_true((parsed.wings as Dictionary).has("06-1092"), "keyed by sublevel and wing id")
+	_assert_true((parsed.wings as Dictionary).has("03-0007"), "zero-padded")
+	_cleanup()
+
+
+func _test_long_days_and_annex() -> void:
+	var store := _store()
+	_assert_true(store.record(4242, true, 2, 7), "a win records")
+	_assert_true(store.record(4242, false, null, 23), "a kept-running day 23 records")
+	_assert_equal(int(store.get_record(4242).best_day), 23, "best day passes 7")
+	_assert_true(bool(store.get_record(4242).ever_won), "a kept-running loss keeps the win")
+	_assert_true(store.record(4242, true, null, 12, 7, true), "a finished annex records")
+	_assert_equal(store.get_record(4242), {"ever_won": true, "best_stars": 2, "best_day": 23, "annex": true}, "annex badge, best grade and day merge")
+	_assert_true(store.record(4242, true, 3, 7), "a later plain win records")
+	_assert_true(bool(store.get_record(4242).annex), "the annex badge is never lost")
+	_assert_true(store.record(4242, false, null, 999), "day 999 is the cap")
+	_assert_equal(int(store.read().status), WingRecords.Status.VALID, "file is valid")
+	_cleanup()
