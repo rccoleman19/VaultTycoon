@@ -20,12 +20,11 @@ const SUBLEVEL_SAVE_VERSION := 1
 # card (45 - 15 = 30 hid the card for good on the merged game: no bunks, no Air, the crew died).
 const EARLY_HATCH_ADVANCE_SECONDS := 10.0
 const THIN_VEIN_SALVAGE_YIELD := 4
-const DARK_STARTER_LUMENS := 0
 const FIFTH_MOUTH_CREW_SIZE := 5
 const SUBLEVEL_MODIFIERS := {
 	6: {"name": "EARLY HATCH", "detail": "hatch test 10 s earlier"},
 	5: {"name": "THIN VEINS", "detail": "salvage veins -33%"},
-	4: {"name": "DARK START", "detail": "no starter Lumen"},
+	4: {"name": "DARK START", "detail": "starter Lumen unbuilt (5 salvage)"},
 	3: {"name": "FIFTH MOUTH", "detail": "a fifth resident to feed"},
 }
 # Records + ladder: the per-wing sidecar store (scripts/wing_records.gd). Off for seed 0, and off
@@ -194,7 +193,10 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 	selected_breach = false
 	_simulation_accumulator = 0.0
 	_spawn_starting_fixture(VaultBuilding.Kind.GENERATOR, Vector2i(24, 15), true)
-	if sublevel != 4 or DARK_STARTER_LUMENS > 0:
+	# Ladder QA: 04 DARK START with no Lumen at all was 1/6 (mood 0 by 60 s); an unbuilt one is 6/6.
+	if sublevel == 4:
+		_spawn_starting_blueprint(VaultBuilding.Kind.LAMP, Vector2i(22, 14))
+	else:
 		_spawn_starting_fixture(VaultBuilding.Kind.LAMP, Vector2i(22, 14), false)
 	_spawn_starting_fixture(VaultBuilding.Kind.STOCKPILE, Vector2i(19, 17), false)
 	var names := ["Ari", "Bo", "Cyra", "Dax"]
@@ -1044,6 +1046,16 @@ func _serialized_building_by_id(building_data: Array, building_id: int) -> Dicti
 		if entry is Dictionary and int(entry.get("id", -1)) == building_id:
 			return entry
 	return {}
+
+
+# Ladder 04 DARK START: the starter Lumen begins as a blueprint the crew supply and build.
+func _spawn_starting_blueprint(kind: int, cell: Vector2i) -> void:
+	var building := VaultBuilding.new()
+	building_root.add_child(building)
+	building.configure(next_building_id, kind as VaultBuilding.Kind, cell)
+	next_building_id += 1
+	buildings.append(building)
+	job_system.queue_building(building)
 
 
 func _spawn_starting_fixture(kind: int, cell: Vector2i, core: bool) -> void:

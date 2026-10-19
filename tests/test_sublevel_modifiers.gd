@@ -12,7 +12,7 @@ func _run() -> void:
 	_run_case("06 EARLY HATCH moves the hatch test 10 s earlier, kept on LOAD and in validation", _test_early_hatch)
 	_run_case("06 EARLY HATCH still offers the idle-start card on the earliest hatch", _test_early_hatch_card)
 	_run_case("05 THIN VEINS digs veins for 4 salvage, kept on LOAD", _test_thin_veins)
-	_run_case("04 DARK START has no starter Lumen", _test_dark_start)
+	_run_case("04 DARK START starts its Lumen as a blueprint the crew build", _test_dark_start)
 	_run_case("03 FIFTH MOUTH starts five residents", _test_fifth_mouth)
 	_run_case("a win on N unlocks N-1 and the win screen says so", _test_unlock)
 	print("")
@@ -114,11 +114,31 @@ func _test_dark_start() -> void:
 		_dispose(game)
 		return
 	game.new_game(false, 4242, 4)
-	_assert_equal(_lamps(game), 0, "no starter Lumen")
+	var lamp := _lamp(game)
+	_assert_true(lamp != null and not lamp.complete and lamp.delivered == 0 and lamp.cell == Vector2i(22, 14), "one unbuilt starter Lumen")
+	_assert_equal(game.food_system.salvage, FoodSystem.STARTING_SALVAGE, "nothing paid up front")
+	_assert_true(lamp != null and game.job_system.jobs.any(func(job) -> bool: return job.building_id == lamp.building_id), "the crew have a job for it")
 	_assert_equal(game.residents.size(), 4, "four crew")
+	game.begin_shift()
+	for i in 120:
+		game.step_simulation(0.5)
+		if _lamp(game).complete:
+			break
+	_assert_true(_lamp(game).complete, "the crew build the Lumen")
+	_assert_equal(game.food_system.salvage + int(_lamp(game).get_cost()) <= FoodSystem.STARTING_SALVAGE, true, "from the vault's salvage")
+	game.new_game(false, 4242, 4)
 	_assert_true(_round_trip(game), "a 04 save loads")
-	_assert_equal(_lamps(game), 0, "LOAD adds no Lumen")
+	_assert_true(_lamp(game) != null and not _lamp(game).complete and _lamps(game) == 1, "LOAD keeps one unbuilt Lumen")
+	game.new_game(false, 4242)
+	_assert_true(_lamp(game) != null and _lamp(game).complete, "07 keeps a built starter Lumen")
 	_dispose(game)
+
+
+func _lamp(game: VaultGame) -> VaultBuilding:
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.LAMP:
+			return building
+	return null
 
 
 func _test_fifth_mouth() -> void:
@@ -131,7 +151,7 @@ func _test_fifth_mouth() -> void:
 	var fen: VaultResident = game.residents[4]
 	_assert_equal([fen.resident_id, fen.resident_name], [5, "Fen"], "the fifth is Fen, id 5")
 	_assert_equal(fen.trait_id, VaultResident.crew_traits_for_seed(4242)[4], "Fen takes the fifth trait slot")
-	_assert_equal(_lamps(game), 1, "not cumulative: Lumen kept")
+	_assert_true(_lamps(game) == 1 and _lamp(game).complete, "not cumulative: built Lumen kept")
 	_assert_true(_round_trip(game), "a 03 save loads")
 	_assert_equal(game.residents.size(), 5, "LOAD keeps five")
 	_dispose(game)
