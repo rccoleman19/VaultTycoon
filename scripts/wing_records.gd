@@ -65,6 +65,15 @@ func unlocked_sublevel() -> int:
 
 
 # Meta perks P1: true once any wing has been won on this sublevel (derived, no schema change).
+# Annex blueprints: any wing whose record carries the Annex badge (only ever set on a win).
+func has_annex_badge() -> bool:
+	var wings: Dictionary = read().wings
+	for key: String in wings:
+		if bool(wings[key].annex):
+			return true
+	return false
+
+
 func has_win_on(sublevel: int) -> bool:
 	var wings: Dictionary = read().wings
 	for key: String in wings:

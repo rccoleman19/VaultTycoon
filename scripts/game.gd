@@ -33,12 +33,18 @@ const FLOODLIGHT_BUILDING_ID := 3
 const PERK_VOLUNTEER := "volunteer"
 const FLOODLIGHT_SALVAGE_COST := 6
 const VOLUNTEER_SALVAGE_COST := 8
+# Annex blueprints C1/B1: BUNKROOM, earned by a first Annex badge (any record with annex), takes the
+# same single slot as the perks: one built Bunk at the start, paid 14 salvage (a Bunk is 8 to build).
+const PERK_BUNKROOM := "bunkroom"
+const BUNKROOM_CELL := Vector2i(25, 17)
+const BUNKROOM_SALVAGE_COST := 14
 const PERKS := {
 	PERK_PROVISIONING: {"name": "PROVISIONING", "unlock_level": 7, "detail": "+4 meals, -8 salvage"},
 	PERK_FLOODLIGHT: {"name": "FLOODLIGHT", "unlock_level": 5, "detail": "+1 lit Lumen (sheds first), -6 salvage"},
 	PERK_VOLUNTEER: {"name": "VOLUNTEER", "unlock_level": 3, "detail": "+1 resident, -8 salvage"},
+	PERK_BUNKROOM: {"name": "BUNKROOM", "unlock_annex": true, "detail": "Annex blueprint: +1 built Bunk, -14 salvage"},
 }
-const PERK_ORDER := [PERK_PROVISIONING, PERK_FLOODLIGHT, PERK_VOLUNTEER]
+const PERK_ORDER := [PERK_PROVISIONING, PERK_FLOODLIGHT, PERK_VOLUNTEER, PERK_BUNKROOM]
 # The player's choice for the next wings (kept across NEW WING / REPLAY / stepping).
 var equipped_perk := ""
 # The perk this wing started with ("" = NONE); saved, shown on the outcome.
@@ -874,7 +880,7 @@ func unlocked_perks_for(seed_value: int) -> Array:
 		return unlocked
 	var store := wing_records()
 	for id: String in PERK_ORDER:
-		if store.has_win_on(int(PERKS[id].unlock_level)):
+		if store.has_annex_badge() if PERKS[id].has("unlock_annex") else store.has_win_on(int(PERKS[id].unlock_level)):
 			unlocked.append(id)
 	return unlocked
 
@@ -893,6 +899,9 @@ func _apply_perk_start() -> void:
 			food_system.salvage = maxi(0, food_system.salvage - FLOODLIGHT_SALVAGE_COST)
 		PERK_VOLUNTEER:
 			food_system.salvage = maxi(0, food_system.salvage - VOLUNTEER_SALVAGE_COST)
+		PERK_BUNKROOM:
+			_spawn_starting_fixture(VaultBuilding.Kind.BED, BUNKROOM_CELL, false)
+			food_system.salvage = maxi(0, food_system.salvage - BUNKROOM_SALVAGE_COST)
 	_mark_floodlight()
 
 

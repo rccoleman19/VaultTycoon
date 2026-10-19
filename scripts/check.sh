@@ -95,6 +95,7 @@ run_godot_check records-isolation --script res://tests/test_records_isolation.gd
 run_godot_check perks --script res://tests/test_perks.gd
 run_godot_check perk-row --script res://tests/test_perk_row.gd
 run_godot_check perks-p3 --script res://tests/test_perks_p3.gd
+run_godot_check annex-b1 --script res://tests/test_annex_b1.gd
 run_godot_check briefing-stepper-focus --script res://tests/test_briefing_stepper_focus.gd
 run_godot_check records-finish --script res://tests/test_records_finish.gd
 run_godot_check sublevel --script res://tests/test_sublevel.gd
