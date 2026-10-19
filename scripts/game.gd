@@ -21,10 +21,17 @@ const PERK_SAVE_VERSION := 1
 const PERK_PROVISIONING := "provisioning"
 const PROVISIONING_MEALS := 4
 const PROVISIONING_SALVAGE_COST := 8
+# Meta perks P3: FLOODLIGHT (power/light) buys a second lit starter Lumen with salvage; it takes the
+# core's last spare power but sheds first, so food and air still get power. It does not touch the
+# hatch clock or work rates. Ladder QA: v1 (Lumen at HIGH, free) cost idle 05/03 2-3 wins in 6.
+const PERK_FLOODLIGHT := "floodlight"
+const FLOODLIGHT_CELL := Vector2i(20, 14)
+const FLOODLIGHT_SALVAGE_COST := 6
 const PERKS := {
 	PERK_PROVISIONING: {"name": "PROVISIONING", "unlock_level": 7, "detail": "+4 meals, -8 salvage"},
+	PERK_FLOODLIGHT: {"name": "FLOODLIGHT", "unlock_level": 5, "detail": "+1 lit Lumen (sheds first), -6 salvage"},
 }
-const PERK_ORDER := [PERK_PROVISIONING]
+const PERK_ORDER := [PERK_PROVISIONING, PERK_FLOODLIGHT]
 # The player's choice for the next wings (kept across NEW WING / REPLAY / stepping).
 var equipped_perk := ""
 # The perk this wing started with ("" = NONE); saved, shown on the outcome.
@@ -785,6 +792,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 		world_camera.position = Vector2(float(camera_data[0]), float(camera_data[1]))
 		world_camera.zoom = Vector2.ONE * clampf(float(camera_data[2]), 0.75, 1.8)
 	power_grid.reset()
+	_mark_floodlight()
 	power_grid.recalculate(buildings)
 	refresh_lighting(true)
 	job_system.rebuild_from_state(snapshot.get("jobs", {}))
@@ -868,6 +876,16 @@ func _apply_perk_start() -> void:
 		PERK_PROVISIONING:
 			food_system.meals += PROVISIONING_MEALS
 			food_system.salvage = maxi(0, food_system.salvage - PROVISIONING_SALVAGE_COST)
+		PERK_FLOODLIGHT:
+			_spawn_starting_fixture(VaultBuilding.Kind.LAMP, FLOODLIGHT_CELL, false)
+			food_system.salvage = maxi(0, food_system.salvage - FLOODLIGHT_SALVAGE_COST)
+	_mark_floodlight()
+
+
+# FLOODLIGHT's starter Lumen sheds first; re-derived from the wing's perk on NEW WING and LOAD.
+func _mark_floodlight() -> void:
+	for building: VaultBuilding in buildings:
+		building.shed_first = wing_perk == PERK_FLOODLIGHT and building.kind == VaultBuilding.Kind.LAMP and building.cell == FLOODLIGHT_CELL
 
 
 # Only {"version": 1, "id": <known perk>} on a seeded wing; NONE is never written.
