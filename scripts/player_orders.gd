@@ -2821,7 +2821,18 @@ func _is_latchable_step(step: Dictionary) -> bool:
 	)
 
 
+func console_seek_threshold() -> float:
+	return ResidentNeeds.KEEP_RUNNING_RECREATION_SEEK if game.keep_running and not game.ended else ResidentNeeds.RECREATION_SEEK_THRESHOLD
+
+
 func keep_running_next_step() -> Dictionary:
+	if game.comfort_pending():
+		# The comfort card covers Rec and Med: Next points at it over those steps (latched or not)
+		# and over the calm default; other life-support steps (air, food, power) still lead.
+		var primary := _primary_next_step()
+		if _is_latchable_step(primary) or _is_default_step(primary):
+			return {"text": COMFORT_TEXT.next, "tool": "select"}
+		return primary
 	var step := _primary_next_step()
 	var now := game.keep_running_seconds
 	var latchable := _is_latchable_step(step)
@@ -2895,7 +2906,7 @@ const COMFORT_TREATABLE_HP := 95.0
 const COMFORT_TEXT := {
 	"header": "AFTER THE WIN · comfort",
 	"button": "Rec, Med Bed, power, light · %d",
-	"next": "Next: YOU queue comfort · THEY build care and Rec",
+	"next": "Next: YOU tap comfort · THEY build Rec + Med",
 }
 var comfort_box: VBoxContainer
 var comfort_header: Label

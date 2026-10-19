@@ -1728,6 +1728,7 @@ func keep_running_day() -> int:
 
 
 func _advance_keep_running(delta_seconds: float) -> void:
+	_apply_recreation_seek()
 	var day_before := keep_running_day()
 	keep_running_seconds += delta_seconds
 	_advance_annex(delta_seconds)
@@ -1735,6 +1736,14 @@ func _advance_keep_running(delta_seconds: float) -> void:
 	if keep_running_day() != day_before:
 		_maybe_feast()
 		save_game(false)
+
+
+# Keep running owns the seek threshold: 45 while the won vault runs on, the pre-win 35 otherwise.
+func _apply_recreation_seek() -> void:
+	var seek := ResidentNeeds.KEEP_RUNNING_RECREATION_SEEK if keep_running else ResidentNeeds.RECREATION_SEEK_THRESHOLD
+	for resident in residents:
+		if is_instance_valid(resident):
+			resident.needs.recreation_seek = seek
 
 
 func _reset_keep_running() -> void:
@@ -1747,6 +1756,7 @@ func _reset_keep_running() -> void:
 	annex_welcome_left = 0.0
 	_annex_tick_left = ANNEX_TICK
 	_annex_trickle_left = ANNEX_TRICKLE_INTERVAL
+	_apply_recreation_seek()
 
 
 # Annex: every ANNEX_TICK one meal (only above the reserve, and never while someone is hungry) and

@@ -7,12 +7,16 @@ const LOW_NEED_MOOD_LOSS_PER_DAY := 12.0
 const LOW_OXYGEN_MOOD_LOSS_PER_DAY := 24.0
 const RECREATION_RECOVERY_PER_SECOND := 18.0
 const RECREATION_SEEK_THRESHOLD := 35.0
+# After the win (keep running) residents seek the Rec Console earlier, before MOOD STRESSED (< 40).
+const KEEP_RUNNING_RECREATION_SEEK := 45.0
 const RECREATION_TARGET := 85.0
 const LOW_MOOD_THRESHOLD := 30.0
 const BREAK_MOOD_THRESHOLD := 9.0
 const SEVERE_MOOD_THRESHOLD := 5.0
 const STRESS_BREAK_RECOVERY := 16.0
 
+# Set by VaultGame from keep_running (never saved).
+var recreation_seek := RECREATION_SEEK_THRESHOLD
 var food := 88.0
 var rest := 78.0
 var mood := 72.0
@@ -71,7 +75,7 @@ func finish_recreation() -> void:
 
 
 func wants_recreation() -> bool:
-	return mood <= RECREATION_SEEK_THRESHOLD
+	return mood <= recreation_seek
 
 
 func is_recreation_satisfied() -> bool:

@@ -120,6 +120,9 @@ func _test_next_alerts() -> void:
 func _test_latch() -> void:
 	var game := _won()
 	game.start_keep_running()
+	# The comfort card (slice 4) owns Rec/Med while it is offered; queue its pieces so the latch shows.
+	_add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, game._annex_free_cells(1)[0])
+	game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, game._annex_free_cells(1)[0])
 	game.food_system.meals = 20
 	for resident: VaultResident in game.residents:
 		resident.needs.food = 100.0
