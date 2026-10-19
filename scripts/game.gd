@@ -28,6 +28,8 @@ const PROVISIONING_SALVAGE_COST := 8
 # Work rates and the hatch clock are untouched. QA: -6 / -2 meals wiped 05 (2/6); -8 salvage keeps 4/6+.
 const PERK_FLOODLIGHT := "floodlight"
 const FLOODLIGHT_CELL := Vector2i(20, 14)
+# The starter's deterministic id (core 1, starter Lumen 2, FLOODLIGHT 3); ids are never reused.
+const FLOODLIGHT_BUILDING_ID := 3
 const PERK_VOLUNTEER := "volunteer"
 const FLOODLIGHT_SALVAGE_COST := 6
 const VOLUNTEER_SALVAGE_COST := 8
@@ -894,10 +896,11 @@ func _apply_perk_start() -> void:
 	_mark_floodlight()
 
 
-# FLOODLIGHT's starter Lumen sheds first; re-derived from the wing's perk on NEW WING and LOAD.
+# FLOODLIGHT's starter Lumen sheds first; re-derived from the wing's perk on NEW WING and LOAD. Matched by
+# id and cell, so a Lumen the player later builds on that cell keeps its normal priority.
 func _mark_floodlight() -> void:
 	for building: VaultBuilding in buildings:
-		building.shed_first = wing_perk == PERK_FLOODLIGHT and building.kind == VaultBuilding.Kind.LAMP and building.cell == FLOODLIGHT_CELL
+		building.shed_first = wing_perk == PERK_FLOODLIGHT and building.building_id == FLOODLIGHT_BUILDING_ID and building.kind == VaultBuilding.Kind.LAMP and building.cell == FLOODLIGHT_CELL
 
 
 # Only {"version": 1, "id": <known perk>} on a seeded wing; NONE is never written.
