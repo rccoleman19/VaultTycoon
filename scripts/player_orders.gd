@@ -1958,6 +1958,9 @@ func show_briefing(visible: bool, opening := false) -> void:
 		briefing_begin_button.visible = opening
 	if briefing_close_button != null:
 		briefing_close_button.visible = not opening
+	# A replay's opening briefing hides LOAD: the checkpoint belongs to the run the player just ended.
+	if briefing_load_button != null:
+		briefing_load_button.visible = not (opening and _replay_opening)
 	if visible:
 		show_work_priorities(false)
 		_refresh_checklist()
@@ -2122,11 +2125,14 @@ var wing_briefing_title: Label
 # Wing-seed slice 4: REPLAY WING starts a fresh run of the seeded wing on screen (same seed,
 # current rules). Seed 0 never shows it, so legacy outcome panels keep their two buttons.
 var outcome_replay_button: Button
+var _replay_opening := false
 
 
 func replay_wing() -> void:
 	if game.wing_seed != 0:
+		_replay_opening = true
 		game.new_game(true, game.wing_seed)
+		_replay_opening = false
 
 
 static func wing_id(wing_seed: int) -> String:

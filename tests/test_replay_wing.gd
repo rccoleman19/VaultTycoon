@@ -10,6 +10,7 @@ func _run() -> void:
 	_run_case("legacy outcome panels keep two buttons and their text", _test_legacy)
 	_run_case("seeded win and loss panels offer REPLAY WING", _test_seeded)
 	_run_case("REPLAY WING starts a fresh run of the same seed", _test_replay)
+	_run_case("the replay briefing hides LOAD of the ended run's checkpoint", _test_replay_hides_load)
 	_run_case("a seeded panel followed by a legacy one hides the button again", _test_seeded_then_legacy)
 	_finish()
 
@@ -102,4 +103,27 @@ func _test_seeded_then_legacy() -> void:
 	_assert_false(game.player_orders.outcome_replay_button.visible, "the legacy loss hides it again")
 	game.player_orders.replay_wing()
 	_assert_true(game.ended, "replay does nothing on the legacy wing")
+	_dispose(game)
+
+
+func _test_replay_hides_load() -> void:
+	var game := _spawn_game()
+	game.new_game(true, 4242)
+	var orders := game.player_orders
+	_assert_true(orders.briefing_load_button.visible, "a seeded NEW WING briefing keeps LOAD")
+	game.begin_shift()
+	game.step_simulation(30.0)
+	_assert_true(game.save_game(false), "a checkpoint of this run exists")
+	game._finish_loss()
+	orders.outcome_replay_button.pressed.emit()
+	_assert_true(orders.is_briefing_open(), "the replay briefing opens")
+	_assert_false(orders.briefing_load_button.visible, "the replay briefing hides LOAD")
+	_assert_false(orders.briefing_load_button in orders._briefing_focus_controls(true), "LOAD is not a focus stop")
+	_assert_true(orders.briefing_begin_button.visible, "BEGIN SHIFT stays")
+	orders.show_briefing(true, false)
+	_assert_true(orders.briefing_load_button.visible, "the HELP briefing still offers LOAD")
+	game.new_game(true, 0)
+	_assert_true(orders.briefing_load_button.visible, "a legacy NEW WING briefing keeps LOAD")
+	game.new_game(true, 4242)
+	_assert_true(orders.briefing_load_button.visible, "a plain seeded NEW WING after a replay keeps LOAD")
 	_dispose(game)
