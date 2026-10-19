@@ -45,6 +45,7 @@ run_godot_check post-seal-pacing --script res://tests/test_post_seal_pacing.gd
 run_godot_check idle-start --script res://tests/test_idle_start.gd
 run_godot_check postseal-help --script res://tests/test_postseal_help.gd
 run_godot_check sidebar-reach --script res://tests/test_sidebar_reach.gd
+run_godot_check bed-alert --script res://tests/test_bed_alert.gd
 run_godot_check tests --script res://tests/test_runner.gd
 run_godot_check mood-recreation --script res://tests/test_mood_recreation.gd
 run_godot_check stress-break-venting --script res://tests/test_stress_break_venting.gd

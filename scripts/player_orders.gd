@@ -1729,7 +1729,12 @@ func _refresh_alerts() -> void:
 		if building.kind == VaultBuilding.Kind.BED and building.complete and not occupied_bunks.has(building.building_id):
 			free_bunks += 1
 	if residents_needing_bunks > free_bunks:
-		alerts.append("BED SHORTAGE")
+		var rest_critical := false
+		for resident: VaultResident in game.residents:
+			if resident.alive and resident.needs.rest < 15.0:
+				rest_critical = true
+				break
+		alerts.append("BED SHORTAGE" if rest_critical else "BED SHORTAGE · crew rotate")
 	var injured := 0
 	var free_medical := 0
 	for resident: VaultResident in game.residents:
