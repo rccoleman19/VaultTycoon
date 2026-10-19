@@ -173,8 +173,8 @@ func _test_complete() -> void:
 	_assert_equal(game.food_system.meals, 19, "no more meals taken")
 	_assert_equal(game.food_system.salvage, 19, "no more salvage taken, no trickle")
 	game.player_orders.refresh()
-	_assert_false(game.player_orders.annex_box.visible, "the progress card goes away")
-	_assert_true(game.status_message.begins_with("Annex complete"), "status names it")
+	_assert_false(game.player_orders.annex_minus_button.get_parent().visible, "the stepper goes away")
+	_assert_approximately(game.player_orders.annex_bar.value, 1.0, 0.0001, "the bar is full")
 	_dispose(game)
 
 

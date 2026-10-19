@@ -1707,6 +1707,8 @@ func _refresh_alerts() -> void:
 		if not game.oxygen_system.is_breathable():
 			victory_blockers.append("O2 >= 15%")
 		alerts.append("VICTORY PENDING · %s" % " + ".join(victory_blockers))
+	if game.keep_running and game.annex_welcome_left > 0.0 and game.annex_resident() != null:
+		alerts.append(ANNEX_TEXT.welcome % game.annex_resident().resident_name.to_upper())
 	if game.oxygen_system.is_critical():
 		alerts.append("OXYGEN CRITICAL")
 	elif game.oxygen_system.is_low():
@@ -1782,7 +1784,8 @@ func _refresh_alerts() -> void:
 			alerts.append("CRITICAL: %s" % resident.resident_name)
 			break
 	alert_label.text = "STATUS NOMINAL" if alerts.is_empty() else "  ·  ".join(alerts)
-	alert_label.add_theme_color_override("font_color", Color("75d4b4") if alerts.is_empty() else Color("ef6860"))
+	var only_welcome := alerts.size() == 1 and game.keep_running and game.annex_welcome_left > 0.0 and alerts[0].begins_with("NEW CREW")
+	alert_label.add_theme_color_override("font_color", Color("75d4b4") if alerts.is_empty() or only_welcome else Color("ef6860"))
 
 
 func _refresh_power_detail() -> void:
@@ -2857,6 +2860,8 @@ func _is_default_step(step: Dictionary) -> bool:
 func keep_running_default_step() -> Dictionary:
 	if game.annex_active():
 		return {"text": ANNEX_TEXT.next, "tool": "select"}
+	if game.annex_done:
+		return {"text": ANNEX_TEXT.stable_next, "tool": "select"}
 	return {"text": KEEP_RUNNING_TEXT.next, "tool": "select"}
 
 
@@ -2868,6 +2873,9 @@ const ANNEX_TEXT := {
 	"plus": "+",
 	"next": "Next: YOU set the meal reserve · THEY build the Annex",
 	"done": "ANNEX COMPLETE",
+	"open": "ANNEX OPEN · %d crew · vault stable",
+	"stable_next": "Next: YOU enjoy a stable vault · THEY run all of it",
+	"welcome": "NEW CREW · %s MOVES IN",
 }
 var annex_box: VBoxContainer
 var annex_header: Label
@@ -2924,8 +2932,14 @@ func annex_header_text() -> String:
 func _refresh_annex() -> void:
 	if annex_box == null:
 		return
-	annex_box.visible = game.annex_active()
+	annex_box.visible = game.annex_active() or (game.keep_running and game.annex_done and not game.ended)
 	if not annex_box.visible:
+		return
+	var open := game.annex_done
+	annex_minus_button.get_parent().visible = not open
+	if open:
+		annex_header.text = ANNEX_TEXT.open % game.get_alive_count()
+		annex_bar.value = 1.0
 		return
 	annex_header.text = annex_header_text()
 	annex_bar.value = game.annex_progress()

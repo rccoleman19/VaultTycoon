@@ -1731,6 +1731,7 @@ func _advance_keep_running(delta_seconds: float) -> void:
 	var day_before := keep_running_day()
 	keep_running_seconds += delta_seconds
 	_advance_annex(delta_seconds)
+	annex_welcome_left = maxf(0.0, annex_welcome_left - delta_seconds)
 	if keep_running_day() != day_before:
 		save_game(false)
 
@@ -1742,6 +1743,7 @@ func _reset_keep_running() -> void:
 	annex_salvage = 0
 	annex_reserve = ANNEX_RESERVE_DEFAULT
 	annex_done = false
+	annex_welcome_left = 0.0
 	_annex_tick_left = ANNEX_TICK
 	_annex_trickle_left = ANNEX_TRICKLE_INTERVAL
 
@@ -1791,8 +1793,66 @@ func _reconcile_annex() -> void:
 	if annex_meals >= ANNEX_MEALS and annex_salvage >= ANNEX_SALVAGE and not annex_done:
 		annex_done = true
 		_on_annex_completed()
+	elif annex_done and annex_resident() == null:
+		_grant_annex_payoff()
+
+
+# Payoff (north star slice 3): the Annex opens with a bunk, a Grow Tray, a Nutrient Station and a
+# Charge Node (food and power for one more mouth), and a fifth resident moves in. A seeded wing gives them the fifth trait slot when traits exist.
+const ANNEX_RESIDENT_NAME := "Eko"
+const ANNEX_RESIDENT_ID := 5
+const ANNEX_FIXTURES := [VaultBuilding.Kind.BED, VaultBuilding.Kind.GROW_TRAY, VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GENERATOR]
+const ANNEX_WELCOME_SECONDS := 30.0
+const ANNEX_OPEN_STATUS := "ANNEX OPEN: %s moves in. +Bunk, Grow Tray, Nutrient Station, Charge Node."
+var annex_welcome_left := 0.0
 
 
 func _on_annex_completed() -> void:
-	status_message = "Annex complete."
-	status_message_left = 6.0
+	_grant_annex_payoff()
+	annex_welcome_left = ANNEX_WELCOME_SECONDS
+	status_message = ANNEX_OPEN_STATUS % ANNEX_RESIDENT_NAME
+	status_message_left = 10.0
+
+
+func annex_resident() -> VaultResident:
+	for resident in residents:
+		if resident.resident_id == ANNEX_RESIDENT_ID:
+			return resident
+	return null
+
+
+# Idempotent: a vault that already has resident 5 gets nothing twice.
+func _grant_annex_payoff() -> void:
+	if annex_resident() != null:
+		return
+	var cells := _annex_free_cells(ANNEX_FIXTURES.size() + 1)
+	for index in mini(ANNEX_FIXTURES.size(), cells.size()):
+		_spawn_starting_fixture(ANNEX_FIXTURES[index], cells[index], false)
+	var spawn_cell: Vector2i = cells[-1] if cells.size() > ANNEX_FIXTURES.size() else map_grid.get_chamber_center()
+	var resident := VaultResident.new()
+	resident_root.add_child(resident)
+	resident.configure(ANNEX_RESIDENT_ID, ANNEX_RESIDENT_NAME, spawn_cell, map_grid)
+	resident.needs.food = 80.0
+	resident.needs.rest = 80.0
+	resident.died.connect(_on_resident_died)
+	residents.append(resident)
+	if has_method("apply_crew_traits"):
+		call("apply_crew_traits")
+	power_grid.recalculate(buildings)
+	refresh_lighting(true)
+	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
+
+
+func _annex_free_cells(count: int) -> Array[Vector2i]:
+	var center := map_grid.get_chamber_center()
+	var free: Array[Vector2i] = []
+	for cell: Vector2i in map_grid.get_floor_cells():
+		if cell == BreachSystem.HATCH_CELL or get_building_at(cell) != null or map_grid.stockpile_cells.has(cell):
+			continue
+		free.append(cell)
+	free.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		var da := (a - center).length_squared()
+		var db := (b - center).length_squared()
+		return da < db or (da == db and (a.y < b.y or (a.y == b.y and a.x < b.x)))
+	)
+	return free.slice(0, count)

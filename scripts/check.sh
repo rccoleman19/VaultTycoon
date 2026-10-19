@@ -46,6 +46,7 @@ run_godot_check idle-start --script res://tests/test_idle_start.gd
 run_godot_check postseal-help --script res://tests/test_postseal_help.gd
 run_godot_check keep-running --script res://tests/test_keep_running.gd
 run_godot_check annex --script res://tests/test_annex.gd
+run_godot_check annex-payoff --script res://tests/test_annex_payoff.gd
 run_godot_check sidebar-reach --script res://tests/test_sidebar_reach.gd
 run_godot_check bed-alert --script res://tests/test_bed_alert.gd
 run_godot_check tests --script res://tests/test_runner.gd
