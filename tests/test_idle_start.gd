@@ -236,7 +236,7 @@ func _test_card() -> void:
 		return
 	_assert_equal(_card(game), "<hidden>", "hidden at 0 s")
 	_advance_to(game, 30.0)
-	_assert_equal(_card(game), "IDLE START · 1/2 · beds, food, power | Recommended start", "step 1 at 30 s")
+	_assert_equal(_card(game), "IDLE START · 1/2 · beds, food, power | Dig + 2 Beds, Gen, Kitchen, Tray", "step 1 at 30 s")
 	_assert_true(game.player_orders.idle_start_box.get_parent() == game.player_orders.alert_label.get_parent(), "in the right-panel summary")
 	_assert_equal(game.player_orders.idle_start_box.get_index(), game.player_orders.alert_label.get_index() + 1, "directly under the alerts")
 	game.player_orders.idle_start_button.pressed.emit()
@@ -256,7 +256,7 @@ func _test_card() -> void:
 	_dispose(game)
 	game = _game()
 	_advance_to(game, 30.0)
-	_assert_equal(_card(game), "IDLE START · 1/2 · beds, food, power | Recommended start", "offered")
+	_assert_equal(_card(game), "IDLE START · 1/2 · beds, food, power | Dig + 2 Beds, Gen, Kitchen, Tray", "offered")
 	_assert_equal(game.player_orders.idle_start_dismiss_button.text, "Dismiss · don't offer again", "dismiss is labelled")
 	game.player_orders.idle_start_dismiss_button.pressed.emit()
 	_assert_equal(_card(game), "<hidden>", "dismissed: hidden")
@@ -306,7 +306,7 @@ func _test_texts_fit() -> void:
 	var orders := game.player_orders
 	var width := _panel_width(orders)
 	var button_chrome := orders.idle_start_button.get_theme_stylebox("normal").get_minimum_size().x
-	for text: String in ["Recommended start", "Place Air Recycler · 14 salvage", "Place Air Recycler · 999 salvage"]:
+	for text: String in ["Dig + 2 Beds, Gen, Kitchen, Tray", "Place Air Recycler · 14 salvage", "Place Air Recycler · 999 salvage"]:
 		var room := width - button_chrome - _text_width(orders.idle_start_button, text)
 		_assert_true(room >= 12.0, "button '%s' fits with %.0f px to spare" % [text, room])
 	var dismiss_room := width - orders.idle_start_dismiss_button.get_theme_stylebox("normal").get_minimum_size().x - _text_width(orders.idle_start_dismiss_button, "Dismiss · don't offer again")

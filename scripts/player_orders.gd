@@ -2447,7 +2447,7 @@ func _order_hatch_block(first: bool) -> void:
 const IDLE_START_TEXT := {
 	"header_1": "IDLE START · 1/2 · beds, food, power",
 	"header_2": "IDLE START · 2/2 · air",
-	"start": "Recommended start",
+	"start": "Dig + 2 Beds, Gen, Kitchen, Tray",
 	"air": "Place Air Recycler · %d salvage",
 	"dismiss": "Dismiss · don't offer again",
 }
