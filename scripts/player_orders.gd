@@ -793,6 +793,11 @@ func _build_outcome() -> void:
 	outcome_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	outcome_text.custom_minimum_size.y = 92
 	content.add_child(outcome_text)
+	outcome_invested = Label.new()
+	outcome_invested.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	outcome_invested.add_theme_color_override("font_color", Color("efc56b"))
+	outcome_invested.visible = false
+	content.add_child(outcome_invested)
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	content.add_child(row)
@@ -805,6 +810,19 @@ func _build_outcome() -> void:
 	restart_button.pressed.connect(func() -> void: game.new_game(true))
 	row.add_child(restart_button)
 	outcome_panel.visible = false
+
+
+# End-of-run line (midgame slice 4): salvage spent on the Mk II fits still standing. Derived
+# from each fixture's saved upgrade_tier, so a won or lost save reloads to the same number.
+var outcome_invested: Label
+
+
+func mk2_salvage_invested() -> int:
+	var total := 0
+	for building: VaultBuilding in game.buildings:
+		if building.complete and building.upgrade_tier >= VaultBuilding.UPGRADE_TIER_MAX:
+			total += building.get_upgrade_cost()
+	return total
 
 
 func _build_breach_warning() -> void:
@@ -2128,6 +2146,9 @@ func show_outcome(won: bool, survivors: int) -> void:
 	show_work_priorities(false)
 	show_breach_warning(false)
 	outcome_panel.visible = true
+	var invested := mk2_salvage_invested()
+	outcome_invested.text = "Salvage invested: %d in Mk II upgrades" % invested
+	outcome_invested.visible = invested > 0
 	if won:
 		outcome_title.text = "SEAL STABILIZED"
 		outcome_title.add_theme_color_override("font_color", Color("75d4b4"))

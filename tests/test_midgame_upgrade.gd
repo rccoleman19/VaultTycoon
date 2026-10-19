@@ -13,6 +13,7 @@ func _run() -> void:
 	_run_case("a save round-trips the tier; old saves load as Mk I; bad tiers are rejected", _test_save)
 	_run_case("refunds are 6 for Mk I and 15 for Mk II; a new wing resets", _test_refund_and_new_wing)
 	_run_case("Mk II fixtures wear a glowing salvage-gold trim on the map, derived from the tier", _test_mk2_trim)
+	_run_case("win and loss screens add the salvage invested in standing Mk II fits", _test_outcome_invested)
 	_run_case("a managed wing buys Mk II after the seal, grows more food and still wins", _test_playthrough)
 
 	print("")
@@ -362,3 +363,48 @@ func _test_mk2_trim() -> void:
 	view.sync_actors([], game.buildings, false)
 	_assert_true(_trim(view, game.get_building_by_id(tray_id)) != null, "a loaded Mk II tray wears the trim again")
 	_dispose(game)
+
+
+func _test_outcome_invested() -> void:
+	var setup := _tray_game(80)
+	var game: VaultGame = setup[0]
+	var tray: VaultBuilding = setup[1]
+	var orders := game.player_orders
+	var node := _first_kind(game, VaultBuilding.Kind.GENERATOR)
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(26, 12))
+	var tray_id := tray.building_id
+	orders.show_outcome(true, 4)
+	_assert_false(orders.outcome_invested.visible, "no Mk II, no line")
+	_assert_equal(orders.mk2_salvage_invested(), 0, "nothing invested")
+	game.day_cycle.deserialize({"elapsed_seconds": 70.0, "current_day": 2, "completed": false})
+	game.breach_system.advance(0.0, 70.0)
+	game.breach_system.patch_delivered = BreachSystem.PATCH_COST
+	game.breach_system.apply_patch_work(100.0)
+	game.job_system.rebuild_from_state()
+	_assert_true(game.upgrade_building(tray.building_id), "Grow Mk II")
+	_assert_true(game.upgrade_building(node.building_id), "Charge Mk II after the fit order")
+	orders.show_outcome(true, 4)
+	_assert_true(orders.outcome_invested.visible, "the win screen shows the line")
+	_assert_equal(orders.outcome_invested.text, "Salvage invested: 36 in Mk II upgrades", "18 + 18")
+	var content := orders.outcome_invested.get_parent()
+	_assert_equal(content, orders.outcome_text.get_parent(), "it sits in the outcome panel")
+	_assert_equal(orders.outcome_invested.get_index(), orders.outcome_text.get_index() + 1, "right under the outcome text")
+	orders.show_outcome(false, 0)
+	_assert_equal(orders.outcome_invested.text, "Salvage invested: 36 in Mk II upgrades", "the loss screen shows it too")
+	_assert_true(orders.outcome_invested.visible, "visible on a loss")
+	var snapshot: Dictionary = JSON.parse_string(JSON.stringify(game.create_snapshot()))
+	_assert_false(JSON.stringify(snapshot).contains("invested"), "nothing new is saved")
+	_assert_true(game.apply_snapshot(snapshot), "the save loads")
+	orders.show_outcome(true, 4)
+	_assert_equal(orders.outcome_invested.text, "Salvage invested: 36 in Mk II upgrades", "the same number after a load")
+	_assert_true(game.deconstruct_building(tray_id), "a Mk II tray can be removed")
+	orders.show_outcome(true, 4)
+	_assert_equal(orders.outcome_invested.text, "Salvage invested: 18 in Mk II upgrades", "only standing fits count")
+	_dispose(game)
+
+
+func _first_kind(game: VaultGame, kind: int) -> VaultBuilding:
+	for building: VaultBuilding in game.buildings:
+		if building.kind == kind and not building.is_emergency_core:
+			return building
+	return null
