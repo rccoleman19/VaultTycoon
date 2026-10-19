@@ -18,11 +18,11 @@ const MAX_WORK_PRIORITY := PRIORITY_LOWEST
 # Wing-seed slice 3: one seeded trait per resident, each a single small upside. Frozen order.
 const TRAIT_POOL: Array[String] = ["DIGGER", "CHEF", "FRUGAL", "CALM", "PATCHER"]
 const TRAIT_EFFECTS := {
-	"DIGGER": "Dig work +25%",
-	"CHEF": "Cook work +25%",
+	"DIGGER": "Dig +25%",
+	"CHEF": "Cook +25%",
 	"FRUGAL": "Hunger -15%",
-	"CALM": "Base mood loss -25%",
-	"PATCHER": "Hatch patching +15%",
+	"CALM": "Mood loss -25%",
+	"PATCHER": "Patch +15%",
 }
 const TRAIT_SALT := 300
 
