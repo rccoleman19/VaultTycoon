@@ -38,6 +38,22 @@ run_godot_check() {
 cd "$PROJECT_ROOT"
 
 run_godot_check import --editor --quit
+# Mid-game salvage sink (QA 2026-10-18c #3, slice 1).
+run_godot_check midgame-upgrade --script res://tests/test_midgame_upgrade.gd
+run_godot_check wing-orders --script res://tests/test_wing_orders.gd
+run_godot_check post-seal-pacing --script res://tests/test_post_seal_pacing.gd
+run_godot_check idle-start --script res://tests/test_idle_start.gd
+run_godot_check postseal-help --script res://tests/test_postseal_help.gd
+run_godot_check keep-running --script res://tests/test_keep_running.gd
+run_godot_check keep-running-food --script res://tests/test_keep_running_food.gd
+run_godot_check annex --script res://tests/test_annex.gd
+run_godot_check annex-payoff --script res://tests/test_annex_payoff.gd
+run_godot_check annex-room --script res://tests/test_annex_room.gd
+run_godot_check comfort --script res://tests/test_comfort.gd
+run_godot_check feast --script res://tests/test_feast.gd
+run_godot_check kr-wellbeing --script res://tests/test_kr_wellbeing.gd
+run_godot_check sidebar-reach --script res://tests/test_sidebar_reach.gd
+run_godot_check bed-alert --script res://tests/test_bed_alert.gd
 run_godot_check tests --script res://tests/test_runner.gd
 run_godot_check mood-recreation --script res://tests/test_mood_recreation.gd
 run_godot_check stress-break-venting --script res://tests/test_stress_break_venting.gd

@@ -56,6 +56,19 @@ var manually_disabled := false
 var is_emergency_core := false
 var production_progress := 0.0
 var reserved_by := -1
+# Mid-game salvage sink (QA 2026-10-18c #3, slice 1): an explicit post-seal Mk II purchase.
+# Tier 1 is every fixture as built; only a completed Grow Tray can reach tier 2.
+const UPGRADE_TIER_BASE := 1
+const UPGRADE_TIER_MAX := 2
+const GROW_MK2_COST := 18
+const GROW_MK2_SECONDS := 6.0
+# Wing orders (QA 2026-10-18c #3, slice 2) unlock these Mk II fits; game.gd owns the unlock check.
+const CHARGE_MK2_COST := 18
+const CHARGE_MK2_OUTPUT := 10
+const AIR_MK2_COST := 18
+const AIR_MK2_POWER := 2
+const UPGRADABLE_KINDS := [Kind.GROW_TRAY, Kind.GENERATOR, Kind.AIR_RECYCLER]
+var upgrade_tier := UPGRADE_TIER_BASE
 
 
 func configure(new_id: int, new_kind: Kind, new_cell: Vector2i, built := false) -> void:
@@ -72,7 +85,28 @@ func configure(new_id: int, new_kind: Kind, new_cell: Vector2i, built := false) 
 func get_display_name() -> String:
 	if is_emergency_core:
 		return "Emergency Core"
-	return KIND_NAMES.get(kind, "Fixture")
+	var base_name: String = KIND_NAMES.get(kind, "Fixture")
+	return base_name + " Mk II" if upgrade_tier >= UPGRADE_TIER_MAX else base_name
+
+
+func can_take_upgrade() -> bool:
+	return kind in UPGRADABLE_KINDS and complete and not is_emergency_core and upgrade_tier < UPGRADE_TIER_MAX
+
+
+func get_upgrade_cost() -> int:
+	match kind:
+		Kind.GROW_TRAY:
+			return GROW_MK2_COST
+		Kind.GENERATOR:
+			return CHARGE_MK2_COST
+		Kind.AIR_RECYCLER:
+			return AIR_MK2_COST
+	return 0
+
+
+# Seconds per raw food for this tray; Mk I keeps FoodSystem.GROW_SECONDS.
+func get_grow_seconds() -> float:
+	return GROW_MK2_SECONDS if upgrade_tier >= UPGRADE_TIER_MAX else FoodSystem.GROW_SECONDS
 
 
 func get_cost() -> int:
@@ -82,7 +116,8 @@ func get_cost() -> int:
 func get_deconstruct_refund() -> int:
 	if is_emergency_core:
 		return 0
-	return floori(float(get_cost()) * 0.5)
+	var invested := get_cost() + (get_upgrade_cost() if upgrade_tier >= UPGRADE_TIER_MAX else 0)
+	return floori(float(invested) * 0.5)
 
 
 func get_build_time() -> float:
@@ -96,6 +131,8 @@ func get_power_demand() -> int:
 
 
 func get_base_power_demand() -> int:
+	if kind == Kind.AIR_RECYCLER and upgrade_tier >= UPGRADE_TIER_MAX:
+		return AIR_MK2_POWER
 	return int(POWER_DEMAND.get(kind, 0))
 
 
@@ -124,7 +161,9 @@ static func get_default_power_priority(building_kind: int) -> PowerPriority:
 func get_power_output() -> int:
 	if not complete or kind != Kind.GENERATOR:
 		return 0
-	return 2 if is_emergency_core else 7
+	if is_emergency_core:
+		return 2
+	return CHARGE_MK2_OUTPUT if upgrade_tier >= UPGRADE_TIER_MAX else 7
 
 
 func needs_supply() -> bool:
@@ -165,6 +204,7 @@ func serialize() -> Dictionary:
 		"manually_disabled": manually_disabled,
 		"is_emergency_core": is_emergency_core,
 		"production_progress": production_progress,
+		"upgrade_tier": upgrade_tier,
 	}
 
 
@@ -177,6 +217,7 @@ func deserialize(data: Dictionary) -> void:
 	manually_disabled = bool(data.get("manually_disabled", false))
 	is_emergency_core = bool(data.get("is_emergency_core", false))
 	production_progress = float(data.get("production_progress", 0.0))
+	upgrade_tier = int(data.get("upgrade_tier", UPGRADE_TIER_BASE))
 	queue_redraw()
 
 

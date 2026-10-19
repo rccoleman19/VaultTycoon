@@ -10,6 +10,7 @@ var resource_label: Label
 var power_label: Label
 var pause_button: Button
 var objective_label: Label
+var also_label: Label
 var alert_label: Label
 var crew_mood_label: Label
 var crew_mood_bar: ProgressBar
@@ -24,6 +25,8 @@ var breach_focus_button: Button
 var right_scroll: ScrollContainer
 var details_box: VBoxContainer
 var details_toggle: Button
+# Divides the pinned summary from the roster; hidden while DETAILS opens at the top of the scroll.
+var summary_separator: HSeparator
 var _details_expanded := false
 var _details_urgencies: Dictionary = {}
 var _details_resident_instance_id := 0
@@ -40,6 +43,21 @@ var fixture_header: Label
 var fixture_controls: HBoxContainer
 var fixture_power_button: Button
 var fixture_deconstruct_button: Button
+# Mid-game salvage sink (QA 2026-10-18c #3, slice 1): an optional offer outside Next, plus the
+# inspector purchase row. Both stay hidden until the hatch is sealed.
+var upgrade_offer_button: Button
+var reclaim_button: Button
+var idle_start_box: VBoxContainer
+var idle_start_header: Label
+var idle_start_button: Button
+var idle_start_dismiss_button: Button
+var fixture_upgrade_row: HBoxContainer
+var fixture_upgrade_button: Button
+# Wing orders (QA 2026-10-18c #3, slice 2): a compact post-seal panel under the offer, outside
+# Next and DETAILS. A done row selects a fixture that its reward unlocked.
+var wing_orders_box: VBoxContainer
+var wing_orders_header: Label
+var wing_order_rows := {}
 var need_labels: Dictionary = {}
 var need_bars: Dictionary = {}
 var work_buttons: Dictionary = {}
@@ -162,20 +180,61 @@ func _build_interface() -> void:
 	objective_label.add_theme_font_size_override("font_size", 16)
 	objective_label.custom_minimum_size.y = 42
 	summary.add_child(objective_label)
+	also_label = Label.new()
+	also_label.visible = false
+	also_label.add_theme_color_override("font_color", Color("a8946a"))
+	also_label.add_theme_font_size_override("font_size", 13)
+	summary.add_child(also_label)
 	alert_label = Label.new()
 	alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	alert_label.custom_minimum_size.y = 34
 	summary.add_child(alert_label)
+	_build_idle_start_card(summary)
+	_build_comfort_card(summary)
+	_build_annex_card(summary)
+	upgrade_offer_button = Button.new()
+	upgrade_offer_button.visible = false
+	upgrade_offer_button.custom_minimum_size.y = 26
+	upgrade_offer_button.clip_text = true
+	upgrade_offer_button.tooltip_text = "Optional post-seal Mk II fit: selects the fixture; buy it in the inspector. Charge Mk II gives +3 power for a second Grow Tray."
+	upgrade_offer_button.pressed.connect(_on_upgrade_offer_pressed)
+	summary.add_child(upgrade_offer_button)
+	wing_orders_box = VBoxContainer.new()
+	wing_orders_box.visible = false
+	wing_orders_box.add_theme_constant_override("separation", 2)
+	summary.add_child(wing_orders_box)
+	wing_orders_header = Label.new()
+	wing_orders_header.add_theme_color_override("font_color", Color("8faeb7"))
+	wing_orders_header.add_theme_font_size_override("font_size", 13)
+	wing_orders_box.add_child(wing_orders_header)
+	reclaim_button = Button.new()
+	reclaim_button.clip_text = true
+	reclaim_button.custom_minimum_size.y = 24
+	reclaim_button.add_theme_font_size_override("font_size", 13)
+	reclaim_button.tooltip_text = "Optional: start reclaiming the sealed wing for salvage (+%d now, +%d every %d s, %d times)." % [VaultGame.RECLAIM_START_SALVAGE, VaultGame.RECLAIM_DELIVERY, roundi(VaultGame.RECLAIM_INTERVAL), VaultGame.RECLAIM_DELIVERIES]
+	reclaim_button.pressed.connect(func() -> void: game.start_reclamation())
+	wing_orders_box.add_child(reclaim_button)
+	for order_id: String in VaultGame.WING_ORDER_IDS:
+		var row := Button.new()
+		row.flat = true
+		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		row.clip_text = true
+		row.custom_minimum_size.y = 22
+		row.add_theme_font_size_override("font_size", 13)
+		row.pressed.connect(_on_wing_order_pressed.bind(order_id))
+		wing_order_rows[order_id] = row
+		wing_orders_box.add_child(row)
 	details_toggle = Button.new()
 	details_toggle.text = "DETAILS ▸"
 	details_toggle.tooltip_text = "Show or hide mood, power, air, hatch, and light readouts."
 	details_toggle.custom_minimum_size.y = 26
 	details_toggle.pressed.connect(_toggle_details_rail)
 	summary.add_child(details_toggle)
+	# DETAILS readouts sit at the top of the roster/inspector scroll (added below), so opening them
+	# never pushes the inspector off a 1280x720 screen once the post-seal offer and orders show.
 	details_box = VBoxContainer.new()
 	details_box.add_theme_constant_override("separation", 4)
 	details_box.visible = false
-	summary.add_child(details_box)
 	var mood_header := Label.new()
 	mood_header.text = "CREW MOOD"
 	mood_header.add_theme_color_override("font_color", Color("8faeb7"))
@@ -194,7 +253,7 @@ func _build_interface() -> void:
 	lighting_row.add_theme_constant_override("separation", 6)
 	details_box.add_child(lighting_row)
 	lighting_label = Label.new()
-	lighting_label.custom_minimum_size = Vector2(188, 26)
+	lighting_label.custom_minimum_size = Vector2(LIGHTING_LABEL_MIN_WIDTH, 26)
 	lighting_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lighting_label.clip_text = true
 	lighting_label.add_theme_font_size_override("font_size", 14)
@@ -246,7 +305,9 @@ func _build_interface() -> void:
 	breach_focus_button.custom_minimum_size.y = 26
 	breach_focus_button.pressed.connect(func() -> void: game.focus_breach())
 	details_box.add_child(breach_focus_button)
-	summary.add_child(HSeparator.new())
+	details_box.add_child(HSeparator.new())
+	summary_separator = HSeparator.new()
+	summary.add_child(summary_separator)
 	right_scroll = ScrollContainer.new()
 	right_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	right_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -256,6 +317,7 @@ func _build_interface() -> void:
 	side.add_theme_constant_override("separation", 4)
 	side.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right_scroll.add_child(side)
+	side.add_child(details_box)
 	var roster_header_row := HBoxContainer.new()
 	roster_header_row.add_theme_constant_override("separation", 6)
 	side.add_child(roster_header_row)
@@ -354,6 +416,13 @@ func _build_interface() -> void:
 	fixture_deconstruct_button.pressed.connect(_on_fixture_deconstruct_pressed)
 	fixture_controls.add_child(fixture_deconstruct_button)
 	side.add_child(fixture_controls)
+	fixture_upgrade_row = HBoxContainer.new()
+	fixture_upgrade_row.visible = false
+	fixture_upgrade_button = Button.new()
+	fixture_upgrade_button.custom_minimum_size = Vector2(189, 28)
+	fixture_upgrade_button.pressed.connect(_on_fixture_upgrade_pressed)
+	fixture_upgrade_row.add_child(fixture_upgrade_button)
+	side.add_child(fixture_upgrade_row)
 	_hide_fixture_controls()
 
 	bottom_panel = PanelContainer.new()
@@ -745,6 +814,11 @@ func _build_outcome() -> void:
 	outcome_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	outcome_text.custom_minimum_size.y = 92
 	content.add_child(outcome_text)
+	outcome_invested = Label.new()
+	outcome_invested.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	outcome_invested.add_theme_color_override("font_color", Color("efc56b"))
+	outcome_invested.visible = false
+	content.add_child(outcome_invested)
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	content.add_child(row)
@@ -757,6 +831,19 @@ func _build_outcome() -> void:
 	restart_button.pressed.connect(func() -> void: game.new_game(true))
 	row.add_child(restart_button)
 	outcome_panel.visible = false
+
+
+# End-of-run line (midgame slice 4): salvage spent on the Mk II fits still standing. Derived
+# from each fixture's saved upgrade_tier, so a won or lost save reloads to the same number.
+var outcome_invested: Label
+
+
+func mk2_salvage_invested() -> int:
+	var total := 0
+	for building: VaultBuilding in game.buildings:
+		if building.complete and building.upgrade_tier >= VaultBuilding.UPGRADE_TIER_MAX:
+			total += building.get_upgrade_cost()
+	return total
 
 
 func _build_breach_warning() -> void:
@@ -811,7 +898,7 @@ func _build_breach_warning() -> void:
 func refresh() -> void:
 	if game == null or clock_label == null:
 		return
-	clock_label.text = game.day_cycle.get_clock_text()
+	clock_label.text = game.day_cycle.get_clock_text() if not game.keep_running else keep_running_clock_text()
 	resource_label.text = "MEALS %d (+%d)  RAW %d (+%d)  SALVAGE %d" % [
 		game.food_system.meals,
 		game.job_system.get_pending_meals(),
@@ -829,6 +916,8 @@ func refresh() -> void:
 	pause_button.text = "RESUME" if game.user_paused else "PAUSE"
 	var active_help := game.status_message if game.status_message_left > 0.0 else game._tool_help(game.active_tool)
 	var step: Dictionary = _primary_next_step()
+	if game.keep_running and not game.ended:
+		step = keep_running_next_step()
 	if game.status_message_left <= 0.0 and game.active_tool == "select":
 		var select_help := "Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job."
 		if not game.tutorial_open and not game.ended:
@@ -872,6 +961,10 @@ func refresh() -> void:
 			or game.ended
 			or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
 		)
+	_refresh_upgrade_offer()
+	_refresh_idle_start()
+	_refresh_comfort()
+	_refresh_annex()
 	_refresh_roster()
 	_refresh_work_priorities_board()
 	_refresh_crew_mood()
@@ -906,6 +999,10 @@ func _toggle_details_rail() -> void:
 		details_box.visible = _details_expanded
 	if details_toggle != null:
 		details_toggle.text = "DETAILS ▾" if _details_expanded else "DETAILS ▸"
+	if summary_separator != null:
+		summary_separator.visible = not _details_expanded
+	if _details_expanded and right_scroll != null:
+		right_scroll.scroll_vertical = 0
 
 
 func _unfinished_charge_count() -> int:
@@ -1003,16 +1100,16 @@ func _primary_next_step() -> Dictionary:
 				if kitchen.kind == VaultBuilding.Kind.KITCHEN and not kitchen.complete:
 					unfinished_kitchens += 1
 			if unfinished_kitchens >= 1:
-				return {
+				return _food_step({
 					"text": "Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station",
 					"help": "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint.",
 					"tool": "select",
-				}
-			return {
+				})
+			return _food_step({
 				"text": "Next: YOU place a Nutrient Station · THEY cook",
 				"help": "Place and power a Nutrient Station so Cook can turn raw food into meals.",
 				"tool": "kitchen",
-			}
+			})
 		if completed_kitchens > 0 and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) == 0:
 			var all_kitchens_disabled := true
 			for kitchen: VaultBuilding in game.buildings:
@@ -1020,18 +1117,18 @@ func _primary_next_step() -> Dictionary:
 					all_kitchens_disabled = false
 					break
 			if all_kitchens_disabled:
-				return {
+				return _food_step({
 					"text": "Next: YOU power the Nutrient Station · THEY cook",
 					"help": "Power the Nutrient Station so Cook can run.",
 					"tool": "select",
-				}
+				})
 			if _unfinished_charge_count() > 0:
-				return _charge_finish_step()
-			return {
+				return _food_step(_charge_finish_step())
+			return _food_step({
 				"text": "Next: YOU place a Charge Node · THEY power the kitchen",
 				"help": "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power.",
 				"tool": "generator",
-			}
+			})
 	if mood_break_risk and game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) < 1:
 		var unfinished_rec := 0
 		for rec: VaultBuilding in game.buildings:
@@ -1113,23 +1210,23 @@ func _primary_next_step() -> Dictionary:
 		}
 	if critical_resident and game.food_system.meals < game.get_alive_count() and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) >= 1:
 		if not _has_eligible_worker("haul") and (game.job_system.get_pending_meals() > 0 or (not game.food_system.can_cook() and game.job_system.get_pending_raw_food() > 0)):
-			return {
+			return _food_step({
 				"text": "Next: YOU enable Haul · THEY deliver food",
 				"tool": "select",
 				"help": "Open PRIORITIES [P] and enable Haul on a living, undrafted resident. Food is waiting for delivery.",
-			}
+			})
 		if not _has_eligible_worker("cook"):
-			return {
+			return _food_step({
 				"text": "Next: YOU enable Cook · THEY cook",
 				"tool": "select",
 				"help": "Enable Cook on a living, undrafted resident so the powered Nutrient Station can run.",
-			}
+			})
 		elif game.food_system.can_cook():
-			return {
+			return _food_step({
 				"text": "Next: YOU leave Cook on · THEY cook",
 				"tool": "select",
 				"help": "Meals are short. The powered Nutrient Station can cook.",
-			}
+			})
 		else:
 			if game.job_system.get_pending_meals() == 0 and game.job_system.get_pending_raw_food() == 0:
 				var total_trays := 0
@@ -1144,36 +1241,36 @@ func _primary_next_step() -> Dictionary:
 						if not tray.manually_disabled:
 							enabled_trays += 1
 				if total_trays == 0:
-					return {
+					return _food_step({
 						"text": "Next: YOU place a Grow Tray · THEY grow",
 						"tool": "grow",
 						"help": "Place a Grow Tray and keep it powered. Its raw food output needs Haul delivery before Cook can use it.",
-					}
+					})
 				if completed_trays == 0:
-					return {
+					return _food_step({
 						"text": "Next: YOU leave Haul + Craft on · THEY finish the Grow Tray",
 						"tool": "select",
 						"help": "Keep Haul + Craft above OFF so crew supply and finish the Grow Tray blueprint.",
-					}
+					})
 				if game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) == 0:
 					if enabled_trays == 0:
-						return {
+						return _food_step({
 							"text": "Next: YOU enable a Grow Tray · THEY grow",
 							"tool": "select",
 							"help": "Enable a completed Grow Tray so it can grow raw food. Haul delivers its output for Cook.",
-						}
+						})
 					if _unfinished_charge_count() > 0:
-						return _charge_finish_step()
-					return {
+						return _food_step(_charge_finish_step())
+					return _food_step({
 						"text": "Next: YOU place a Charge Node · THEY power the Grow Tray",
 						"tool": "generator",
 						"help": "The grid lacks available power for the Grow Tray. Place a Charge Node to add 7 power.",
-					}
-			return {
+					})
+			return _food_step({
 				"text": "Next: YOU leave Cook on · THEY cook",
 				"tool": "select",
 				"help": "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food.",
-			}
+			})
 	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
 	var floor_count := game.map_grid.get_floor_cells().size()
 	var dig_marks := game.map_grid.dig_marks.size()
@@ -1223,32 +1320,32 @@ func _primary_next_step() -> Dictionary:
 		if game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY) < 1:
 			for tray: VaultBuilding in game.buildings:
 				if tray.kind == VaultBuilding.Kind.GROW_TRAY and not tray.complete:
-					return {
+					return _food_step({
 						"text": "Next: YOU leave Haul + Craft on · THEY finish the Grow Tray",
 						"help": "Keep Haul + Craft above OFF so crew supply and finish the Grow Tray blueprint.",
 						"tool": "select",
-					}
-			return {
+					})
+			return _food_step({
 				"text": "Next: YOU place Grow Tray · THEY haul output",
 				"help": "Designate GROW and keep it powered. Haul defaults move raw food to stock.",
 				"tool": "grow",
-			}
+			})
 		if game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) < 1:
 			var unfinished_kitchens := 0
 			for kitchen: VaultBuilding in game.buildings:
 				if kitchen.kind == VaultBuilding.Kind.KITCHEN and not kitchen.complete:
 					unfinished_kitchens += 1
 			if unfinished_kitchens >= 1:
-				return {
+				return _food_step({
 					"text": "Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station",
 					"help": "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint.",
 					"tool": "select",
-				}
-			return {
+				})
+			return _food_step({
 				"text": "Next: YOU place Nutrient Station · THEY cook/haul",
 				"help": "Designate NUTRI, power it, leave Cook + Haul above OFF.",
 				"tool": "kitchen",
-			}
+			})
 		var food_capacity_short := false
 		if cook_ok and haul_ok:
 			food_capacity_short = true
@@ -1265,17 +1362,17 @@ func _primary_next_step() -> Dictionary:
 					break
 		if food_capacity_short:
 			if _unfinished_charge_count() > 0:
-				return _charge_finish_step()
-			return {
+				return _food_step(_charge_finish_step())
+			return _food_step({
 				"text": "Next: YOU place a Charge Node · THEY add power",
 				"help": "The grid lacks power for the food chain. Place a Charge Node to add 7 power.",
 				"tool": "generator",
-			}
-		return {
+			})
+		return _food_step({
 			"text": "Next: YOU power food chain · THEY cook/haul alone",
 			"help": "Enable Grow + Nutrient power. Keep Cook/Haul above OFF so defaults keep working.",
 			"tool": "select",
-		}
+		})
 	if game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) < 1:
 		var completed_air := 0
 		var unfinished_air := 0
@@ -1358,6 +1455,12 @@ func _primary_next_step() -> Dictionary:
 
 
 func _refresh_objective() -> void:
+	if game.keep_running and not game.ended:
+		var kr_step := keep_running_next_step()
+		objective_label.text = str(kr_step.text)
+		objective_label.add_theme_color_override("font_color", Color("efc56b"))
+		_expand_details_on_urgency()
+		return
 	if game.day_cycle.completed and not game.ended:
 		var blockers: Array[String] = []
 		if not game.breach_system.is_sealed():
@@ -1390,7 +1493,7 @@ func _expand_details_on_urgency() -> void:
 		active["brownout"] = true
 	if game.oxygen_system.is_low():
 		active["low_o2"] = true
-	if game.day_cycle.completed and not game.ended and (
+	if game.day_cycle.completed and not game.ended and not game.keep_running and (
 		not game.breach_system.is_sealed() or not game.oxygen_system.is_breathable()
 	):
 		active["victory_pending"] = true
@@ -1405,6 +1508,10 @@ func _expand_details_on_urgency() -> void:
 		details_box.visible = true
 		if details_toggle != null:
 			details_toggle.text = "DETAILS ▾"
+		if summary_separator != null:
+			summary_separator.visible = false
+		if right_scroll != null:
+			right_scroll.scroll_vertical = 0
 
 
 func _refresh_roster() -> void:
@@ -1539,7 +1646,7 @@ func _refresh_inspector() -> void:
 				]
 			elif building.kind == VaultBuilding.Kind.GROW_TRAY:
 				inspector_state.text += "\nGrowth: %d%% · yields 1 raw\nAwaiting Haul: %d raw" % [
-					floori(building.production_progress / FoodSystem.GROW_SECONDS * 100.0),
+					floori(building.production_progress / building.get_grow_seconds() * 100.0),
 					game.job_system.get_pending_raw_food_at(building.cell),
 				]
 			elif building.kind == VaultBuilding.Kind.KITCHEN:
@@ -1595,13 +1702,15 @@ func _refresh_alerts() -> void:
 		alerts.append("DRAFTED CREW %d · AUTO WORK PAUSED" % drafted_count)
 		if game.breach_system.phase == BreachSystem.Phase.WARNING or game.breach_system.phase == BreachSystem.Phase.OPEN:
 			alerts.append("HATCH RESPONSE EXCLUDES DRAFTED CREW")
-	if game.day_cycle.completed and not game.ended:
+	if game.day_cycle.completed and not game.ended and not game.keep_running:
 		var victory_blockers: Array[String] = []
 		if not game.breach_system.is_sealed():
 			victory_blockers.append("SEAL HATCH")
 		if not game.oxygen_system.is_breathable():
 			victory_blockers.append("O2 >= 15%")
 		alerts.append("VICTORY PENDING · %s" % " + ".join(victory_blockers))
+	if game.keep_running and game.annex_welcome_left > 0.0 and game.annex_resident() != null:
+		alerts.append(ANNEX_TEXT.welcome % game.annex_resident().resident_name.to_upper())
 	if game.oxygen_system.is_critical():
 		alerts.append("OXYGEN CRITICAL")
 	elif game.oxygen_system.is_low():
@@ -1634,7 +1743,12 @@ func _refresh_alerts() -> void:
 		if building.kind == VaultBuilding.Kind.BED and building.complete and not occupied_bunks.has(building.building_id):
 			free_bunks += 1
 	if residents_needing_bunks > free_bunks:
-		alerts.append("BED SHORTAGE")
+		var rest_critical := false
+		for resident: VaultResident in game.residents:
+			if resident.alive and resident.needs.rest < 15.0:
+				rest_critical = true
+				break
+		alerts.append("BED SHORTAGE" if rest_critical else "BED SHORTAGE · crew rotate")
 	var injured := 0
 	var free_medical := 0
 	for resident: VaultResident in game.residents:
@@ -1664,6 +1778,8 @@ func _refresh_alerts() -> void:
 			alerts.append("MOOD BREAK RISK · %s" % lowest_mood_resident.resident_name)
 		elif lowest_mood_resident.needs.mood < 40.0:
 			alerts.append("MOOD STRESSED · %s" % lowest_mood_resident.resident_name)
+	if game.keep_running and not game.ended:
+		_keep_running_injury_alert(alerts, free_medical)
 	var cook_enabled := _has_eligible_worker("cook")
 	if not cook_enabled:
 		alerts.append("NO COOK ENABLED")
@@ -1672,7 +1788,8 @@ func _refresh_alerts() -> void:
 			alerts.append("CRITICAL: %s" % resident.resident_name)
 			break
 	alert_label.text = "STATUS NOMINAL" if alerts.is_empty() else "  ·  ".join(alerts)
-	alert_label.add_theme_color_override("font_color", Color("75d4b4") if alerts.is_empty() else Color("ef6860"))
+	var only_welcome := alerts.size() == 1 and game.keep_running and game.annex_welcome_left > 0.0 and alerts[0].begins_with("NEW CREW")
+	alert_label.add_theme_color_override("font_color", Color("75d4b4") if alerts.is_empty() or only_welcome else Color("ef6860"))
 
 
 func _refresh_power_detail() -> void:
@@ -1770,6 +1887,7 @@ func _refresh_oxygen() -> void:
 func _refresh_breach() -> void:
 	var breach := game.breach_system
 	breach_focus_button.visible = breach.phase != BreachSystem.Phase.DORMANT
+	_order_hatch_block(breach.is_response_active())
 	match breach.phase:
 		BreachSystem.Phase.DORMANT:
 			breach_label.text = "WATCH ACTIVE · TEST IN %s" % _format_seconds(breach.get_time_to_warning(game.day_cycle.elapsed_seconds))
@@ -1841,6 +1959,7 @@ func _refresh_checklist() -> void:
 		var marker := "[color=#75d4b4][DONE][/color]" if check[0] else "[color=#efc56b][    ][/color]"
 		lines.append("%s  %s" % [marker, check[1]])
 	if not _briefing_is_opening:
+		lines.append_array(postseal_checklist_lines())
 		var rec_done := game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) >= 1
 		var rec_marker := "[color=#75d4b4][DONE][/color]" if rec_done else "[color=#8faeb7][OPTIONAL][/color]"
 		lines.append("%s  Power a Rec Console; free 1 power if shed" % rec_marker)
@@ -1855,6 +1974,34 @@ func _refresh_checklist() -> void:
 			briefing_tips_label.text = "Tips: YOU designate · THEY auto-work · HELP · P specialize · R draft optional"
 		else:
 			briefing_tips_label.text = "Tips: Esc closes Help · P priorities · L light map · R draft / force orders"
+
+
+# QA-e #2: after the seal, HELP names the post-seal economy the right panel offers.
+func postseal_checklist_lines() -> Array[String]:
+	var lines: Array[String] = []
+	if game.ended or not game.breach_system.is_sealed():
+		return lines
+	var done_marker := "[color=#75d4b4][DONE][/color]"
+	var open_marker := "[color=#efc56b][    ][/color]"
+	lines.append("[color=#8faeb7]AFTER THE SEAL[/color]")
+	for order_id: String in VaultGame.WING_ORDER_IDS:
+		var goal: String = WING_ORDER_TEXT[order_id][0]
+		var claimed := order_id in game.wing_orders_claimed
+		if order_id == VaultGame.ORDER_STOCK_MEALS:
+			goal = goal % VaultGame.ORDER_STOCK_MEALS_TARGET
+			if not claimed:
+				goal += " (%d/%d)" % [mini(game.food_system.meals, VaultGame.ORDER_STOCK_MEALS_TARGET), VaultGame.ORDER_STOCK_MEALS_TARGET]
+		lines.append("%s  Wing order: %s → unlocks %s" % [done_marker if claimed else open_marker, goal, WING_ORDER_TEXT[order_id][1]])
+	var reclaim_marker := open_marker
+	if game.reclaim_active:
+		reclaim_marker = done_marker if game.reclaim_paid >= VaultGame.RECLAIM_DELIVERIES else "[color=#75d4b4][ACTIVE][/color]"
+	lines.append("%s  %s" % [reclaim_marker, reclaim_button_text()])
+	var target := _upgrade_offer_target()
+	if target != null:
+		lines.append("[color=#efc56b][OFFER][/color]  Mk II: %s" % upgrade_offer_text(target))
+	else:
+		lines.append("[color=#8faeb7][OFFER][/color]  Mk II: nothing to fit right now")
+	return lines
 
 
 func _has_eligible_worker(work_type: String) -> bool:
@@ -2070,6 +2217,9 @@ func show_outcome(won: bool, survivors: int) -> void:
 	show_work_priorities(false)
 	show_breach_warning(false)
 	outcome_panel.visible = true
+	var invested := mk2_salvage_invested()
+	outcome_invested.text = "Salvage invested: %d in Mk II upgrades" % invested
+	outcome_invested.visible = invested > 0
 	if won:
 		outcome_title.text = "SEAL STABILIZED"
 		outcome_title.add_theme_color_override("font_color", Color("75d4b4"))
@@ -2078,6 +2228,7 @@ func show_outcome(won: bool, survivors: int) -> void:
 		outcome_title.text = "WING LOST"
 		outcome_title.add_theme_color_override("font_color", Color("ef6860"))
 		outcome_text.text = "No residents remain alive. Reopen the last daily checkpoint or initialize a new wing and stabilize supplies, powered air recycling, and the pressure hatch sooner."
+	_show_keep_running_button(won)
 
 
 func hide_outcome() -> void:
@@ -2176,6 +2327,7 @@ func _show_fixture_controls(building: VaultBuilding) -> void:
 	fixture_header.visible = visible
 	fixture_controls.visible = visible
 	if not visible:
+		fixture_upgrade_row.visible = false
 		return
 	var is_consumer := building.is_power_consumer() or building.kind == VaultBuilding.Kind.MEDICAL_BED
 	fixture_header.text = "FIXTURE CONTROLS"
@@ -2185,6 +2337,370 @@ func _show_fixture_controls(building: VaultBuilding) -> void:
 	fixture_power_button.tooltip_text = "Allow or deny medical care." if building.kind == VaultBuilding.Kind.MEDICAL_BED else "Remove or restore this fixture's power demand."
 	fixture_deconstruct_button.disabled = building.is_emergency_core
 	fixture_deconstruct_button.tooltip_text = "Emergency core cannot be deconstructed." if building.is_emergency_core else "Recover %d salvage and remove this fixture." % building.get_deconstruct_refund()
+	_show_fixture_upgrade(building)
+
+
+func _show_fixture_upgrade(building: VaultBuilding) -> void:
+	var offered := building.can_take_upgrade() and game.is_upgrade_unlocked(building.kind) and game.breach_system.is_sealed() and not game.ended
+	fixture_upgrade_row.visible = offered
+	if not offered:
+		return
+	var cost := building.get_upgrade_cost()
+	fixture_upgrade_button.text = "FIT MK II · %d SALVAGE" % cost
+	fixture_upgrade_button.disabled = not game.can_upgrade_building(building.building_id)
+	fixture_upgrade_button.tooltip_text = (
+		_upgrade_benefit_text(building)
+		if not fixture_upgrade_button.disabled
+		else "Needs %d salvage (have %d)." % [cost, game.food_system.salvage]
+	)
+
+
+func _upgrade_benefit_text(building: VaultBuilding) -> String:
+	match building.kind:
+		VaultBuilding.Kind.GENERATOR:
+			return "%d power instead of %d." % [VaultBuilding.CHARGE_MK2_OUTPUT, building.get_power_output()]
+		VaultBuilding.Kind.AIR_RECYCLER:
+			return "Same air for %d power instead of %d." % [VaultBuilding.AIR_MK2_POWER, building.get_base_power_demand()]
+	return "1 raw every %d s instead of %d s · same %d power." % [roundi(VaultBuilding.GROW_MK2_SECONDS), roundi(FoodSystem.GROW_SECONDS), building.get_base_power_demand()]
+
+
+# The post-seal Mk II offer (QA-d #2/#4), resolved at refresh and again at click time: a Charge Node
+# first when a finished Grow Tray sits unpowered and Charge Mk II is unlocked, then the first tier-1
+# Grow Tray, Charge Node and Air Recycler whose fit is unlocked.
+func _upgrade_offer_target() -> VaultBuilding:
+	if game.ended or not game.breach_system.is_sealed():
+		return null
+	if _unpowered_tray() != null:
+		var charge := _first_fittable(VaultBuilding.Kind.GENERATOR)
+		if charge != null:
+			return charge
+	for kind: int in [VaultBuilding.Kind.GROW_TRAY, VaultBuilding.Kind.GENERATOR, VaultBuilding.Kind.AIR_RECYCLER]:
+		var target := _first_fittable(kind)
+		if target != null:
+			return target
+	return null
+
+
+func _first_fittable(kind: int) -> VaultBuilding:
+	if not game.is_upgrade_unlocked(kind):
+		return null
+	for building: VaultBuilding in game.buildings:
+		if building.kind == kind and building.can_take_upgrade() and not building.is_emergency_core:
+			return building
+	return null
+
+
+func _unpowered_tray() -> VaultBuilding:
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY and building.complete and not building.powered and not building.manually_disabled:
+			return building
+	return null
+
+
+# Idle post-seal salvage (QA-d #4): name the next useful build the stored salvage can pay for. A raw
+# pile wants a second Nutrient Station, then a Rec Console, then a second Grow Tray; when the grid has
+# no room for it, a Charge Node first. -1 when nothing useful is affordable, or while a paid Annex
+# waits on floor. Shown only when no Mk II fit is on offer.
+const NUDGE_RAW_PILE := 6
+const NUDGE_TOOLS := {
+	VaultBuilding.Kind.KITCHEN: "kitchen",
+	VaultBuilding.Kind.RECREATION_CONSOLE: "rec",
+	VaultBuilding.Kind.GROW_TRAY: "grow",
+	VaultBuilding.Kind.GENERATOR: "generator",
+}
+
+
+func salvage_nudge_kind() -> int:
+	if game.ended or not game.breach_system.is_sealed():
+		return -1
+	# Every nudge places a fixture on free floor; a paid Annex waiting on room needs those cells.
+	# Mk II fits upgrade in place and stay on offer.
+	if game.annex_waiting_for_room() and game.annex_room_short() > 0:
+		return -1
+	var want := -1
+	if game.food_system.raw_food >= NUDGE_RAW_PILE and _count_kind(VaultBuilding.Kind.KITCHEN) < 2:
+		want = VaultBuilding.Kind.KITCHEN
+	elif _count_kind(VaultBuilding.Kind.RECREATION_CONSOLE) == 0:
+		want = VaultBuilding.Kind.RECREATION_CONSOLE
+	elif _count_kind(VaultBuilding.Kind.GROW_TRAY) < 2:
+		want = VaultBuilding.Kind.GROW_TRAY
+	if want < 0:
+		return -1
+	if _planned_power_spare() < int(VaultBuilding.POWER_DEMAND.get(want, 0)):
+		want = VaultBuilding.Kind.GENERATOR
+	if _blueprints_awaiting_salvage() >= NUDGE_MAX_UNFUNDED:
+		return -1
+	return want if game.food_system.salvage >= int(VaultBuilding.COSTS[want]) else -1
+
+
+# Blueprints still waiting for salvage. With two of them the nudge waits: placing more only spread
+# each delivery thinner (four blueprints in two seconds) and left nothing for the next choice.
+const NUDGE_MAX_UNFUNDED := 2
+
+
+func _blueprints_awaiting_salvage() -> int:
+	var count := 0
+	for building: VaultBuilding in game.buildings:
+		if not building.complete and not building.is_emergency_core and building.needs_supply():
+			count += 1
+	return count
+
+
+func _count_kind(kind: int) -> int:
+	var count := 0
+	for building: VaultBuilding in game.buildings:
+		if building.kind == kind and not building.is_emergency_core:
+			count += 1
+	return count
+
+
+# Supply (counting unfinished Charge Nodes at 7) minus the demand of every consumer, built or planned.
+func _planned_power_spare() -> int:
+	var spare := 0
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GENERATOR:
+			spare += building.get_power_output() if building.complete else 7
+		elif not building.manually_disabled:
+			spare -= building.get_base_power_demand()
+	return spare
+
+
+func _salvage_nudge() -> bool:
+	return salvage_nudge_kind() >= 0
+
+
+func upgrade_offer_text(target: VaultBuilding) -> String:
+	var cost := target.get_upgrade_cost()
+	match target.kind:
+		VaultBuilding.Kind.GENERATOR:
+			if _unpowered_tray() != null:
+				return "Tray unpowered · Charge Mk II %d" % cost
+			return "Charge Mk II · %d · +%d power" % [cost, VaultBuilding.CHARGE_MK2_OUTPUT - target.get_power_output()]
+		VaultBuilding.Kind.AIR_RECYCLER:
+			return "Air Mk II · %d salvage · -%d power" % [cost, target.get_base_power_demand() - VaultBuilding.AIR_MK2_POWER]
+	return "Grow Tray Mk II · %d salvage" % cost
+
+
+# The right panel holds RIGHT_PANEL_WIDTH: the lighting row's label clips into what is left beside
+# [L] MAP OFF instead of forcing 188 px, and the Mk II offer is short and clips (Codex VT-20 follow-up).
+const LIGHTING_LABEL_MIN_WIDTH := 120.0
+
+
+# While the hatch is in WARNING or OPEN, the PRESSURE HATCH block (header, readout, bar, FOCUS
+# HATCH) moves to the top of DETAILS so FOCUS HATCH sits well inside the scroll however tall the
+# other readouts grow; afterwards it returns below VAULT ATMOSPHERE (Codex VT-20 follow-up).
+func _order_hatch_block(first: bool) -> void:
+	var header := details_box.get_child(breach_label.get_index() - 1)
+	var at_top := header.get_index() == 0
+	if first == at_top:
+		return
+	var block: Array[Node] = [header, breach_label, breach_bar, breach_focus_button]
+	if first:
+		for index in block.size():
+			details_box.move_child(block[index], index)
+		return
+	var previous: Node = oxygen_bar
+	for node: Node in block:
+		details_box.move_child(node, previous.get_index())
+		previous = node
+
+
+# QA-d #8: the idle start card (hidden unless the wing is untouched at 30 s, or step 2 is pending).
+const IDLE_START_TEXT := {
+	"header_1": "IDLE START · 1/2 · beds, food, power",
+	"header_2": "IDLE START · 2/2 · air",
+	"start": "Dig + 2 Beds, Gen, Kitchen, Tray",
+	"air": "Place Air Recycler · %d salvage",
+	"header_3": "IDLE START · after the seal · bunks",
+	"bunks": "Begin reclamation · 2 bunks",
+	"dismiss": "Dismiss · don't offer again",
+}
+
+
+func _build_idle_start_card(parent: Control) -> void:
+	idle_start_box = VBoxContainer.new()
+	idle_start_box.visible = false
+	idle_start_box.add_theme_constant_override("separation", 2)
+	parent.add_child(idle_start_box)
+	idle_start_header = Label.new()
+	idle_start_header.add_theme_color_override("font_color", Color("8faeb7"))
+	idle_start_header.add_theme_font_size_override("font_size", 13)
+	idle_start_box.add_child(idle_start_header)
+	idle_start_button = Button.new()
+	idle_start_button.clip_text = true
+	idle_start_button.custom_minimum_size.y = 26
+	idle_start_button.tooltip_text = "Queues the standard opening: dig marks, two Bunks, a Charge Node, a Nutrient Station and a Grow Tray. Step 2 offers the Air Recycler."
+	idle_start_button.pressed.connect(_on_idle_start_pressed)
+	idle_start_box.add_child(idle_start_button)
+	idle_start_dismiss_button = Button.new()
+	idle_start_dismiss_button.clip_text = true
+	idle_start_dismiss_button.custom_minimum_size.y = 22
+	idle_start_dismiss_button.add_theme_font_size_override("font_size", 12)
+	idle_start_dismiss_button.text = IDLE_START_TEXT.dismiss
+	idle_start_dismiss_button.pressed.connect(_on_idle_start_dismissed)
+	idle_start_box.add_child(idle_start_dismiss_button)
+
+
+func _refresh_idle_start() -> void:
+	if idle_start_box == null:
+		return
+	var offer := game.can_offer_idle_start()
+	# The hatch warning owns the panel (its readouts and FOCUS HATCH must stay in view).
+	var air := game.idle_start_air_pending() and game.breach_system.phase != BreachSystem.Phase.WARNING
+	var bunks := game.idle_start_bunks_pending()
+	idle_start_box.visible = offer or air or bunks
+	if offer:
+		idle_start_header.text = IDLE_START_TEXT.header_1
+		idle_start_button.text = IDLE_START_TEXT.start
+	elif air:
+		idle_start_header.text = IDLE_START_TEXT.header_2
+		idle_start_button.text = IDLE_START_TEXT.air % int(VaultBuilding.COSTS[VaultBuilding.Kind.AIR_RECYCLER])
+	elif bunks:
+		idle_start_header.text = IDLE_START_TEXT.header_3
+		idle_start_button.text = IDLE_START_TEXT.bunks
+
+
+func _on_idle_start_pressed() -> void:
+	if game.can_offer_idle_start():
+		game.apply_idle_start()
+	elif game.idle_start_air_pending():
+		game.place_idle_start_air()
+	elif game.idle_start_bunks_pending():
+		game.apply_idle_start_bunks()
+	refresh()
+
+
+func _on_idle_start_dismissed() -> void:
+	game.dismiss_idle_start()
+	refresh()
+
+
+func _refresh_upgrade_offer() -> void:
+	if upgrade_offer_button == null:
+		return
+	var target := _upgrade_offer_target()
+	var nudge := salvage_nudge_kind() if target == null else -1
+	upgrade_offer_button.visible = target != null or nudge >= 0
+	if target != null:
+		upgrade_offer_button.text = upgrade_offer_text(target)
+	elif nudge >= 0:
+		upgrade_offer_button.text = "Spend %d: build %s" % [game.food_system.salvage, VaultBuilding.KIND_NAMES[nudge]]
+	_refresh_wing_orders()
+	_refresh_also()
+
+
+# QA-e #2: a dim line under Next names a live post-seal action. Next itself is unchanged.
+const ALSO_NAMES := {
+	VaultBuilding.Kind.GROW_TRAY: "Grow Tray",
+	VaultBuilding.Kind.GENERATOR: "Charge",
+	VaultBuilding.Kind.AIR_RECYCLER: "Air",
+}
+
+
+func also_text() -> String:
+	if game.ended or not game.breach_system.is_sealed():
+		return ""
+	if game.can_start_reclamation():
+		# The idle-start step-3 card already offers reclamation; one prompt there is enough.
+		if game.idle_start_bunks_pending():
+			return ""
+		return "Also: begin reclamation · +%d salvage" % VaultGame.RECLAIM_START_SALVAGE
+	var target := _upgrade_offer_target()
+	if target != null and game.food_system.salvage >= target.get_upgrade_cost():
+		return "Also: fit %s Mk II · %d" % [ALSO_NAMES.get(target.kind, "a"), target.get_upgrade_cost()]
+	return ""
+
+
+func _refresh_also() -> void:
+	if also_label == null:
+		return
+	also_label.text = also_text()
+	also_label.visible = not also_label.text.is_empty()
+
+
+const WING_ORDER_TEXT := {
+	VaultGame.ORDER_FIT_GROW_MK2: ["Fit Grow Mk II", "Charge Mk II", "Charge Node Mk II"],
+	VaultGame.ORDER_STOCK_MEALS: ["Stock %d meals", "Air Mk II", "Air Recycler Mk II"],
+}
+const WING_ORDER_REWARD_KIND := {
+	VaultGame.ORDER_FIT_GROW_MK2: VaultBuilding.Kind.GENERATOR,
+	VaultGame.ORDER_STOCK_MEALS: VaultBuilding.Kind.AIR_RECYCLER,
+}
+
+
+func _refresh_wing_orders() -> void:
+	if wing_orders_box == null:
+		return
+	wing_orders_box.visible = game.breach_system.is_sealed() and not game.ended
+	if not wing_orders_box.visible:
+		return
+	var done := 0
+	for order_id: String in VaultGame.WING_ORDER_IDS:
+		var claimed := order_id in game.wing_orders_claimed
+		done += 1 if claimed else 0
+		var goal: String = WING_ORDER_TEXT[order_id][0]
+		var reward: String = WING_ORDER_TEXT[order_id][1]
+		var reward_full: String = WING_ORDER_TEXT[order_id][2]
+		var row: Button = wing_order_rows[order_id]
+		if order_id == VaultGame.ORDER_STOCK_MEALS:
+			goal = goal % VaultGame.ORDER_STOCK_MEALS_TARGET
+			if not claimed:
+				goal += " (%d/%d)" % [mini(game.food_system.meals, VaultGame.ORDER_STOCK_MEALS_TARGET), VaultGame.ORDER_STOCK_MEALS_TARGET]
+		row.text = ("[DONE] %s → %s" if claimed else "[  ] %s → %s") % [goal, reward]
+		row.disabled = not claimed or _wing_order_target(order_id) == null
+		row.tooltip_text = (
+			"Select a %s to fit %s." % [VaultBuilding.KIND_NAMES[WING_ORDER_REWARD_KIND[order_id]], reward_full]
+			if claimed
+			else "Wing order: %s to unlock %s." % [goal, reward_full]
+		)
+	wing_orders_header.text = "WING ORDERS · %d/%d" % [done, VaultGame.WING_ORDER_IDS.size()]
+	_refresh_reclaim_button()
+
+
+func reclaim_button_text() -> String:
+	if game.can_start_reclamation():
+		return "Begin reclamation · +%d salvage" % VaultGame.RECLAIM_START_SALVAGE
+	var left := VaultGame.RECLAIM_DELIVERIES - game.reclaim_paid
+	if left <= 0:
+		return "Reclamation complete"
+	return "Reclamation · +%d in %d s · %d left" % [VaultGame.RECLAIM_DELIVERY, ceili(game.reclaim_seconds_to_next()), left]
+
+
+func _refresh_reclaim_button() -> void:
+	if reclaim_button == null:
+		return
+	reclaim_button.text = reclaim_button_text()
+	reclaim_button.disabled = not game.can_start_reclamation()
+
+
+func _wing_order_target(order_id: String) -> VaultBuilding:
+	if not order_id in game.wing_orders_claimed:
+		return null
+	for building: VaultBuilding in game.buildings:
+		if building.kind == WING_ORDER_REWARD_KIND[order_id] and building.can_take_upgrade():
+			return building
+	return null
+
+
+func _on_wing_order_pressed(order_id: String) -> void:
+	var target := _wing_order_target(order_id)
+	if target != null:
+		game.select_building(target.building_id)
+
+
+func _on_upgrade_offer_pressed() -> void:
+	var target := _upgrade_offer_target()
+	var nudge := salvage_nudge_kind() if target == null else -1
+	if target != null:
+		game.select_building(target.building_id)
+	elif nudge >= 0:
+		game.set_tool(NUDGE_TOOLS[nudge])
+
+
+func _on_fixture_upgrade_pressed() -> void:
+	var building := game.get_building_by_id(game.selected_building_id)
+	if building != null:
+		game.upgrade_building(building.building_id)
 
 
 func _hide_fixture_controls() -> void:
@@ -2192,6 +2708,8 @@ func _hide_fixture_controls() -> void:
 		fixture_header.visible = false
 	if fixture_controls != null:
 		fixture_controls.visible = false
+	if fixture_upgrade_row != null:
+		fixture_upgrade_row.visible = false
 
 
 func _on_tool_pressed(tool: String) -> void:
@@ -2253,3 +2771,287 @@ func _panel_style(background: Color, border: Color, width := 1) -> StyleBoxFlat:
 	style.corner_radius_bottom_left = 4
 	style.corner_radius_bottom_right = 4
 	return style
+
+
+# Keep running (north star slice 1). The win panel offers KEEP RUNNING beside LOAD / NEW WING; the
+# wing then stays live past Day 7. Next keeps its survival steps, but a Med Bed / Rec Console
+# suggestion latches until that fixture exists or the need has been gone for KEEP_RUNNING_UNLATCH_S,
+# so an idle vault never flips between them.
+const KEEP_RUNNING_TEXT := {
+	"button": "KEEP RUNNING",
+	"next": "Next: YOU watch the vault · THEY keep it running",
+	"loss": "The seal win stands; the vault was lost while it kept running.",
+}
+const KEEP_RUNNING_UNLATCH_S := 10.0
+var keep_running_button: Button
+var _kr_latch_text := ""
+var _kr_latch_tool := ""
+var _kr_latch_clear_at := -1.0
+
+
+func keep_running_clock_text() -> String:
+	return "DAY %d · LIVE" % game.keep_running_day()
+
+
+func _show_keep_running_button(won: bool) -> void:
+	if keep_running_button == null:
+		var row: Node = null
+		for node: Node in outcome_panel.find_children("*", "HBoxContainer", true, false):
+			for child: Node in node.get_children():
+				if child is Button and (child as Button).text == "NEW WING":
+					row = node
+		if row == null:
+			return
+		# Its own centred row under LOAD / NEW WING (/ REPLAY), so the first row never grows.
+		var own_row := HBoxContainer.new()
+		own_row.name = "KeepRunningRow"
+		own_row.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.get_parent().add_child(own_row)
+		keep_running_button = Button.new()
+		keep_running_button.name = "KeepRunningButton"
+		keep_running_button.text = KEEP_RUNNING_TEXT.button
+		keep_running_button.pressed.connect(func() -> void: game.start_keep_running())
+		own_row.add_child(keep_running_button)
+	keep_running_button.visible = won and game.can_keep_running()
+
+
+func note_keep_running_loss() -> void:
+	outcome_text.text += " " + KEEP_RUNNING_TEXT.loss
+
+
+func _is_latchable_step(step: Dictionary) -> bool:
+	return str(step.get("tool", "")) in ["medical", "rec"] or (
+		str(step.get("text", "")).contains("Med Bed") or str(step.get("text", "")).contains("Rec Console")
+	)
+
+
+func console_seek_threshold() -> float:
+	return ResidentNeeds.KEEP_RUNNING_RECREATION_SEEK if game.keep_running and not game.ended else ResidentNeeds.RECREATION_SEEK_THRESHOLD
+
+
+func keep_running_next_step() -> Dictionary:
+	if game.comfort_pending():
+		# The comfort card covers Rec and Med: Next points at it over those steps (latched or not)
+		# and over the calm default; other life-support steps (air, food, power) still lead.
+		var primary := _primary_next_step()
+		# A paid Annex waiting on floor comes first: the comfort blueprints would take cells it needs.
+		if _is_default_step(primary) and game.annex_waiting_for_room() and game.annex_room_short() > 0:
+			return keep_running_default_step()
+		if _is_latchable_step(primary) or _is_default_step(primary):
+			return {"text": COMFORT_TEXT.next, "tool": "select"}
+		return primary
+	var step := _primary_next_step()
+	var now := game.keep_running_seconds
+	var latchable := _is_latchable_step(step)
+	if _kr_latch_text != "":
+		var kind := VaultBuilding.Kind.MEDICAL_BED if _kr_latch_tool == "medical" or _kr_latch_text.contains("Med Bed") else VaultBuilding.Kind.RECREATION_CONSOLE
+		var resolved: bool = game.get_completed_building_count(kind) > 0 and str(step.get("text", "")) != _kr_latch_text
+		if latchable or resolved:
+			_kr_latch_clear_at = -1.0
+		elif _kr_latch_clear_at < 0.0:
+			_kr_latch_clear_at = now + KEEP_RUNNING_UNLATCH_S
+		if resolved or (_kr_latch_clear_at >= 0.0 and now >= _kr_latch_clear_at):
+			_kr_latch_text = ""
+			_kr_latch_tool = ""
+			_kr_latch_clear_at = -1.0
+		elif latchable or _is_default_step(step):
+			return {"text": _kr_latch_text, "tool": _kr_latch_tool}
+	if latchable:
+		_kr_latch_text = str(step.text)
+		_kr_latch_tool = str(step.get("tool", ""))
+		_kr_latch_clear_at = -1.0
+		return step
+	if _is_default_step(step):
+		return keep_running_default_step()
+	return step
+
+
+# Past Day 7 only life-support steps pass through (food chain, power, air, care); opening steps
+# such as marking rock or placing the first bunks give way to the keep-running Next.
+const KEEP_RUNNING_PASS := ["Air Recycler", "Nutrient Station", "Charge Node", "power", "Med Bed", "Rec Console"]
+# Steps classified by the diagnosis that produced them, so their wording never decides it.
+const STEP_KIND_FOOD := "food"
+const KEEP_RUNNING_PASS_KINDS := [STEP_KIND_FOOD]
+
+
+# Food-chain recovery (Cook, Haul, Grow Tray, Nutrient Station and their power) from _primary_next_step.
+func _food_step(step: Dictionary) -> Dictionary:
+	step["kind"] = STEP_KIND_FOOD
+	return step
+
+
+func _is_default_step(step: Dictionary) -> bool:
+	if str(step.get("kind", "")) in KEEP_RUNNING_PASS_KINDS:
+		return false
+	var text := str(step.get("text", ""))
+	for word: String in KEEP_RUNNING_PASS:
+		if text.contains(word):
+			return false
+	return true
+
+
+func keep_running_default_step() -> Dictionary:
+	var room_short := game.annex_room_short() if game.annex_waiting_for_room() else 0
+	if room_short > 0:
+		return {
+			"text": ANNEX_TEXT.room_next % VaultGame.annex_room_cells_text(room_short),
+			"help": ANNEX_TEXT.room_help % VaultGame.annex_room_cells_text(room_short),
+			"tool": "dig",
+		}
+	if game.comfort_pending():
+		return {"text": COMFORT_TEXT.next, "tool": "select"}
+	if game.annex_active():
+		return {"text": ANNEX_TEXT.next, "tool": "select"}
+	if game.annex_done:
+		return {"text": ANNEX_TEXT.stable_next, "tool": "select"}
+	return {"text": KEEP_RUNNING_TEXT.next, "tool": "select"}
+
+
+# Annex card (north star slice 2): progress bar, the two quotas, and a meal-reserve stepper.
+const ANNEX_TEXT := {
+	"header": "ANNEX · meals %d/%d · salvage %d/%d",
+	"reserve": "Keep %d meals",
+	"minus": "−",
+	"plus": "+",
+	"next": "Next: YOU set the meal reserve · THEY build the Annex",
+	"done": "ANNEX COMPLETE",
+	"open": "ANNEX OPEN · %d crew · vault stable",
+	"stable_next": "Next: YOU enjoy a stable vault · THEY run all of it",
+	"welcome": "NEW CREW · %s MOVES IN",
+	"room": "ANNEX READY · free %s",
+	"room_next": "Next: YOU free %s · THEY open the Annex",
+	"room_help": "The Annex needs %s more without a fixture or stockpile zone. Dig rock [E] or clear a zone.",
+}
+var annex_box: VBoxContainer
+var annex_header: Label
+var annex_bar: ProgressBar
+var annex_reserve_label: Label
+var annex_minus_button: Button
+var annex_plus_button: Button
+
+
+const COMFORT_TREATABLE_HP := 95.0
+const COMFORT_TEXT := {
+	"header": "AFTER THE WIN · comfort",
+	"button": "Rec, Med Bed, power, light · %d",
+	"next": "Next: YOU tap comfort · THEY build Rec + Med",
+}
+var comfort_box: VBoxContainer
+var comfort_header: Label
+var comfort_button: Button
+
+
+# A won vault only flags injuries a Med Bed will treat (95 HP or below); with none, no INJURED line.
+func _keep_running_injury_alert(alerts: Array[String], free_medical: int) -> void:
+	var index := -1
+	for i in alerts.size():
+		if alerts[i].begins_with("INJURED "):
+			index = i
+			break
+	if index < 0:
+		return
+	var injured := 0
+	for resident: VaultResident in game.residents:
+		if resident.alive and resident.needs.health <= COMFORT_TREATABLE_HP:
+			injured += 1
+	if injured > 0:
+		alerts[index] = "INJURED %d · MED BEDS FREE %d" % [injured, free_medical]
+	else:
+		alerts.remove_at(index)
+
+
+func _build_comfort_card(parent: Control) -> void:
+	comfort_box = VBoxContainer.new()
+	comfort_box.name = "ComfortCard"
+	comfort_box.visible = false
+	comfort_box.add_theme_constant_override("separation", 2)
+	parent.add_child(comfort_box)
+	comfort_header = Label.new()
+	comfort_header.text = COMFORT_TEXT.header
+	comfort_header.add_theme_color_override("font_color", Color("8faeb7"))
+	comfort_header.add_theme_font_size_override("font_size", 13)
+	comfort_box.add_child(comfort_header)
+	comfort_button = Button.new()
+	comfort_button.clip_text = true
+	comfort_button.custom_minimum_size.y = 26
+	comfort_button.tooltip_text = "Queues a Rec Console and a Med Bed, plus a Charge Node and a Lumen if power or a dark bunk needs them. Crew build them from salvage."
+	comfort_button.pressed.connect(func() -> void:
+		game.apply_comfort()
+		refresh())
+	comfort_box.add_child(comfort_button)
+
+
+func _refresh_comfort() -> void:
+	if comfort_box == null:
+		return
+	comfort_box.visible = game.comfort_pending() and not (game.annex_waiting_for_room() and game.annex_room_short() > 0)
+	if comfort_box.visible:
+		comfort_button.text = COMFORT_TEXT.button % game.comfort_cost()
+
+
+func _build_annex_card(parent: Control) -> void:
+	annex_box = VBoxContainer.new()
+	annex_box.name = "AnnexCard"
+	annex_box.visible = false
+	annex_box.add_theme_constant_override("separation", 2)
+	parent.add_child(annex_box)
+	annex_header = Label.new()
+	annex_header.add_theme_color_override("font_color", Color("8faeb7"))
+	annex_header.add_theme_font_size_override("font_size", 13)
+	annex_box.add_child(annex_header)
+	annex_bar = ProgressBar.new()
+	annex_bar.min_value = 0.0
+	annex_bar.max_value = 1.0
+	annex_bar.step = 0.0
+	annex_bar.show_percentage = false
+	annex_bar.custom_minimum_size.y = 8
+	annex_bar.modulate = Color("75d4b4")
+	annex_box.add_child(annex_bar)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	annex_box.add_child(row)
+	annex_minus_button = Button.new()
+	annex_minus_button.text = ANNEX_TEXT.minus
+	annex_minus_button.custom_minimum_size = Vector2(26, 22)
+	annex_minus_button.tooltip_text = "Keep fewer meals back: more go to the Annex."
+	annex_minus_button.pressed.connect(func() -> void: game.set_annex_reserve(game.annex_reserve - VaultGame.ANNEX_RESERVE_STEP))
+	row.add_child(annex_minus_button)
+	annex_reserve_label = Label.new()
+	annex_reserve_label.add_theme_font_size_override("font_size", 13)
+	annex_reserve_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	annex_reserve_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(annex_reserve_label)
+	annex_plus_button = Button.new()
+	annex_plus_button.text = ANNEX_TEXT.plus
+	annex_plus_button.custom_minimum_size = Vector2(26, 22)
+	annex_plus_button.tooltip_text = "Keep more meals back for the crew."
+	annex_plus_button.pressed.connect(func() -> void: game.set_annex_reserve(game.annex_reserve + VaultGame.ANNEX_RESERVE_STEP))
+	row.add_child(annex_plus_button)
+
+
+func annex_header_text() -> String:
+	return ANNEX_TEXT.header % [game.annex_meals, VaultGame.ANNEX_MEALS, game.annex_salvage, VaultGame.ANNEX_SALVAGE]
+
+
+func _refresh_annex() -> void:
+	if annex_box == null:
+		return
+	annex_box.visible = game.annex_active() or (game.keep_running and game.annex_done and not game.ended)
+	if not annex_box.visible:
+		return
+	var open := game.annex_done
+	var room_short := game.annex_room_short() if game.annex_waiting_for_room() else 0
+	annex_minus_button.get_parent().visible = not open and room_short == 0
+	if room_short > 0:
+		annex_header.text = ANNEX_TEXT.room % VaultGame.annex_room_cells_text(room_short)
+		annex_bar.value = 1.0
+		return
+	if open:
+		annex_header.text = ANNEX_TEXT.open % game.get_alive_count()
+		annex_bar.value = 1.0
+		return
+	annex_header.text = annex_header_text()
+	annex_bar.value = game.annex_progress()
+	annex_reserve_label.text = ANNEX_TEXT.reserve % game.annex_reserve
+	annex_minus_button.disabled = game.annex_reserve <= VaultGame.ANNEX_RESERVE_MIN
+	annex_plus_button.disabled = game.annex_reserve >= VaultGame.ANNEX_RESERVE_MAX
