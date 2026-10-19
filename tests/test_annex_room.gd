@@ -21,6 +21,7 @@ func _run() -> void:
 	_run_case("with room the payoff is unchanged and the save shape is the same", _test_happy_path)
 	_run_case("room texts fit with 12 px to spare", _test_fit)
 	_run_case("while the Annex waits on room, Spend offers no floor build", _test_spend_waits)
+	_run_case("while the Annex waits on room, the comfort card hides", _test_comfort_waits)
 	print("")
 	if _failure_count == 0:
 		print("ANNEX ROOM TESTS PASSED: %d cases, %d assertions" % [_case_count, _assertion_count])
@@ -319,4 +320,28 @@ func _test_spend_waits() -> void:
 	_assert_true(game.annex_resident() != null, "with room the Annex opens")
 	game.food_system.salvage = 40
 	_assert_true(game.player_orders.salvage_nudge_kind() >= 0, "after it opens Spend offers a build again")
+	_dispose(game)
+
+
+func _test_comfort_waits() -> void:
+	var game := _running()
+	_assert_true(game.has_method("comfort_pending") and "comfort_box" in game.player_orders, "the comfort card exists")
+	game.player_orders.refresh()
+	_assert_true(game.comfort_pending() and game.player_orders.comfort_box.visible, "before the Annex waits, the comfort card shows")
+	_zone_all_but(game, 2)
+	_finish(game)
+	_assert_true(game.annex_waiting_for_room(), "the paid Annex waits on room")
+	game.player_orders.refresh()
+	_assert_true(game.comfort_pending(), "comfort is still pending")
+	_assert_false(game.player_orders.comfort_box.visible, "but the card hides while the Annex waits")
+	_unzone(game, 2)
+	for i in 3:
+		game._advance_annex(0.1)
+	_assert_true(game.annex_resident() != null, "with room the Annex opens")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.comfort_box.visible, game.comfort_pending(), "after it opens the card follows comfort_pending again")
+	game.ended = true
+	game.player_orders.refresh()
+	_assert_false(game.comfort_pending() or game.player_orders.comfort_box.visible, "with nothing pending the card stays hidden")
+	game.ended = false
 	_dispose(game)

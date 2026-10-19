@@ -2984,7 +2984,7 @@ func _build_comfort_card(parent: Control) -> void:
 func _refresh_comfort() -> void:
 	if comfort_box == null:
 		return
-	comfort_box.visible = game.comfort_pending()
+	comfort_box.visible = game.comfort_pending() and not (game.annex_waiting_for_room() and game.annex_room_short() > 0)
 	if comfort_box.visible:
 		comfort_button.text = COMFORT_TEXT.button % game.comfort_cost()
 
