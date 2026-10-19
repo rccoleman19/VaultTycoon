@@ -2022,6 +2022,11 @@ func _briefing_focus_controls(opening: bool) -> Array[Control]:
 	var primary: Button = briefing_begin_button if opening else briefing_close_button
 	if primary != null and primary.visible and not primary.disabled:
 		controls.append(primary)
+	# Tab reaches the sublevel stepper between the primary and LOAD; a disabled endpoint arrow stays out.
+	if briefing_sublevel_row != null and briefing_sublevel_row.visible:
+		for button: Button in [briefing_deeper_button, briefing_shallower_button]:
+			if button.visible and not button.disabled:
+				controls.append(button)
 	if briefing_load_button != null and briefing_load_button.visible and not briefing_load_button.disabled:
 		controls.append(briefing_load_button)
 	return controls
@@ -2350,9 +2355,19 @@ func step_sublevel(direction: int) -> void:
 	if level == game.sublevel:
 		return
 	var replay := briefing_load_button != null and not briefing_load_button.visible
+	var arrows := [briefing_deeper_button, briefing_shallower_button]
+	if direction > 0:
+		arrows.reverse()
+	var keep_focus := get_viewport().gui_get_focus_owner() in arrows
 	_replay_opening = replay
 	game.new_game(true, game.wing_seed, level)
 	_replay_opening = false
+	# Keyboard focus stays on the arrow just used; at an endpoint it is disabled, so the other arrow takes it.
+	if keep_focus:
+		for button: Button in arrows:
+			if button in _briefing_focus_controls(true):
+				button.grab_focus()
+				break
 
 
 static func wing_id(wing_seed: int, level := WingRecords.BASE_SUBLEVEL) -> String:
