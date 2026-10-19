@@ -634,9 +634,5 @@ func is_vein(cell: Vector2i) -> bool:
 
 
 # Rubble a dug cell leaves: veins are tracked by cell, so this holds before and after the dig.
-# Records + ladder C5: sublevel 05 THIN VEINS lowers this; VaultGame sets it on NEW WING and LOAD.
-var vein_yield := VEIN_SALVAGE_YIELD
-
-
 func get_dig_yield(cell: Vector2i) -> int:
-	return vein_yield if vein_cells.has(cell) else 3
+	return VEIN_SALVAGE_YIELD if vein_cells.has(cell) else 3

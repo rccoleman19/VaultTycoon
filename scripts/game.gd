@@ -19,11 +19,13 @@ const SUBLEVEL_SAVE_VERSION := 1
 # Ladder QA: 10, not 15, so the earliest seeded hatch (45 s) still warns after #111's 30 s idle-start
 # card (45 - 15 = 30 hid the card for good on the merged game: no bunks, no Air, the crew died).
 const EARLY_HATCH_ADVANCE_SECONDS := 10.0
-const THIN_VEIN_SALVAGE_YIELD := 4
+# Ladder QA: 05 starts lean instead of with thin veins (the default digs never reach a vein, so
+# THIN VEINS played exactly like 07). 30 of the usual 48 lands 05 between 06 and 04.
+const LEAN_STORES_SALVAGE := 30
 const FIFTH_MOUTH_CREW_SIZE := 5
 const SUBLEVEL_MODIFIERS := {
 	6: {"name": "EARLY HATCH", "detail": "hatch test 10 s earlier"},
-	5: {"name": "THIN VEINS", "detail": "salvage veins -33%"},
+	5: {"name": "LEAN STORES", "detail": "start with 30 salvage"},
 	4: {"name": "DARK START", "detail": "starter Lumen unbuilt (5 salvage)"},
 	3: {"name": "FIFTH MOUTH", "detail": "a fifth resident to feed"},
 }
@@ -198,6 +200,8 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 		_spawn_starting_blueprint(VaultBuilding.Kind.LAMP, Vector2i(22, 14))
 	else:
 		_spawn_starting_fixture(VaultBuilding.Kind.LAMP, Vector2i(22, 14), false)
+	if sublevel == 5:
+		food_system.salvage = LEAN_STORES_SALVAGE
 	_spawn_starting_fixture(VaultBuilding.Kind.STOCKPILE, Vector2i(19, 17), false)
 	var names := ["Ari", "Bo", "Cyra", "Dax"]
 	var cells := [Vector2i(20, 15), Vector2i(21, 16), Vector2i(22, 17), Vector2i(23, 18)]
@@ -814,7 +818,6 @@ static func warning_at_for(seed_value: int, level: int) -> float:
 
 func _apply_sublevel_rules() -> void:
 	breach_system.warning_at = warning_at_for(wing_seed, sublevel)
-	map_grid.vein_yield = THIN_VEIN_SALVAGE_YIELD if sublevel == 5 else MapGrid.VEIN_SALVAGE_YIELD
 
 
 func _snapshot_sublevel(snapshot: Dictionary) -> int:

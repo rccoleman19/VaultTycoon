@@ -72,7 +72,7 @@ func _test_load_replay() -> void:
 	var base: Dictionary = JSON.parse_string(JSON.stringify(game.create_snapshot()))
 	_assert_true(game.apply_snapshot(low), "the 05 save loads")
 	_assert_equal(game.sublevel, 5, "LOAD restores 05")
-	_assert_equal(game.player_orders.wing_brand_label.text, "VAULT WING // 05-1092 · THIN VEINS", "top bar after LOAD")
+	_assert_equal(game.player_orders.wing_brand_label.text, "VAULT WING // 05-1092 · LEAN STORES", "top bar after LOAD")
 	_assert_true(game.apply_snapshot(base), "the 07 save loads")
 	_assert_equal(game.sublevel, 7, "a save without the key is 07")
 	_assert_true(game.apply_snapshot(low), "the 05 save loads again")

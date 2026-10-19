@@ -11,7 +11,7 @@ func _run() -> void:
 	_run_case("07 and seed 0 carry no modifier", _test_base)
 	_run_case("06 EARLY HATCH moves the hatch test 10 s earlier, kept on LOAD and in validation", _test_early_hatch)
 	_run_case("06 EARLY HATCH still offers the idle-start card on the earliest hatch", _test_early_hatch_card)
-	_run_case("05 THIN VEINS digs veins for 4 salvage, kept on LOAD", _test_thin_veins)
+	_run_case("05 LEAN STORES starts with 30 salvage, kept on LOAD", _test_lean_stores)
 	_run_case("04 DARK START starts its Lumen as a blueprint the crew build", _test_dark_start)
 	_run_case("03 FIFTH MOUTH starts five residents", _test_fifth_mouth)
 	_run_case("a win on N unlocks N-1 and the win screen says so", _test_unlock)
@@ -54,7 +54,7 @@ func _test_base() -> void:
 	for args: Array in [[4242, 7], [0, 4], [0, 3], [0, 6]]:
 		game.new_game(false, args[0], args[1])
 		_assert_equal(game.breach_system.warning_at, BreachSystem.warning_at_for_seed(args[0]), "%s: hatch time unchanged" % [args])
-		_assert_equal(game.map_grid.vein_yield, MapGrid.VEIN_SALVAGE_YIELD, "%s: vein yield unchanged" % [args])
+		_assert_equal(game.food_system.salvage, FoodSystem.STARTING_SALVAGE, "%s: full starting salvage" % [args])
 		_assert_equal(_lamps(game), 1, "%s: starter Lumen" % [args])
 		_assert_equal(game.residents.size(), 4, "%s: four crew" % [args])
 		_assert_false(game.player_orders.wing_brand_label.text.contains("·"), "%s: no modifier in the top bar" % [args])
@@ -74,7 +74,7 @@ func _test_early_hatch() -> void:
 	var warn := roundi(base - 10.0)
 	_assert_true(game.player_orders.wing_briefing_title.text.contains("HATCH TEST AT %02d:%02d" % [warn / 60, warn % 60]), "briefing shows the earlier hatch test")
 	_assert_true(game.player_orders.wing_briefing_title.text.contains("SUBLEVEL 06 · EARLY HATCH: hatch test 10 s earlier"), "briefing names the modifier")
-	_assert_equal(_vein_yield_and_lamps(game), [MapGrid.VEIN_SALVAGE_YIELD, 1, 4], "not cumulative")
+	_assert_equal(_salvage_and_lamps(game), [FoodSystem.STARTING_SALVAGE, 1, 4], "not cumulative")
 	game.begin_shift()
 	game.step_simulation(base - 8.0)
 	_assert_true(game.breach_system.phase == BreachSystem.Phase.WARNING, "the warning fires before the 07 time")
@@ -86,25 +86,29 @@ func _test_early_hatch() -> void:
 	_dispose(game)
 
 
-func _vein_yield_and_lamps(game: VaultGame) -> Array:
-	return [game.map_grid.vein_yield, _lamps(game), game.residents.size()]
+func _salvage_and_lamps(game: VaultGame) -> Array:
+	return [game.food_system.salvage, _lamps(game), game.residents.size()]
 
 
-func _test_thin_veins() -> void:
+func _test_lean_stores() -> void:
 	var game := _spawn_game()
 	if not _guard(game):
 		_dispose(game)
 		return
 	game.new_game(false, 4242, 5)
-	_assert_equal(game.map_grid.get_dig_yield(_vein(game)), 4, "a vein yields 4")
-	_assert_equal(game.map_grid.get_dig_yield(Vector2i(0, 0)), 3, "plain rock still yields 3")
+	_assert_equal(game.food_system.salvage, VaultGame.LEAN_STORES_SALVAGE, "05 starts with 30 salvage")
+	_assert_true(VaultGame.LEAN_STORES_SALVAGE < FoodSystem.STARTING_SALVAGE, "fewer than 07's 48")
+	_assert_equal(game.map_grid.get_dig_yield(_vein(game)), MapGrid.VEIN_SALVAGE_YIELD, "veins yield as on 07")
 	_assert_equal(game.breach_system.warning_at, BreachSystem.warning_at_for_seed(4242), "not cumulative: hatch unchanged")
-	_assert_true(game.player_orders.wing_brand_label.text.ends_with("· THIN VEINS"), "top bar names THIN VEINS")
+	_assert_true(game.player_orders.wing_brand_label.text.ends_with("· LEAN STORES"), "top bar names LEAN STORES")
+	_assert_true(game.player_orders.wing_briefing_title.text.contains("SUBLEVEL 05 · LEAN STORES: start with 30 salvage"), "briefing names the modifier")
+	game.food_system.salvage = 12
 	var low: Dictionary = JSON.parse_string(JSON.stringify(game.create_snapshot()))
 	game.new_game(false, 4242)
-	_assert_equal(game.map_grid.get_dig_yield(_vein(game)), MapGrid.VEIN_SALVAGE_YIELD, "07 veins yield 6 again")
+	_assert_equal(game.food_system.salvage, FoodSystem.STARTING_SALVAGE, "a 07 wing starts with 48 again")
 	_assert_true(game.apply_snapshot(low), "a 05 save loads over a 07 wing")
-	_assert_equal(game.map_grid.get_dig_yield(_vein(game)), 4, "LOAD restores thin veins")
+	_assert_equal(game.food_system.salvage, 12, "LOAD keeps the saved salvage, not the lean start")
+	_assert_equal(game.sublevel, 5, "and the sublevel")
 	_dispose(game)
 
 
@@ -200,7 +204,7 @@ func _test_unlock() -> void:
 	_dispose(game)
 	game = _seeded(6)
 	_win(game)
-	_assert_true(game.player_orders.outcome_record.text.ends_with("SUBLEVEL 05 UNLOCKED · THIN VEINS"), "a 06 win unlocks 05")
+	_assert_true(game.player_orders.outcome_record.text.ends_with("SUBLEVEL 05 UNLOCKED · LEAN STORES"), "a 06 win unlocks 05")
 	_dispose(game)
 	game = _seeded(3)
 	_win(game)

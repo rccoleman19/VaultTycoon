@@ -73,7 +73,7 @@ func _test_stepper() -> void:
 	var orders := game.player_orders
 	_assert_equal(game.sublevel, 5, "07 and 06 won: NEW WING starts on 05")
 	_assert_true(orders.briefing_sublevel_row.visible, "the stepper shows")
-	_assert_equal(orders.briefing_sublevel_label.text, "SUBLEVEL 05 · THIN VEINS", "names the sublevel and modifier")
+	_assert_equal(orders.briefing_sublevel_label.text, "SUBLEVEL 05 · LEAN STORES", "names the sublevel and modifier")
 	_assert_true(orders.briefing_deeper_button.disabled, "05 is the deepest unlocked")
 	orders.briefing_shallower_button.pressed.emit()
 	_assert_equal([game.wing_seed, game.sublevel], [seed_value, 6], "▶ goes to 06 on the same seed")
