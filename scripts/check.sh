@@ -53,6 +53,7 @@ run_godot_check food-loop-playthrough --script res://tests/test_food_loop_playth
 run_godot_check air-loop-playthrough --script res://tests/test_air_loop_playthrough.gd
 run_godot_check hatch-walk-playthrough --script res://tests/test_hatch_walk_playthrough.gd
 run_godot_check continuous-food-air-walk --script res://tests/test_continuous_food_air_walk.gd
+run_godot_check roster-fit --script res://tests/test_roster_fit.gd
 run_godot_check post-seal-designate-pressure --script res://tests/test_post_seal_designate_pressure.gd
 run_godot_check fresh-wing-next-walk --script res://tests/test_fresh_wing_next_walk.gd
 run_godot_check fresh-wing-charge-finish --script res://tests/test_fresh_wing_charge_finish.gd
