@@ -45,6 +45,7 @@ var fixture_deconstruct_button: Button
 # Mid-game salvage sink (QA 2026-10-18c #3, slice 1): an optional offer outside Next, plus the
 # inspector purchase row. Both stay hidden until the hatch is sealed.
 var upgrade_offer_button: Button
+var reclaim_button: Button
 var fixture_upgrade_row: HBoxContainer
 var fixture_upgrade_button: Button
 # Wing orders (QA 2026-10-18c #3, slice 2): a compact post-seal panel under the offer, outside
@@ -193,6 +194,13 @@ func _build_interface() -> void:
 	wing_orders_header.add_theme_color_override("font_color", Color("8faeb7"))
 	wing_orders_header.add_theme_font_size_override("font_size", 13)
 	wing_orders_box.add_child(wing_orders_header)
+	reclaim_button = Button.new()
+	reclaim_button.clip_text = true
+	reclaim_button.custom_minimum_size.y = 24
+	reclaim_button.add_theme_font_size_override("font_size", 13)
+	reclaim_button.tooltip_text = "Optional: start reclaiming the sealed wing for salvage (+%d now, +%d every %d s, %d times)." % [VaultGame.RECLAIM_START_SALVAGE, VaultGame.RECLAIM_DELIVERY, roundi(VaultGame.RECLAIM_INTERVAL), VaultGame.RECLAIM_DELIVERIES]
+	reclaim_button.pressed.connect(func() -> void: game.start_reclamation())
+	wing_orders_box.add_child(reclaim_button)
 	for order_id: String in VaultGame.WING_ORDER_IDS:
 		var row := Button.new()
 		row.flat = true
@@ -2372,6 +2380,23 @@ func _refresh_wing_orders() -> void:
 			else "Wing order: %s to unlock %s." % [goal, reward_full]
 		)
 	wing_orders_header.text = "WING ORDERS · %d/%d" % [done, VaultGame.WING_ORDER_IDS.size()]
+	_refresh_reclaim_button()
+
+
+func reclaim_button_text() -> String:
+	if game.can_start_reclamation():
+		return "Begin reclamation · +%d salvage" % VaultGame.RECLAIM_START_SALVAGE
+	var left := VaultGame.RECLAIM_DELIVERIES - game.reclaim_paid
+	if left <= 0:
+		return "Reclamation complete"
+	return "Reclamation · +%d in %d s · %d left" % [VaultGame.RECLAIM_DELIVERY, ceili(game.reclaim_seconds_to_next()), left]
+
+
+func _refresh_reclaim_button() -> void:
+	if reclaim_button == null:
+		return
+	reclaim_button.text = reclaim_button_text()
+	reclaim_button.disabled = not game.can_start_reclamation()
 
 
 func _wing_order_target(order_id: String) -> VaultBuilding:

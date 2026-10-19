@@ -56,6 +56,16 @@ const ORDER_STOCK_MEALS := "stock_meals"
 const WING_ORDER_IDS := [ORDER_FIT_GROW_MK2, ORDER_STOCK_MEALS]
 const ORDER_STOCK_MEALS_TARGET := 16
 var wing_orders_claimed: Array[String] = []
+# Post-seal reclamation (QA-d #2): a player-started, finite salvage income after the seal.
+const RECLAIM_KEY := "post_seal_reclamation"
+const RECLAIM_VERSION := 1
+const RECLAIM_START_SALVAGE := 18
+const RECLAIM_DELIVERY := 18
+const RECLAIM_INTERVAL := 30.0
+const RECLAIM_DELIVERIES := 6
+var reclaim_active := false
+var reclaim_elapsed := 0.0
+var reclaim_paid := 0
 var _simulation_accumulator := 0.0
 var _dragging_camera := false
 
@@ -130,6 +140,7 @@ func new_game(show_tutorial := false) -> void:
 	selected_breach = false
 	_simulation_accumulator = 0.0
 	wing_orders_claimed.clear()
+	_reset_reclamation()
 	_spawn_starting_fixture(VaultBuilding.Kind.GENERATOR, Vector2i(24, 15), true)
 	_spawn_starting_fixture(VaultBuilding.Kind.LAMP, Vector2i(22, 14), false)
 	_spawn_starting_fixture(VaultBuilding.Kind.STOCKPILE, Vector2i(19, 17), false)
@@ -234,6 +245,7 @@ func _simulation_step(delta_seconds: float) -> void:
 	power_grid.recalculate(buildings)
 	job_system.reconcile_recreation_state()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
+	_advance_reclamation(delta_seconds)
 	_check_wing_orders()
 	day_cycle.advance(delta_seconds)
 	if day_cycle.completed and breach_system.is_sealed() and oxygen_system.is_breathable():
@@ -474,6 +486,44 @@ func is_upgrade_unlocked(kind: int) -> bool:
 	return false
 
 
+func _reset_reclamation() -> void:
+	reclaim_active = false
+	reclaim_elapsed = 0.0
+	reclaim_paid = 0
+
+
+func can_start_reclamation() -> bool:
+	return not ended and breach_system.is_sealed() and not reclaim_active
+
+
+# One explicit choice: +18 salvage now, then +18 every 30 s of simulation, 6 times (126 in all).
+func start_reclamation() -> bool:
+	if not can_start_reclamation():
+		return false
+	reclaim_active = true
+	reclaim_elapsed = 0.0
+	reclaim_paid = 0
+	food_system.add_salvage(RECLAIM_START_SALVAGE)
+	status_message = "Reclamation started: +%d salvage now, +%d every %d s (%d deliveries)." % [RECLAIM_START_SALVAGE, RECLAIM_DELIVERY, roundi(RECLAIM_INTERVAL), RECLAIM_DELIVERIES]
+	status_message_left = 4.0
+	return true
+
+
+func reclaim_seconds_to_next() -> float:
+	if not reclaim_active or reclaim_paid >= RECLAIM_DELIVERIES:
+		return -1.0
+	return maxf(0.0, float(reclaim_paid + 1) * RECLAIM_INTERVAL - reclaim_elapsed)
+
+
+func _advance_reclamation(delta_seconds: float) -> void:
+	if not reclaim_active or ended or reclaim_paid >= RECLAIM_DELIVERIES:
+		return
+	reclaim_elapsed += delta_seconds
+	while reclaim_paid < RECLAIM_DELIVERIES and reclaim_elapsed >= float(reclaim_paid + 1) * RECLAIM_INTERVAL - 0.0001:
+		reclaim_paid += 1
+		food_system.add_salvage(RECLAIM_DELIVERY)
+
+
 func _claim_wing_order(order_id: String) -> void:
 	if order_id in WING_ORDER_IDS and not order_id in wing_orders_claimed:
 		wing_orders_claimed.append(order_id)
@@ -683,7 +733,15 @@ func load_game(path := SaveLoad.DEFAULT_PATH) -> bool:
 	return true
 
 
+# Post-seal reclamation: an additive, versioned key, written only once the player started it.
 func create_snapshot() -> Dictionary:
+	var snapshot := _create_base_snapshot()
+	if reclaim_active:
+		snapshot[RECLAIM_KEY] = {"version": RECLAIM_VERSION, "elapsed": reclaim_elapsed, "paid": reclaim_paid}
+	return snapshot
+
+
+func _create_base_snapshot() -> Dictionary:
 	var building_data: Array = []
 	for building in buildings:
 		building_data.append(building.serialize())
@@ -744,6 +802,11 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	wing_orders_claimed.clear()
 	for order_id: Variant in _snapshot_order_claims(snapshot):
 		wing_orders_claimed.append(str(order_id))
+	_reset_reclamation()
+	if snapshot.has(RECLAIM_KEY):
+		reclaim_active = true
+		reclaim_elapsed = float(snapshot[RECLAIM_KEY].elapsed)
+		reclaim_paid = int(snapshot[RECLAIM_KEY].paid)
 	ended = bool(snapshot.get("ended", false))
 	outcome = str(snapshot.get("outcome", ""))
 	var camera_data: Array = snapshot.get("camera", [])
@@ -832,6 +895,15 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 				return false
 		if bool(entry.get("alive", true)):
 			living_residents += 1
+	if snapshot.has(RECLAIM_KEY):
+		var reclaim: Variant = snapshot[RECLAIM_KEY]
+		if not reclaim is Dictionary or not _is_integer_in_range(reclaim.get("version"), RECLAIM_VERSION, RECLAIM_VERSION):
+			return false
+		if not _is_integer_in_range(reclaim.get("paid"), 0, RECLAIM_DELIVERIES):
+			return false
+		var elapsed: Variant = reclaim.get("elapsed")
+		if typeof(elapsed) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(elapsed)) or float(elapsed) < 0.0:
+			return false
 	if snapshot.has("wing_orders"):
 		var orders: Variant = snapshot.wing_orders
 		if not orders is Dictionary or not orders.get("claimed") is Array:
