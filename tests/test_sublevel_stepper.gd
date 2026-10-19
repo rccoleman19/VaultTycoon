@@ -77,7 +77,7 @@ func _test_stepper() -> void:
 	_assert_true(orders.briefing_deeper_button.disabled, "05 is the deepest unlocked")
 	orders.briefing_shallower_button.pressed.emit()
 	_assert_equal([game.wing_seed, game.sublevel], [seed_value, 6], "▶ goes to 06 on the same seed")
-	_assert_equal(game.breach_system.warning_at, BreachSystem.warning_at_for_seed(seed_value) - 15.0, "06 rules apply")
+	_assert_equal(game.breach_system.warning_at, BreachSystem.warning_at_for_seed(seed_value) - 10.0, "06 rules apply")
 	orders.briefing_shallower_button.pressed.emit()
 	_assert_equal(game.sublevel, 7, "▶ again goes to 07")
 	_assert_equal(orders.briefing_sublevel_label.text, "SUBLEVEL 07 · BASE", "07 is the base")

@@ -9,7 +9,8 @@ var _path := ""
 func _run() -> void:
 	_path = "user://test_sublevel_modifiers_%d.json" % OS.get_process_id()
 	_run_case("07 and seed 0 carry no modifier", _test_base)
-	_run_case("06 EARLY HATCH moves the hatch test 15 s earlier, kept on LOAD and in validation", _test_early_hatch)
+	_run_case("06 EARLY HATCH moves the hatch test 10 s earlier, kept on LOAD and in validation", _test_early_hatch)
+	_run_case("06 EARLY HATCH still offers the idle-start card on the earliest hatch", _test_early_hatch_card)
 	_run_case("05 THIN VEINS digs veins for 4 salvage, kept on LOAD", _test_thin_veins)
 	_run_case("04 DARK START has no starter Lumen", _test_dark_start)
 	_run_case("03 FIFTH MOUTH starts five residents", _test_fifth_mouth)
@@ -67,21 +68,21 @@ func _test_early_hatch() -> void:
 		return
 	game.new_game(false, 4242, 6)
 	var base := BreachSystem.warning_at_for_seed(4242)
-	_assert_equal(game.breach_system.warning_at, base - 15.0, "warning 15 s earlier")
-	_assert_equal(game.breach_system.get_open_at(), base - 15.0 + BreachSystem.GRACE_SECONDS, "the 20 s grace is kept")
+	_assert_equal(game.breach_system.warning_at, base - 10.0, "warning 10 s earlier")
+	_assert_equal(game.breach_system.get_open_at(), base - 10.0 + BreachSystem.GRACE_SECONDS, "the 20 s grace is kept")
 	_assert_equal(game.player_orders.wing_brand_label.text, "VAULT WING // 06-1092 · EARLY HATCH", "top bar names the modifier")
-	var warn := roundi(base - 15.0)
+	var warn := roundi(base - 10.0)
 	_assert_true(game.player_orders.wing_briefing_title.text.contains("HATCH TEST AT %02d:%02d" % [warn / 60, warn % 60]), "briefing shows the earlier hatch test")
-	_assert_true(game.player_orders.wing_briefing_title.text.contains("SUBLEVEL 06 · EARLY HATCH: hatch test 15 s earlier"), "briefing names the modifier")
+	_assert_true(game.player_orders.wing_briefing_title.text.contains("SUBLEVEL 06 · EARLY HATCH: hatch test 10 s earlier"), "briefing names the modifier")
 	_assert_equal(_vein_yield_and_lamps(game), [MapGrid.VEIN_SALVAGE_YIELD, 1, 4], "not cumulative")
 	game.begin_shift()
-	game.step_simulation(base - 10.0)
+	game.step_simulation(base - 8.0)
 	_assert_true(game.breach_system.phase == BreachSystem.Phase.WARNING, "the warning fires before the 07 time")
 	var early: Dictionary = JSON.parse_string(JSON.stringify(game.create_snapshot()))
 	game.new_game(false, 4242)
 	_assert_equal(game.breach_system.warning_at, base, "a 07 wing is back to the seed's time")
 	_assert_true(game.apply_snapshot(early), "a 06 save mid-warning is valid and loads over a 07 wing")
-	_assert_equal(game.breach_system.warning_at, base - 15.0, "LOAD restores the earlier hatch")
+	_assert_equal(game.breach_system.warning_at, base - 10.0, "LOAD restores the earlier hatch")
 	_dispose(game)
 
 
@@ -187,3 +188,22 @@ func _test_unlock() -> void:
 	_assert_equal(game.wing_records().unlocked_sublevel(), 3, "03 stays the deepest")
 	_dispose(game)
 	_clean()
+
+
+# #111's idle-start card (IDLE_START_DELAY 30 s) is offered only while the hatch is dormant, so on the
+# merged game a 06 warning at or before 30 s hides it for the whole wing. Every warning slot must stay
+# past it (the merged-state run is in vault-codex/ladder-qa).
+const IDLE_START_CARD_SECONDS := 30.0
+
+
+func _test_early_hatch_card() -> void:
+	var guard := _spawn_game()
+	_assert_true("sublevel" in guard, "the ladder is present")
+	_dispose(guard)
+	_assert_equal(BreachSystem.warning_at_for_seed(8), BreachSystem.SEEDED_WARNING_MIN, "seed 8 has the earliest hatch")
+	_assert_true(VaultGame.warning_at_for(8, 6) > IDLE_START_CARD_SECONDS, "06-0008 warns after the card at %.0f s" % VaultGame.warning_at_for(8, 6))
+	var earliest := INF
+	for slot_seed: int in range(1, 200):
+		earliest = minf(earliest, VaultGame.warning_at_for(slot_seed, 6))
+	_assert_true(earliest > IDLE_START_CARD_SECONDS, "no 06 wing warns at or before 30 s (earliest %.0f s)" % earliest)
+	_assert_true(VaultGame.warning_at_for(8, 6) < BreachSystem.warning_at_for_seed(8), "06 still warns earlier than 07")

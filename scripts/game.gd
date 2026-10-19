@@ -16,12 +16,14 @@ var sublevel := WingRecords.BASE_SUBLEVEL
 const SUBLEVEL_SAVE_VERSION := 1
 # Records + ladder C5: each sublevel below 07 carries one named modifier (not cumulative), applied
 # at NEW WING and, for the rule-based ones, restored on LOAD from the saved sublevel.
-const EARLY_HATCH_ADVANCE_SECONDS := 15.0
+# Ladder QA: 10, not 15, so the earliest seeded hatch (45 s) still warns after #111's 30 s idle-start
+# card (45 - 15 = 30 hid the card for good on the merged game: no bunks, no Air, the crew died).
+const EARLY_HATCH_ADVANCE_SECONDS := 10.0
 const THIN_VEIN_SALVAGE_YIELD := 4
 const DARK_STARTER_LUMENS := 0
 const FIFTH_MOUTH_CREW_SIZE := 5
 const SUBLEVEL_MODIFIERS := {
-	6: {"name": "EARLY HATCH", "detail": "hatch test 15 s earlier"},
+	6: {"name": "EARLY HATCH", "detail": "hatch test 10 s earlier"},
 	5: {"name": "THIN VEINS", "detail": "salvage veins -33%"},
 	4: {"name": "DARK START", "detail": "no starter Lumen"},
 	3: {"name": "FIFTH MOUTH", "detail": "a fifth resident to feed"},
@@ -800,7 +802,7 @@ static func sublevel_modifier(level: int) -> Dictionary:
 	return SUBLEVEL_MODIFIERS.get(level, {})
 
 
-# The hatch warning time for a wing: 06 EARLY HATCH moves it 15 s earlier (the 20 s grace is kept).
+# The hatch warning time for a wing: 06 EARLY HATCH moves it 10 s earlier (the 20 s grace is kept).
 static func warning_at_for(seed_value: int, level: int) -> float:
 	var warn := BreachSystem.warning_at_for_seed(seed_value)
 	if seed_value != LEGACY_WING_SEED and level == 6:
