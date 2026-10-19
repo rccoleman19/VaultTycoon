@@ -1451,7 +1451,10 @@ func _refresh_inspector() -> void:
 		inspector_title.text = "%s // RESIDENT" % resident.resident_name.to_upper()
 		var is_lit := game.is_resident_lit(resident)
 		var mood_factors := resident.needs.get_mood_factors(is_lit, resident.sleeping, game.oxygen_system.is_low())
-		if resident.recreating:
+		# A corpse has no live mood drivers: no light, hunger, low-O2 or break line.
+		if not resident.alive:
+			mood_factors = "Deceased · no live factors"
+		elif resident.recreating:
 			if game.job_system.is_recreation_running(resident):
 				mood_factors = "Rec Console · +%.0f mood/s" % ResidentNeeds.RECREATION_RECOVERY_PER_SECOND
 			elif game.job_system.is_actively_recreating(resident):
@@ -1466,6 +1469,11 @@ func _refresh_inspector() -> void:
 			resident.needs.get_mood_state(),
 			mood_factors,
 		]
+		if not resident.alive:
+			# A corpse has no mood tier either (QA 2026-10-18c #6).
+			var inspector_lines := inspector_state.text.split("\n")
+			inspector_lines[2] = "Mood: none"
+			inspector_state.text = "\n".join(inspector_lines)
 		_set_need("food", "FOOD", resident.needs.food)
 		_set_need("rest", "REST", resident.needs.rest)
 		_set_need("mood", "MOOD", resident.needs.mood)
