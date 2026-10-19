@@ -2484,6 +2484,8 @@ const IDLE_START_TEXT := {
 	"header_2": "IDLE START · 2/2 · air",
 	"start": "Dig + 2 Beds, Gen, Kitchen, Tray",
 	"air": "Place Air Recycler · %d salvage",
+	"header_3": "IDLE START · after the seal · bunks",
+	"bunks": "Begin reclamation · 2 bunks",
 	"dismiss": "Dismiss · don't offer again",
 }
 
@@ -2518,13 +2520,17 @@ func _refresh_idle_start() -> void:
 	var offer := game.can_offer_idle_start()
 	# The hatch warning owns the panel (its readouts and FOCUS HATCH must stay in view).
 	var air := game.idle_start_air_pending() and game.breach_system.phase != BreachSystem.Phase.WARNING
-	idle_start_box.visible = offer or air
+	var bunks := game.idle_start_bunks_pending()
+	idle_start_box.visible = offer or air or bunks
 	if offer:
 		idle_start_header.text = IDLE_START_TEXT.header_1
 		idle_start_button.text = IDLE_START_TEXT.start
 	elif air:
 		idle_start_header.text = IDLE_START_TEXT.header_2
 		idle_start_button.text = IDLE_START_TEXT.air % int(VaultBuilding.COSTS[VaultBuilding.Kind.AIR_RECYCLER])
+	elif bunks:
+		idle_start_header.text = IDLE_START_TEXT.header_3
+		idle_start_button.text = IDLE_START_TEXT.bunks
 
 
 func _on_idle_start_pressed() -> void:
@@ -2532,6 +2538,8 @@ func _on_idle_start_pressed() -> void:
 		game.apply_idle_start()
 	elif game.idle_start_air_pending():
 		game.place_idle_start_air()
+	elif game.idle_start_bunks_pending():
+		game.apply_idle_start_bunks()
 	refresh()
 
 
@@ -2566,6 +2574,9 @@ func also_text() -> String:
 	if game.ended or not game.breach_system.is_sealed():
 		return ""
 	if game.can_start_reclamation():
+		# The idle-start step-3 card already offers reclamation; one prompt there is enough.
+		if game.idle_start_bunks_pending():
+			return ""
 		return "Also: begin reclamation · +%d salvage" % VaultGame.RECLAIM_START_SALVAGE
 	var target := _upgrade_offer_target()
 	if target != null and game.food_system.salvage >= target.get_upgrade_cost():

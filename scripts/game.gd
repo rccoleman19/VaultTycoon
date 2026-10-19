@@ -62,6 +62,7 @@ const RECLAIM_KEY := "post_seal_reclamation"
 # opening (digs, two bunks, Charge Node, Nutrient Station, Grow Tray); step 2 is the Air Recycler.
 const IDLE_START_KEY := "idle_start"
 const IDLE_START_VERSION := 1
+const IDLE_START_VERSION_STEP3 := 2 # written only while step 3 is pending (stage 2); stage-1 saves stay version 1
 const IDLE_START_DELAY := 30.0
 const IDLE_START_DIG_COLUMNS := [16, 15, 14, 13, 12]
 const IDLE_START_DIG_ROWS := [13, 14, 15, 16, 17]
@@ -73,6 +74,8 @@ const IDLE_START_PIECES := [
 	[VaultBuilding.Kind.GROW_TRAY, Vector2i(23, 12)],
 ]
 const IDLE_START_AIR_CELL := Vector2i(24, 12)
+const IDLE_START_BUNK_CELLS := [Vector2i(28, 12), Vector2i(25, 12), Vector2i(28, 13), Vector2i(25, 13), Vector2i(27, 13), Vector2i(26, 13)]
+const IDLE_START_BUNK_TARGET := 4
 const IDLE_START_PREFS_SECTION := "idle_start"
 const RECLAIM_VERSION := 1
 const RECLAIM_START_SALVAGE := 18
@@ -83,7 +86,7 @@ var reclaim_active := false
 var reclaim_elapsed := 0.0
 var reclaim_paid := 0
 var idle_start_prefs_path := "user://vault_prefs.cfg"
-var idle_start_stage := 0 # 0 not taken, 1 start queued (Air pending), 2 done
+var idle_start_stage := 0 # 0 not taken, 1 start queued (Air pending), 2 Air placed (step 3 waits for the seal), 3 done
 var _idle_start_next_id := -1
 var _idle_start_floor_count := -1
 var _idle_start_dismissed_cache := {}
@@ -577,6 +580,48 @@ func _idle_start_air_placed() -> bool:
 	return false
 
 
+# Step 3 (QA-e #3): after the seal, one tap starts reclamation and queues 2 bunks. Reconciled from
+# the world: a running (or finished) reclamation, or 4+ bunks in any state, already count as done.
+func idle_start_bunks_pending() -> bool:
+	return (
+		idle_start_stage in [1, 2]
+		and not ended
+		and breach_system.is_sealed()
+		and _idle_start_air_placed()
+		and not reclaim_active
+		and _idle_start_bunk_count() < IDLE_START_BUNK_TARGET
+		and not idle_start_dismissed()
+	)
+
+
+func _idle_start_bunk_count() -> int:
+	var count := 0
+	for building in buildings:
+		if building.kind == VaultBuilding.Kind.BED:
+			count += 1
+	return count
+
+
+func apply_idle_start_bunks() -> bool:
+	if not idle_start_bunks_pending():
+		return false
+	var cells: Array[Vector2i] = []
+	for cell: Vector2i in IDLE_START_BUNK_CELLS:
+		if cells.size() < 2 and _idle_start_cell_free(cell):
+			cells.append(cell)
+	if cells.size() < 2:
+		status_message = "No room for 2 bunks by the start; place them with [BUNK]."
+		status_message_left = 4.0
+		return false
+	start_reclamation()
+	for cell: Vector2i in cells:
+		place_blueprint(VaultBuilding.Kind.BED, cell)
+	idle_start_stage = 3
+	status_message = "Reclamation started and 2 bunks queued: +%d salvage now, +%d every %d s." % [RECLAIM_START_SALVAGE, RECLAIM_DELIVERY, roundi(RECLAIM_INTERVAL)]
+	status_message_left = 5.0
+	return true
+
+
 func idle_start_dismissed() -> bool:
 	if not _idle_start_dismissed_cache.has(idle_start_prefs_path):
 		var prefs := ConfigFile.new()
@@ -847,6 +892,8 @@ func create_snapshot() -> Dictionary:
 		snapshot[RECLAIM_KEY] = {"version": RECLAIM_VERSION, "elapsed": reclaim_elapsed, "paid": reclaim_paid}
 	if idle_start_stage == 1:
 		snapshot[IDLE_START_KEY] = {"version": IDLE_START_VERSION, "stage": idle_start_stage}
+	elif idle_start_stage == 2:
+		snapshot[IDLE_START_KEY] = {"version": IDLE_START_VERSION_STEP3, "stage": idle_start_stage}
 	return snapshot
 
 
@@ -1018,9 +1065,11 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 			return false
 	if snapshot.has(IDLE_START_KEY):
 		var idle_start: Variant = snapshot[IDLE_START_KEY]
-		if not idle_start is Dictionary or not _is_integer_in_range(idle_start.get("version"), IDLE_START_VERSION, IDLE_START_VERSION):
+		if not idle_start is Dictionary or not _is_integer_in_range(idle_start.get("version"), IDLE_START_VERSION, IDLE_START_VERSION_STEP3):
 			return false
-		if not _is_integer_in_range(idle_start.get("stage"), 1, 1):
+		# Version 1 carries stage 1 only; version 2 adds stage 2 (step 3 pending).
+		var max_stage := 1 if int(idle_start.version) == IDLE_START_VERSION else 2
+		if not _is_integer_in_range(idle_start.get("stage"), 1, max_stage):
 			return false
 	if snapshot.has("wing_orders"):
 		var orders: Variant = snapshot.wing_orders

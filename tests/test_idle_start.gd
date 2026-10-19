@@ -21,6 +21,10 @@ func _run() -> void:
 	_run_case("a finished Air Recycler anywhere completes step 2, across a disk reload", _test_finished_air_elsewhere)
 	_run_case("a genuinely pending step 2 survives a disk reload and still places at its cell", _test_pending_air_reload)
 	_run_case("Dismiss still writes the profile pref while step 2 is genuinely pending", _test_pending_air_dismiss)
+	_run_case("step 3 waits for the seal, then one tap starts reclamation and queues 2 bunks", _test_step3)
+	_run_case("step 3 reconciles from the world: reclamation running or 4+ bunks count as done", _test_step3_reconcile)
+	_run_case("step 3 survives a reload as a version-2 key, and dismissal hides it", _test_step3_save_dismiss)
+	_run_case("step 3 refuses without room and needs the card's earlier steps", _test_step3_guards)
 	_finish()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
 
@@ -207,14 +211,16 @@ func _test_save() -> void:
 	_assert_equal(game.idle_start_stage, 1, "stage 1 restored")
 	_assert_true(game.idle_start_air_pending(), "the Air step survives a reload")
 	var bad: Dictionary = copy.duplicate(true)
-	bad[VaultGame.IDLE_START_KEY]["version"] = 2
+	bad[VaultGame.IDLE_START_KEY]["version"] = 3
 	_assert_false(game.apply_snapshot(bad), "unknown version rejected")
+	bad[VaultGame.IDLE_START_KEY] = {"version": 2, "stage": 3}
+	_assert_false(game.apply_snapshot(bad), "version 2 stage outside 1-2 rejected")
 	bad[VaultGame.IDLE_START_KEY] = {"version": 1, "stage": 2}
 	_assert_false(game.apply_snapshot(bad), "stage outside 1 rejected")
 	bad[VaultGame.IDLE_START_KEY] = "x"
 	_assert_false(game.apply_snapshot(bad), "non-dictionary rejected")
 	game.place_idle_start_air()
-	_assert_false(game.create_snapshot().has(VaultGame.IDLE_START_KEY), "stage 2: no key")
+	_assert_equal(game.create_snapshot().get(VaultGame.IDLE_START_KEY), {"version": 2, "stage": 2}, "stage 2 (step 3 pending): version-2 key")
 	_dispose(game)
 	game = _game()
 	var plain: Dictionary = JSON.parse_string(JSON.stringify(game.create_snapshot()))
@@ -311,12 +317,12 @@ func _test_texts_fit() -> void:
 	var orders := game.player_orders
 	var width := _panel_width(orders)
 	var button_chrome := orders.idle_start_button.get_theme_stylebox("normal").get_minimum_size().x
-	for text: String in ["Dig + 2 Beds, Gen, Kitchen, Tray", "Place Air Recycler · 14 salvage", "Place Air Recycler · 999 salvage"]:
+	for text: String in ["Dig + 2 Beds, Gen, Kitchen, Tray", "Place Air Recycler · 14 salvage", "Place Air Recycler · 999 salvage", "Begin reclamation · 2 bunks"]:
 		var room := width - button_chrome - _text_width(orders.idle_start_button, text)
 		_assert_true(room >= 12.0, "button '%s' fits with %.0f px to spare" % [text, room])
 	var dismiss_room := width - orders.idle_start_dismiss_button.get_theme_stylebox("normal").get_minimum_size().x - _text_width(orders.idle_start_dismiss_button, "Dismiss · don't offer again")
 	_assert_true(dismiss_room >= 12.0, "dismiss fits with %.0f px to spare" % dismiss_room)
-	for text: String in ["IDLE START · 1/2 · beds, food, power", "IDLE START · 2/2 · air"]:
+	for text: String in ["IDLE START · 1/2 · beds, food, power", "IDLE START · 2/2 · air", "IDLE START · after the seal · bunks"]:
 		var room := width - _text_width(orders.idle_start_header, text)
 		_assert_true(room >= 12.0, "header '%s' fits with %.0f px to spare" % [text, room])
 	_dispose(game)
@@ -432,5 +438,140 @@ func _test_pending_air_dismiss() -> void:
 	game.begin_shift()
 	_advance_to(game, 30.0)
 	_assert_false(game.can_offer_idle_start(), "a later wing is not offered the start")
+	_dispose(game)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+
+
+func _seal(game: VaultGame) -> void:
+	game.day_cycle.deserialize({"elapsed_seconds": 70.0, "current_day": 2, "completed": false})
+	game.breach_system.advance(0.0, 70.0)
+	game.breach_system.patch_delivered = BreachSystem.PATCH_COST
+	game.breach_system.apply_patch_work(100.0)
+	game.job_system.rebuild_from_state()
+
+
+func _two_taps() -> VaultGame:
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+	var game := _game()
+	_advance_to(game, 30.0)
+	game.player_orders.idle_start_button.pressed.emit()
+	game.player_orders.idle_start_button.pressed.emit()
+	return game
+
+
+func _bunks(game: VaultGame) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.BED:
+			cells.append(building.cell)
+	return cells
+
+
+func _test_step3() -> void:
+	var game := _two_taps()
+	_assert_equal(game.idle_start_stage, 2, "two taps reach stage 2")
+	_assert_false(game.idle_start_bunks_pending(), "not before the seal")
+	_assert_equal(_card(game), "<hidden>", "card hidden between step 2 and the seal")
+	_seal(game)
+	_assert_true(game.idle_start_bunks_pending(), "pending after the seal")
+	_assert_equal(_card(game), "IDLE START · after the seal · bunks | Begin reclamation · 2 bunks", "the step-3 card")
+	var salvage := game.food_system.salvage
+	game.player_orders.idle_start_button.pressed.emit()
+	_assert_true(game.reclaim_active, "one tap starts reclamation")
+	_assert_equal(game.food_system.salvage, salvage + VaultGame.RECLAIM_START_SALVAGE, "with its +18 now")
+	_assert_equal(_bunks(game), [Vector2i(27, 12), Vector2i(26, 12), Vector2i(28, 12), Vector2i(25, 12)], "and queues bunks at (28,12) and (25,12)")
+	_assert_equal(game.idle_start_stage, 3, "stage 3")
+	_assert_false(game.idle_start_bunks_pending(), "no longer pending")
+	_assert_equal(_card(game), "<hidden>", "card gone")
+	_assert_false(game.create_snapshot().has(VaultGame.IDLE_START_KEY), "stage 3 writes no key")
+	_assert_false(game.apply_idle_start_bunks(), "a second call does nothing")
+	_assert_equal(_bunks(game).size(), 4, "still 4 bunks")
+	_dispose(game)
+
+
+func _test_step3_reconcile() -> void:
+	var game := _two_taps()
+	_seal(game)
+	_assert_true(game.start_reclamation(), "reclamation started from the wing orders panel")
+	_assert_false(game.idle_start_bunks_pending(), "running reclamation counts step 3 done")
+	_assert_equal(_card(game), "<hidden>", "card hidden")
+	_assert_false(game.apply_idle_start_bunks(), "and refuses")
+	_assert_equal(_bunks(game).size(), 2, "no bunks queued")
+	_dispose(game)
+	game = _two_taps()
+	_seal(game)
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(28, 13)), "a third bunk blueprint by hand")
+	_assert_true(game.idle_start_bunks_pending(), "3 bunks still leave step 3 pending")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(25, 13)), "a fourth bunk blueprint by hand")
+	_assert_false(game.idle_start_bunks_pending(), "4 bunks in any state count step 3 done")
+	_assert_false(game.reclaim_active, "without starting reclamation")
+	_dispose(game)
+	game = _game()
+	_advance_to(game, 30.0)
+	game.player_orders.idle_start_button.pressed.emit()
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.AIR_RECYCLER, Vector2i(22, 13)), "Air placed by hand (stage stays 1)")
+	_seal(game)
+	_assert_equal(game.idle_start_stage, 1, "stage 1")
+	_assert_true(game.idle_start_bunks_pending(), "a hand-placed Air still opens step 3")
+	_dispose(game)
+
+
+func _test_step3_save_dismiss() -> void:
+	var game := _two_taps()
+	_reload(game)
+	_assert_equal(game.idle_start_stage, 2, "stage 2 restored from disk")
+	_seal(game)
+	_assert_true(game.idle_start_bunks_pending(), "step 3 opens after the seal on the reloaded wing")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.also_text(), "", "the step-3 card replaces the Also reclamation line")
+	_assert_false(game.player_orders.also_label.visible, "Also line hidden while the card shows")
+	game.player_orders.idle_start_dismiss_button.pressed.emit()
+	game.player_orders.refresh()
+	_assert_true(game.player_orders.also_text().begins_with("Also: begin reclamation"), "dismissing the card brings the Also line back")
+	_assert_true(game.player_orders.also_label.visible, "and shows it")
+	_assert_true(game.idle_start_dismissed(), "Dismiss writes the profile pref")
+	_assert_false(game.idle_start_bunks_pending(), "and hides step 3")
+	_assert_equal(_card(game), "<hidden>", "card hidden")
+	_assert_false(game.reclaim_active, "nothing started")
+	_dispose(game)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+
+
+func _test_step3_guards() -> void:
+	var game := _game()
+	_seal(game)
+	_assert_false(game.idle_start_bunks_pending(), "a wing that never took the card gets no step 3")
+	_dispose(game)
+	game = _two_taps()
+	for cell: Vector2i in VaultGame.IDLE_START_BUNK_CELLS.slice(1):
+		game.place_blueprint(VaultBuilding.Kind.GENERATOR, cell)
+	_seal(game)
+	var blocked := 0
+	for cell: Vector2i in VaultGame.IDLE_START_BUNK_CELLS:
+		if game.get_building_at(cell) != null or not game.map_grid.is_walkable(cell):
+			blocked += 1
+	_assert_true(blocked >= VaultGame.IDLE_START_BUNK_CELLS.size() - 1, "at most one bunk cell is free (%d blocked)" % blocked)
+	_assert_false(game.apply_idle_start_bunks(), "fewer than 2 free cells refuses")
+	_assert_false(game.reclaim_active, "and starts nothing")
+	_assert_equal(game.idle_start_stage, 2, "step 3 stays pending")
+	_dispose(game)
+	game = _two_taps()
+	_seal(game)
+	game.ended = true
+	_assert_false(game.idle_start_bunks_pending(), "an ended wing gets no step 3")
+	_dispose(game)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
+	game = _game()
+	_advance_to(game, 30.0)
+	game.player_orders.idle_start_button.pressed.emit()
+	_seal(game)
+	_assert_equal(game.idle_start_stage, 1, "one tap, no Air Recycler yet")
+	_assert_false(game.idle_start_bunks_pending(), "step 3 waits for an Air Recycler even after the seal")
+	_dispose(game)
+	game = _two_taps()
+	_seal(game)
+	game.dismiss_idle_start()
+	game.idle_start_stage = 2
+	_assert_false(game.idle_start_bunks_pending(), "a stage-2 save on a dismissed profile gets no step 3")
 	_dispose(game)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(PREFS))
