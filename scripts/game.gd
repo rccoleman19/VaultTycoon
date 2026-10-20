@@ -38,13 +38,22 @@ const VOLUNTEER_SALVAGE_COST := 8
 const PERK_BUNKROOM := "bunkroom"
 const BUNKROOM_CELL := Vector2i(25, 17)
 const BUNKROOM_SALVAGE_COST := 14
+# B2 GROW NOOK, earned by Annex badges on 2 different sublevels: a Grow Tray blueprint placed at the
+# start with its materials on site (the crew still build it), paid with meals. Ladder QA: an unsupplied
+# plan hauled the opening salvage away from the Nutrient Station (05: 0/6), so it comes supplied; the
+# nook cell sits in the Annex corner, off the recommended-start cells (23,12 blocked the idle start).
+const PERK_GROW_NOOK := "grow_nook"
+const GROW_NOOK_CELL := Vector2i(26, 17)
+const GROW_NOOK_MEALS_COST := 2
+const GROW_NOOK_BADGES := 2
 const PERKS := {
 	PERK_PROVISIONING: {"name": "PROVISIONING", "unlock_level": 7, "detail": "+4 meals, -8 salvage"},
 	PERK_FLOODLIGHT: {"name": "FLOODLIGHT", "unlock_level": 5, "detail": "+1 lit Lumen (sheds first), -6 salvage"},
 	PERK_VOLUNTEER: {"name": "VOLUNTEER", "unlock_level": 3, "detail": "+1 resident, -8 salvage"},
-	PERK_BUNKROOM: {"name": "BUNKROOM", "unlock_annex": true, "detail": "Annex blueprint: +1 built Bunk, -14 salvage"},
+	PERK_BUNKROOM: {"name": "BUNKROOM", "unlock_annex": 1, "detail": "blueprint: +1 Bunk, -14 salvage"},
+	PERK_GROW_NOOK: {"name": "GROW NOOK", "unlock_annex": GROW_NOOK_BADGES, "detail": "blueprint: Grow Tray plan, -2 meals"},
 }
-const PERK_ORDER := [PERK_PROVISIONING, PERK_FLOODLIGHT, PERK_VOLUNTEER, PERK_BUNKROOM]
+const PERK_ORDER := [PERK_PROVISIONING, PERK_FLOODLIGHT, PERK_VOLUNTEER, PERK_BUNKROOM, PERK_GROW_NOOK]
 # The player's choice for the next wings (kept across NEW WING / REPLAY / stepping).
 var equipped_perk := ""
 # The perk this wing started with ("" = NONE); saved, shown on the outcome.
@@ -879,7 +888,7 @@ func unlocked_perks_for(seed_value: int) -> Array:
 		return unlocked
 	var store := wing_records()
 	for id: String in PERK_ORDER:
-		if store.has_annex_badge() if PERKS[id].has("unlock_annex") else store.has_win_on(int(PERKS[id].unlock_level)):
+		if store.annex_badge_sublevels() >= int(PERKS[id].unlock_annex) if PERKS[id].has("unlock_annex") else store.has_win_on(int(PERKS[id].unlock_level)):
 			unlocked.append(id)
 	return unlocked
 
@@ -901,6 +910,9 @@ func _apply_perk_start() -> void:
 		PERK_BUNKROOM:
 			_spawn_starting_fixture(VaultBuilding.Kind.BED, BUNKROOM_CELL, false)
 			food_system.salvage = maxi(0, food_system.salvage - BUNKROOM_SALVAGE_COST)
+		PERK_GROW_NOOK:
+			_spawn_starting_blueprint(VaultBuilding.Kind.GROW_TRAY, GROW_NOOK_CELL, true)
+			food_system.meals = maxi(0, food_system.meals - GROW_NOOK_MEALS_COST)
 	_mark_floodlight()
 
 
@@ -1176,10 +1188,12 @@ func _serialized_building_by_id(building_data: Array, building_id: int) -> Dicti
 
 
 # Ladder 04 DARK START: the starter Lumen begins as a blueprint the crew supply and build.
-func _spawn_starting_blueprint(kind: int, cell: Vector2i) -> void:
+func _spawn_starting_blueprint(kind: int, cell: Vector2i, supplied := false) -> void:
 	var building := VaultBuilding.new()
 	building_root.add_child(building)
 	building.configure(next_building_id, kind as VaultBuilding.Kind, cell)
+	if supplied:
+		building.delivered = building.get_cost()
 	next_building_id += 1
 	buildings.append(building)
 	job_system.queue_building(building)
