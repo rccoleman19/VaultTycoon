@@ -59,6 +59,18 @@ var briefing_load_button: Button
 var briefing_begin_button: Button
 var briefing_close_button: Button
 var briefing_tips_label: Label
+# Records + ladder C6: the opening briefing's sublevel stepper (only once a deeper sublevel is
+# unlocked) and the rolled wing's record line.
+var briefing_sublevel_row: HBoxContainer
+var briefing_sublevel_label: Label
+var briefing_deeper_button: Button
+var briefing_shallower_button: Button
+var briefing_record_label: Label
+# Meta perks P2: the perk row under the sublevel stepper (hidden until a perk is unlocked).
+var briefing_perk_row: HBoxContainer
+var briefing_perk_label: Label
+var briefing_perk_prev_button: Button
+var briefing_perk_next_button: Button
 var _briefing_is_opening := false
 var help_button: Button
 var breach_warning_panel: PanelContainer
@@ -66,6 +78,8 @@ var breach_resume_button: Button
 var outcome_panel: PanelContainer
 var outcome_title: Label
 var outcome_text: Label
+var outcome_grade: Label
+var outcome_record: Label
 var work_priorities_overlay: Control
 var work_priorities_panel: PanelContainer
 var work_priorities_button: Button
@@ -108,6 +122,7 @@ func _build_interface() -> void:
 	brand.add_theme_font_size_override("font_size", 17)
 	brand.custom_minimum_size.x = 262
 	top_row.add_child(brand)
+	wing_brand_label = brand
 	clock_label = Label.new()
 	clock_label.custom_minimum_size.x = 170
 	top_row.add_child(clock_label)
@@ -679,6 +694,50 @@ func _build_briefing() -> void:
 	title.add_theme_font_size_override("font_size", 20)
 	title.add_theme_color_override("font_color", Color("75d4b4"))
 	shell.add_child(title)
+	wing_briefing_title = title
+	briefing_sublevel_row = HBoxContainer.new()
+	briefing_sublevel_row.add_theme_constant_override("separation", 8)
+	briefing_sublevel_row.visible = false
+	shell.add_child(briefing_sublevel_row)
+	briefing_deeper_button = Button.new()
+	briefing_deeper_button.text = "◀"
+	briefing_deeper_button.tooltip_text = "Deeper sublevel"
+	briefing_deeper_button.pressed.connect(step_sublevel.bind(-1))
+	briefing_sublevel_row.add_child(briefing_deeper_button)
+	briefing_sublevel_label = Label.new()
+	briefing_sublevel_label.add_theme_color_override("font_color", Color("efc56b"))
+	briefing_sublevel_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	briefing_sublevel_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	briefing_sublevel_row.add_child(briefing_sublevel_label)
+	briefing_shallower_button = Button.new()
+	briefing_shallower_button.text = "▶"
+	briefing_shallower_button.tooltip_text = "Shallower sublevel"
+	briefing_shallower_button.pressed.connect(step_sublevel.bind(1))
+	briefing_sublevel_row.add_child(briefing_shallower_button)
+	briefing_perk_row = HBoxContainer.new()
+	briefing_perk_row.add_theme_constant_override("separation", 8)
+	briefing_perk_row.visible = false
+	shell.add_child(briefing_perk_row)
+	briefing_perk_prev_button = Button.new()
+	briefing_perk_prev_button.text = "◀"
+	briefing_perk_prev_button.tooltip_text = "Previous perk"
+	briefing_perk_prev_button.pressed.connect(step_perk.bind(-1))
+	briefing_perk_row.add_child(briefing_perk_prev_button)
+	briefing_perk_label = Label.new()
+	briefing_perk_label.add_theme_color_override("font_color", Color("9fd8c4"))
+	briefing_perk_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	briefing_perk_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	briefing_perk_row.add_child(briefing_perk_label)
+	briefing_perk_next_button = Button.new()
+	briefing_perk_next_button.text = "▶"
+	briefing_perk_next_button.tooltip_text = "Next perk"
+	briefing_perk_next_button.pressed.connect(step_perk.bind(1))
+	briefing_perk_row.add_child(briefing_perk_next_button)
+	briefing_record_label = Label.new()
+	briefing_record_label.add_theme_color_override("font_color", Color("efc56b"))
+	briefing_record_label.add_theme_font_size_override("font_size", 14)
+	briefing_record_label.visible = false
+	shell.add_child(briefing_record_label)
 	var intro := Label.new()
 	intro.text = "YOU designate dig/build/stockpile. THEY auto-claim from Dig/Haul/Craft/Cook defaults. Draft is optional. Survive seven days."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -726,6 +785,7 @@ func _build_outcome() -> void:
 	outcome_panel.set_anchors_preset(Control.PRESET_CENTER)
 	outcome_panel.position = Vector2(-260, -145)
 	outcome_panel.size = Vector2(520, 290)
+	outcome_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 	outcome_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	outcome_panel.add_theme_stylebox_override("panel", _panel_style(Color("111b21"), Color("efc56b"), 3))
 	root.add_child(outcome_panel)
@@ -740,6 +800,18 @@ func _build_outcome() -> void:
 	outcome_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	outcome_title.add_theme_font_size_override("font_size", 26)
 	content.add_child(outcome_title)
+	outcome_grade = Label.new()
+	outcome_grade.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	outcome_grade.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	outcome_grade.add_theme_font_size_override("font_size", 17)
+	outcome_grade.visible = false
+	content.add_child(outcome_grade)
+	outcome_record = Label.new()
+	outcome_record.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	outcome_record.add_theme_font_size_override("font_size", 15)
+	outcome_record.add_theme_color_override("font_color", Color("efc56b"))
+	outcome_record.visible = false
+	content.add_child(outcome_record)
 	outcome_text = Label.new()
 	outcome_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	outcome_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -754,8 +826,14 @@ func _build_outcome() -> void:
 	row.add_child(load_button)
 	var restart_button := Button.new()
 	restart_button.text = "NEW WING"
-	restart_button.pressed.connect(func() -> void: game.new_game(true))
+	restart_button.pressed.connect(func() -> void: game.new_wing())
 	row.add_child(restart_button)
+	outcome_replay_button = Button.new()
+	outcome_replay_button.name = "ReplayWingButton"
+	outcome_replay_button.text = "REPLAY WING"
+	outcome_replay_button.visible = false
+	outcome_replay_button.pressed.connect(replay_wing)
+	row.add_child(outcome_replay_button)
 	outcome_panel.visible = false
 
 
@@ -1175,7 +1253,7 @@ func _primary_next_step() -> Dictionary:
 				"help": "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food.",
 			}
 	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
-	var floor_count := game.map_grid.get_floor_cells().size()
+	var floor_count := game.map_grid.get_floor_cells().size() - game.map_grid.layout_pocket_count
 	var dig_marks := game.map_grid.dig_marks.size()
 	if floor_count < initial_floor + 12:
 		if dig_marks <= 0:
@@ -1410,7 +1488,7 @@ func _expand_details_on_urgency() -> void:
 func _refresh_roster() -> void:
 	var parts: Array[String] = []
 	for resident in game.residents:
-		parts.append("%d:%d:%d:%d:%d:%s:%s:%s:%s" % [
+		parts.append("%d:%d:%d:%d:%d:%s:%s:%s:%s:%s" % [
 			resident.resident_id,
 			floori(resident.needs.food),
 			floori(resident.needs.rest),
@@ -1420,6 +1498,7 @@ func _refresh_roster() -> void:
 			str(resident.drafted),
 			str(resident.has_manual_move_order()),
 			str(resident.is_forced_job),
+			resident.trait_id,
 		])
 	var signature := "|".join(parts)
 	if signature == _last_roster_signature:
@@ -1437,6 +1516,9 @@ func _refresh_roster() -> void:
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.disabled = not resident.alive
 		button.pressed.connect(_on_resident_pressed.bind(resident.resident_id))
+		if resident.alive and resident.trait_id != "":
+			button.text = _roster_text_with_trait(button.text, resident.trait_id)
+			button.tooltip_text = "%s\n%s: %s" % [button.text, resident.trait_id, VaultResident.TRAIT_EFFECTS[resident.trait_id]]
 		roster_box.add_child(button)
 
 
@@ -1471,6 +1553,8 @@ func _refresh_inspector() -> void:
 		_set_need("mood", "MOOD", resident.needs.mood)
 		_set_need("health", "HEALTH", resident.needs.health)
 		_show_resident_commands(resident)
+		if resident.trait_id != "":
+			inspector_state.text += "\nTrait: %s · %s" % [resident.trait_id, VaultResident.TRAIT_EFFECTS[resident.trait_id]]
 		work_header.text = "WORK PRIORITIES · APPLY AFTER UNDRAFT" if resident.drafted else "WORK PRIORITIES · 1 HIGHEST"
 		for key: String in work_buttons:
 			var button: Button = work_buttons[key]
@@ -1804,7 +1888,7 @@ func _refresh_breach() -> void:
 func _refresh_checklist() -> void:
 	if checklist == null:
 		return
-	var initial_floor_count := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
+	var initial_floor_count := game.map_grid.get_initial_floor_count()
 	var cook_enabled := _has_eligible_worker("cook")
 	var hatch_ready := (
 		game.breach_system.is_sealed()
@@ -1944,6 +2028,10 @@ func show_briefing(visible: bool, opening := false) -> void:
 		briefing_begin_button.visible = opening
 	if briefing_close_button != null:
 		briefing_close_button.visible = not opening
+	# A replay's opening briefing hides LOAD: the checkpoint belongs to the run the player just ended.
+	if briefing_load_button != null:
+		briefing_load_button.visible = not (opening and _replay_opening)
+	_refresh_sublevel_stepper()
 	if visible:
 		show_work_priorities(false)
 		_refresh_checklist()
@@ -1958,6 +2046,16 @@ func _briefing_focus_controls(opening: bool) -> Array[Control]:
 	var primary: Button = briefing_begin_button if opening else briefing_close_button
 	if primary != null and primary.visible and not primary.disabled:
 		controls.append(primary)
+	# Tab reaches the sublevel stepper between the primary and LOAD; a disabled endpoint arrow stays out.
+	if briefing_sublevel_row != null and briefing_sublevel_row.visible:
+		for button: Button in [briefing_deeper_button, briefing_shallower_button]:
+			if button.visible and not button.disabled:
+				controls.append(button)
+	# Meta perks P2: the perk arrows follow the sublevel arrows, before LOAD.
+	if briefing_perk_row != null and briefing_perk_row.visible:
+		for button: Button in [briefing_perk_prev_button, briefing_perk_next_button]:
+			if button.visible and not button.disabled:
+				controls.append(button)
 	if briefing_load_button != null and briefing_load_button.visible and not briefing_load_button.disabled:
 		controls.append(briefing_load_button)
 	return controls
@@ -2066,6 +2164,7 @@ func _reveal_fixture_controls() -> void:
 
 
 func show_outcome(won: bool, survivors: int) -> void:
+	outcome_replay_button.visible = game.wing_seed != 0
 	show_briefing(false)
 	show_work_priorities(false)
 	show_breach_warning(false)
@@ -2074,10 +2173,142 @@ func show_outcome(won: bool, survivors: int) -> void:
 		outcome_title.text = "SEAL STABILIZED"
 		outcome_title.add_theme_color_override("font_color", Color("75d4b4"))
 		outcome_text.text = "The pressure breach was contained, breathable air was restored, and the wing remained inhabited through seven full days. %d resident%s survived. Your local victory state has been saved." % [survivors, "" if survivors == 1 else "s"]
+		var grade := crew_grade()
+		outcome_grade.text = format_crew_grade(grade)
+		outcome_grade.add_theme_color_override("font_color", CREW_GRADE_COLORS[int(grade["stars"]) - 1])
+		outcome_grade.visible = true
 	else:
+		outcome_grade.text = format_loss_cause(loss_cause())
+		outcome_grade.add_theme_color_override("font_color", Color("ef6860"))
+		outcome_grade.visible = not outcome_grade.text.is_empty()
 		outcome_title.text = "WING LOST"
 		outcome_title.add_theme_color_override("font_color", Color("ef6860"))
 		outcome_text.text = "No residents remain alive. Reopen the last daily checkpoint or initialize a new wing and stabilize supplies, powered air recycling, and the pressure hatch sooner."
+	outcome_record.text = record_line(won)
+	outcome_record.visible = not outcome_record.text.is_empty()
+
+
+# Records + ladder C3: the wing's record under the crew rating. A win shows the best grade, a loss
+# the furthest day; NEW RECORD only right after the finish that raised it (a LOAD shows the plain
+# record). Empty for seed 0, in tests without an injected store, and with no record.
+func record_line(won: bool) -> String:
+	if not game.records_enabled():
+		return ""
+	var fresh: bool = not game.finish_record.is_empty()
+	var current: Dictionary = game.finish_record.current if fresh else game.wing_records().get_record(game.wing_seed, game.sublevel)
+	var previous: Dictionary = game.finish_record.previous if fresh else {}
+	if current.is_empty():
+		return ""
+	var text := ""
+	var raised := false
+	if won:
+		if current.best_stars == null:
+			return ""
+		var best := int(current.best_stars)
+		text = "BEST %s%s" % ["★".repeat(best), "☆".repeat(3 - best)]
+		raised = previous.is_empty() or previous.best_stars == null or best > int(previous.best_stars)
+	else:
+		text = "FURTHEST DAY %d" % int(current.best_day)
+		raised = previous.is_empty() or int(current.best_day) > int(previous.best_day)
+	if fresh and raised:
+		text += " · NEW RECORD"
+	# Meta perks P2: records are not split by perk; the line says which perk this run used.
+	if game.wing_perk != "":
+		text += " · with %s" % VaultGame.perk_name(game.wing_perk)
+	if fresh and game.finish_record.has("unlocked"):
+		var level := int(game.finish_record.unlocked)
+		text += "\nSUBLEVEL %02d UNLOCKED · %s" % [level, VaultGame.sublevel_modifier(level).get("name", "")]
+	return text
+
+
+# Win-screen crew rating (QA 2026-10-18b #8). A win starts at 3 stars and loses one per failed
+# check, never below 1: whole crew alive, hatch never opened, no survivor at BREAK RISK (mood <=
+# 9) or CRITICAL (food < 20 or rest < 15, the alert-bar rule). Derived from saved state only, so a
+# load into a won save shows the same grade; nothing new is saved.
+const CREW_GRADE_COLORS: Array[Color] = [Color("ef6860"), Color("efc56b"), Color("75d4b4")]
+
+
+func crew_grade() -> Dictionary:
+	var crew := game.residents.size()
+	var lost := 0
+	var break_risk := 0
+	var critical := 0
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			lost += 1
+			continue
+		if resident.needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD:
+			break_risk += 1
+		if resident.needs.food < 20.0 or resident.needs.rest < 15.0:
+			critical += 1
+	var reasons: Array[String] = []
+	if lost > 0:
+		reasons.append("%d of %d crew lost" % [lost, crew])
+	if game.breach_system.has_opened():
+		reasons.append("hatch opened")
+	if break_risk > 0:
+		reasons.append("%d survivor%s at BREAK RISK" % [break_risk, "" if break_risk == 1 else "s"])
+	if critical > 0:
+		reasons.append("%d survivor%s CRITICAL" % [critical, "" if critical == 1 else "s"])
+	var failed := int(lost > 0) + int(game.breach_system.has_opened()) + int(break_risk > 0 or critical > 0)
+	return {"stars": maxi(1, 3 - failed), "reasons": reasons}
+
+
+func format_crew_grade(grade: Dictionary) -> String:
+	var stars := int(grade["stars"])
+	var reasons: Array = grade["reasons"]
+	var reason := "whole crew home, hatch held, crew steady" if reasons.is_empty() else " · ".join(reasons)
+	return "CREW RATING %s%s · %s" % ["★".repeat(stars), "☆".repeat(3 - stars), reason]
+
+
+# Loss cause (QA 2026-10-18c #1). A corpse's needs freeze at death and O2 is saved, so the likely
+# cause is derived, never stored. Per dead resident, retained evidence first (the first match
+# wins): food 0, rest 0, mood at the severe line, then O2 at or below the suffocation line, else
+# unknown. A corpse still above 0 health (a direct kill) is unknown. The hint follows the largest
+# count; ties keep this order.
+const LOSS_CAUSES: Array[String] = ["starved", "exhausted", "in despair", "suffocated", "unknown"]
+const LOSS_CAUSE_HINTS: Array[String] = [
+	"Next wing: keep a Grow Tray and Nutrient Station powered, with Cook and Haul on, before the starting meals run out.",
+	"Next wing: build Bunks and undraft tired residents so they can sleep.",
+	"Next wing: keep the crew lit and build a powered Rec Console.",
+	"Next wing: keep an Air Recycler powered and patch the hatch before it opens.",
+	"Next wing: pause when health falls and check food, rest, mood and oxygen.",
+]
+
+
+func loss_cause() -> Array[int]:
+	var counts: Array[int] = [0, 0, 0, 0, 0]
+	var air_lost := game.oxygen_system.oxygen <= OxygenSystem.CRITICAL_OXYGEN_THRESHOLD
+	for resident: VaultResident in game.residents:
+		if resident.alive:
+			continue
+		if resident.needs.health > 0.0:
+			counts[4] += 1
+		elif resident.needs.food <= 0.0:
+			counts[0] += 1
+		elif resident.needs.rest <= 0.0:
+			counts[1] += 1
+		elif resident.needs.mood <= ResidentNeeds.SEVERE_MOOD_THRESHOLD:
+			counts[2] += 1
+		elif air_lost:
+			counts[3] += 1
+		else:
+			counts[4] += 1
+	return counts
+
+
+func format_loss_cause(counts: Array[int]) -> String:
+	var parts: Array[String] = []
+	var top := -1
+	for i in counts.size():
+		if counts[i] <= 0:
+			continue
+		parts.append("%d %s" % [counts[i], LOSS_CAUSES[i]])
+		if top < 0 or counts[i] > counts[top]:
+			top = i
+	if top < 0:
+		return ""
+	return "LIKELY CAUSE · %s\n%s" % [" · ".join(parts), LOSS_CAUSE_HINTS[top]]
 
 
 func hide_outcome() -> void:
@@ -2098,6 +2329,155 @@ func _set_need(key: String, label_text: String, value: float) -> void:
 		bar.modulate = Color("ef6860") if value < 25.0 else (Color("efc56b") if value < 50.0 else Color("75d4b4"))
 
 
+# Wing seed (QA 2026-10-18c #2, slice 1): a seeded wing names itself, e.g. `07-3F2A`, on the top
+# bar and the briefing. The legacy wing (seed 0) keeps today's labels exactly.
+var wing_brand_label: Label
+var wing_briefing_title: Label
+
+
+# Wing-seed slice 4: REPLAY WING starts a fresh run of the seeded wing on screen (same seed,
+# current rules). Seed 0 never shows it, so legacy outcome panels keep their two buttons.
+var outcome_replay_button: Button
+var _replay_opening := false
+
+
+func replay_wing() -> void:
+	if game.wing_seed != 0:
+		_replay_opening = true
+		game.new_game(true, game.wing_seed, game.sublevel)
+		_replay_opening = false
+
+
+func _refresh_sublevel_stepper() -> void:
+	if briefing_sublevel_row == null or game == null:
+		return
+	var deepest := game.unlocked_sublevel()
+	var level: int = game.sublevel
+	briefing_sublevel_row.visible = _briefing_is_opening and game.wing_seed != 0 and deepest < WingRecords.BASE_SUBLEVEL
+	var modifier := VaultGame.sublevel_modifier(level)
+	briefing_sublevel_label.text = "SUBLEVEL %02d · %s" % [level, modifier.get("name", "BASE")]
+	briefing_deeper_button.disabled = level <= deepest
+	briefing_shallower_button.disabled = level >= WingRecords.BASE_SUBLEVEL
+	briefing_record_label.text = briefing_record_text()
+	briefing_record_label.visible = _briefing_is_opening and not briefing_record_label.text.is_empty()
+	_refresh_perk_row()
+
+
+# Meta perks P2: NONE plus every unlocked perk, in order; shown only once one is unlocked.
+func perk_choices() -> Array:
+	return [""] + game.unlocked_perks()
+
+
+func _refresh_perk_row() -> void:
+	if briefing_perk_row == null:
+		return
+	var choices := perk_choices()
+	briefing_perk_row.visible = _briefing_is_opening and game.wing_seed != 0 and choices.size() > 1
+	var index := maxi(0, choices.find(game.wing_perk))
+	var id: String = choices[index]
+	briefing_perk_label.text = "PERK · NONE" if id == "" else "PERK · %s: %s" % [VaultGame.perk_name(id), VaultGame.PERKS[id].detail]
+	briefing_perk_prev_button.disabled = index <= 0
+	briefing_perk_next_button.disabled = index >= choices.size() - 1
+
+
+# ◀/▶ pick the perk for this and later wings; the wing is rebuilt on the same seed and sublevel so the
+# perk's start applies once. Keyboard focus stays on the perk arrows, as on the sublevel stepper.
+func step_perk(direction: int) -> void:
+	if not _briefing_is_opening or game.wing_seed == 0:
+		return
+	var choices := perk_choices()
+	var index := clampi(maxi(0, choices.find(game.wing_perk)) + direction, 0, choices.size() - 1)
+	if choices[index] == game.wing_perk:
+		return
+	var replay := briefing_load_button != null and not briefing_load_button.visible
+	var arrows := [briefing_perk_prev_button, briefing_perk_next_button]
+	if direction > 0:
+		arrows.reverse()
+	var keep_focus := get_viewport().gui_get_focus_owner() in arrows
+	game.equipped_perk = choices[index]
+	_replay_opening = replay
+	game.new_game(true, game.wing_seed, game.sublevel)
+	_replay_opening = false
+	if keep_focus:
+		for button: Button in arrows:
+			if button in _briefing_focus_controls(true):
+				button.grab_focus()
+				break
+
+
+# "RECORD 06-1092 · BEST ★★☆ · FURTHEST DAY 7": the rolled wing's record on this sublevel.
+func briefing_record_text() -> String:
+	if not game.records_enabled():
+		return ""
+	var record := game.wing_records().get_record(game.wing_seed, game.sublevel)
+	if record.is_empty():
+		return ""
+	var parts: Array[String] = ["RECORD %s" % wing_id(game.wing_seed, game.sublevel)]
+	if record.best_stars != null:
+		parts.append("BEST %s%s" % ["★".repeat(int(record.best_stars)), "☆".repeat(3 - int(record.best_stars))])
+	parts.append("FURTHEST DAY %d" % int(record.best_day))
+	if bool(record.annex):
+		parts.append("ANNEX")
+	return " · ".join(parts)
+
+
+# ◀ goes one sublevel deeper (down to the deepest unlocked), ▶ one shallower (up to 07). The wing is
+# rebuilt on the same seed so the new rules apply; a replay's briefing keeps LOAD hidden.
+func step_sublevel(direction: int) -> void:
+	if not _briefing_is_opening or game.wing_seed == 0:
+		return
+	var level := clampi(game.sublevel + direction, game.unlocked_sublevel(), WingRecords.BASE_SUBLEVEL)
+	if level == game.sublevel:
+		return
+	var replay := briefing_load_button != null and not briefing_load_button.visible
+	var arrows := [briefing_deeper_button, briefing_shallower_button]
+	if direction > 0:
+		arrows.reverse()
+	var keep_focus := get_viewport().gui_get_focus_owner() in arrows
+	_replay_opening = replay
+	game.new_game(true, game.wing_seed, level)
+	_replay_opening = false
+	# Keyboard focus stays on the arrow just used; at an endpoint it is disabled, so the other arrow takes it.
+	if keep_focus:
+		for button: Button in arrows:
+			if button in _briefing_focus_controls(true):
+				button.grab_focus()
+				break
+
+
+static func wing_id(wing_seed: int, level := WingRecords.BASE_SUBLEVEL) -> String:
+	return "07" if wing_seed == 0 else WingRecords.key_for_seed(wing_seed, level)
+
+
+# "2 ROCK POCKETS · 3 SALVAGE VEINS": what a seeded wing holds, named on the NEW WING briefing.
+static func wing_layout_summary(wing_seed: int) -> String:
+	return "%d ROCK POCKETS · %d SALVAGE VEINS" % [MapGrid.pocket_count_for_seed(wing_seed), MapGrid.vein_count_for_seed(wing_seed)]
+
+
+func _sublevel() -> int:
+	return game.sublevel if game != null else WingRecords.BASE_SUBLEVEL
+
+
+func show_wing_id(wing_seed: int) -> void:
+	if wing_brand_label != null:
+		wing_brand_label.text = "VAULT WING // SUBLEVEL 07" if wing_seed == 0 else "VAULT WING // %s" % wing_id(wing_seed, _sublevel())
+		var modifier := VaultGame.sublevel_modifier(_sublevel()) if wing_seed != 0 else {}
+		if not modifier.is_empty():
+			wing_brand_label.text += " · %s" % modifier.name
+	if wing_briefing_title != null:
+		wing_briefing_title.text = "VAULT WING %s // SEAL STABILIZATION" % wing_id(wing_seed, _sublevel())
+		if wing_seed != 0:
+			var warn := roundi(VaultGame.warning_at_for(wing_seed, _sublevel()))
+			wing_briefing_title.text += "\nHATCH TEST AT %02d:%02d" % [warn / 60, warn % 60]
+			var modifier := VaultGame.sublevel_modifier(_sublevel())
+			if not modifier.is_empty():
+				wing_briefing_title.text += "\nSUBLEVEL %02d · %s: %s" % [_sublevel(), modifier.name, modifier.detail]
+			# Contents name the applied layout. A pre-layout seeded save keeps wing_seed but
+			# loads with layout_seed 0, so the briefing must not advertise pockets/veins.
+			if game != null and game.map_grid.layout_seed != 0:
+				wing_briefing_title.text += "\n%s" % wing_layout_summary(wing_seed)
+
+
 func _get_recreation_user(building_id: int) -> VaultResident:
 	for resident: VaultResident in game.residents:
 		if resident.alive and resident.recreating and resident.recreation_id == building_id:
@@ -2115,6 +2495,16 @@ func _get_resident_order_status(resident: VaultResident) -> String:
 		status_parts.append("FORCED")
 	status_parts.append(resident.state)
 	return " · ".join(status_parts)
+
+
+# Wing-seed slice 3: a seeded trait leads the row's second line (what they do) when the row has
+# two lines, otherwise it follows the name. Unseeded rows are never touched.
+static func _roster_text_with_trait(text: String, trait_name: String) -> String:
+	var newline := text.find("\n")
+	if newline >= 0:
+		return "%s\n%s · %s" % [text.substr(0, newline), trait_name, text.substr(newline + 1)]
+	var name_end := text.find(" · ")
+	return "%s · %s%s" % [text.substr(0, name_end), trait_name, text.substr(name_end)]
 
 
 func _show_resident_commands(resident: VaultResident) -> void:

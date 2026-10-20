@@ -926,7 +926,7 @@ func _process_job(resident: VaultResident, delta_seconds: float) -> void:
 			resident.state = "Walking to excavation"
 			return
 		resident.state = "Excavating rock"
-		if map_grid.apply_dig_work(target, delta_seconds * resident.get_work_multiplier()):
+		if map_grid.apply_dig_work(target, delta_seconds * resident.get_work_multiplier() * resident.get_trait_factor("dig")):
 			_finish_job(job, resident)
 		return
 	if type == JobType.HAUL_RUBBLE:
@@ -943,7 +943,7 @@ func _process_job(resident: VaultResident, delta_seconds: float) -> void:
 			resident.state = "Rushing to pressure hatch"
 			return
 		resident.state = "Patching pressure breach"
-		if breach.apply_patch_work(delta_seconds):
+		if breach.apply_patch_work(delta_seconds * resident.get_trait_factor("patch")):
 			_finish_job(job, resident)
 		return
 	var building: VaultBuilding = game.get_building_by_id(int(job.building_id))
@@ -970,7 +970,7 @@ func _process_job(resident: VaultResident, delta_seconds: float) -> void:
 			_finish_job(job, resident)
 			return
 		resident.state = "Preparing meals"
-		resident.work_accumulator += delta_seconds * resident.get_work_multiplier()
+		resident.work_accumulator += delta_seconds * resident.get_work_multiplier() * resident.get_trait_factor("cook")
 		if resident.work_accumulator >= 4.0:
 			if food.finish_cooking():
 				queue_meals(building.cell, FoodSystem.COOK_OUTPUT)

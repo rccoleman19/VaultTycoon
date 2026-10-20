@@ -53,6 +53,8 @@ var delivered := 0
 var construction_left := 6.0
 var powered := false
 var manually_disabled := false
+# Meta perks P3: FLOODLIGHT's Lumen sheds first (OPTIONAL). Derived from the wing's perk, never saved.
+var shed_first := false
 var is_emergency_core := false
 var production_progress := 0.0
 var reserved_by := -1
@@ -108,7 +110,7 @@ func get_power_priority_name() -> String:
 
 
 func get_power_priority() -> PowerPriority:
-	return get_default_power_priority(kind)
+	return PowerPriority.OPTIONAL if shed_first else get_default_power_priority(kind)
 
 
 static func get_default_power_priority(building_kind: int) -> PowerPriority:
