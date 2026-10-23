@@ -78,6 +78,8 @@ var _last_roster_signature := ""
 var _last_inspected_resident_id := -1
 var _last_inspected_building_id := -1
 var _last_work_priority_roster_signature := ""
+var _next_mood_tip_latched := false
+var _next_mood_tip_owner_id := 0
 
 
 func setup(game_node: VaultGame) -> void:
@@ -980,6 +982,19 @@ func _charge_finish_step() -> Dictionary:
 	return _fund_blueprint_step(VaultBuilding.Kind.GENERATOR)
 
 
+# Next-tip hysteresis (QA 2026-10-18b #3). The Rec tip enters at the break line (mood 9) but
+# holds until no living resident still wants recreation (mood <= 35), so a +16 stress break
+# (9 -> 25) cannot flip it. Presentation only, never saved; a new game or load replaces the
+# resident nodes, which resets the latch.
+func _hold_mood_break_tip(break_risk: bool, rec_wanted: bool) -> bool:
+	var owner_id := 0 if game.residents.is_empty() else game.residents[0].get_instance_id()
+	if owner_id != _next_mood_tip_owner_id:
+		_next_mood_tip_owner_id = owner_id
+		_next_mood_tip_latched = false
+	_next_mood_tip_latched = break_risk or (_next_mood_tip_latched and rec_wanted)
+	return _next_mood_tip_latched
+
+
 func _offline_rec_step() -> Dictionary:
 	if game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) < 1 or game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) > 0:
 		return {}
@@ -1125,9 +1140,6 @@ func _hatch_key_step(action: String, they: String, help: String) -> Dictionary:
 
 
 func _primary_next_step() -> Dictionary:
-	var breach_blocker := _breach_blocker_step()
-	if not breach_blocker.is_empty():
-		return breach_blocker
 	var critical_resident := false
 	var mood_break_risk := false
 	var rec_wanted := false
@@ -1143,6 +1155,10 @@ func _primary_next_step() -> Dictionary:
 			rec_wanted = true
 		if resident.needs.wants_medical_care() and resident.medical_bed_id < 0:
 			injured_without_reservation = true
+	var breach_blocker := _breach_blocker_step()
+	if not breach_blocker.is_empty():
+		_hold_mood_break_tip(mood_break_risk, rec_wanted)
+		return breach_blocker
 	# An empty larder outranks the mood tips: a stress break passes, starvation does not.
 	var empty_larder_break := mood_break_risk and game.food_system.meals == 0
 	# With no Nutrient Station the larder only falls. Once the crew's stored meals and
@@ -1155,6 +1171,8 @@ func _primary_next_step() -> Dictionary:
 	)
 	if unfed_larder_break or ((critical_resident or empty_larder_break) and game.food_system.meals < game.get_alive_count()):
 		var completed_kitchens := game.get_completed_building_count(VaultBuilding.Kind.KITCHEN)
+		# The crisis returns before the Rec branch, so keep the Rec-tip hold current here too.
+		_hold_mood_break_tip(mood_break_risk, rec_wanted)
 		if completed_kitchens < 1:
 			var unfinished_kitchens := 0
 			for kitchen: VaultBuilding in game.buildings:
@@ -1190,6 +1208,7 @@ func _primary_next_step() -> Dictionary:
 				"help": "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power.",
 				"tool": "generator",
 			}
+	mood_break_risk = _hold_mood_break_tip(mood_break_risk, rec_wanted)
 	if mood_break_risk and game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) < 1:
 		var unfinished_rec := 0
 		for rec: VaultBuilding in game.buildings:
