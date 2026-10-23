@@ -76,8 +76,9 @@ func advance(delta_seconds: float, buildings: Array[VaultBuilding]) -> void:
 		if not building.complete or building.kind != VaultBuilding.Kind.GROW_TRAY or not building.powered:
 			continue
 		building.production_progress += delta_seconds
-		while building.production_progress >= GROW_SECONDS:
-			building.production_progress -= GROW_SECONDS
+		var grow_seconds := building.get_grow_seconds()
+		while building.production_progress >= grow_seconds:
+			building.production_progress -= grow_seconds
 			raw_food_produced.emit(building.cell, GROW_YIELD)
 		building.queue_redraw()
 

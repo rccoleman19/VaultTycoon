@@ -38,6 +38,22 @@ run_godot_check() {
 cd "$PROJECT_ROOT"
 
 run_godot_check import --editor --quit
+# Mid-game salvage sink (QA 2026-10-18c #3, slice 1).
+run_godot_check midgame-upgrade --script res://tests/test_midgame_upgrade.gd
+run_godot_check wing-orders --script res://tests/test_wing_orders.gd
+run_godot_check post-seal-pacing --script res://tests/test_post_seal_pacing.gd
+run_godot_check idle-start --script res://tests/test_idle_start.gd
+run_godot_check postseal-help --script res://tests/test_postseal_help.gd
+run_godot_check keep-running --script res://tests/test_keep_running.gd
+run_godot_check keep-running-food --script res://tests/test_keep_running_food.gd
+run_godot_check annex --script res://tests/test_annex.gd
+run_godot_check annex-payoff --script res://tests/test_annex_payoff.gd
+run_godot_check annex-room --script res://tests/test_annex_room.gd
+run_godot_check comfort --script res://tests/test_comfort.gd
+run_godot_check feast --script res://tests/test_feast.gd
+run_godot_check kr-wellbeing --script res://tests/test_kr_wellbeing.gd
+run_godot_check sidebar-reach --script res://tests/test_sidebar_reach.gd
+run_godot_check bed-alert --script res://tests/test_bed_alert.gd
 run_godot_check tests --script res://tests/test_runner.gd
 run_godot_check save-snapshot-atomic --script res://tests/test_save_snapshot_atomic.gd
 run_godot_check mood-recreation --script res://tests/test_mood_recreation.gd
@@ -54,6 +70,7 @@ run_godot_check survival-next --script res://tests/test_survival_next.gd
 run_godot_check fixture-props --script res://tests/test_fixture_props.gd
 run_godot_check proxy-kind-on-load --script res://tests/test_proxy_kind_on_load.gd
 run_godot_check open-suggested-tab --script res://tests/test_open_suggested_tab.gd
+run_godot_check crew-grade --script res://tests/test_crew_grade.gd
 run_godot_check stockpile-zones --script res://tests/test_stockpile_zones.gd
 run_godot_check oxygen-forecast --script res://tests/test_oxygen_forecast.gd
 run_godot_check food-hauling --script res://tests/test_food_hauling.gd
@@ -102,5 +119,29 @@ if grep -E -q 'SCRIPT ERROR:|Parse Error:|Failed to load script' "$COLD_LOG"; th
 	exit 1
 fi
 echo "Cold-boot class-cache check passed."
+
+# Wing seed (QA 2026-10-18c #2) runs last so no merge-plan check.sh context moves.
+run_godot_check wing-seed --script res://tests/test_wing_seed.gd
+run_godot_check wing-layout --script res://tests/test_wing_layout.gd
+run_godot_check seed-visible --script res://tests/test_seed_visible.gd
+run_godot_check pre-layout-contents --script res://tests/test_pre_layout_contents.gd
+run_godot_check crew-traits --script res://tests/test_crew_traits.gd
+run_godot_check crew-roster --script res://tests/test_crew_roster.gd
+run_godot_check trait-text-fit --script res://tests/test_trait_text_fit.gd
+run_godot_check wing-records --script res://tests/test_wing_records.gd
+run_godot_check records-isolation --script res://tests/test_records_isolation.gd
+run_godot_check perks --script res://tests/test_perks.gd
+run_godot_check perk-row --script res://tests/test_perk_row.gd
+run_godot_check perks-p3 --script res://tests/test_perks_p3.gd
+run_godot_check crew-size --script res://tests/test_crew_size.gd
+run_godot_check annex-b1 --script res://tests/test_annex_b1.gd
+run_godot_check annex-b2 --script res://tests/test_annex_b2.gd
+run_godot_check briefing-stepper-focus --script res://tests/test_briefing_stepper_focus.gd
+run_godot_check records-finish --script res://tests/test_records_finish.gd
+run_godot_check sublevel --script res://tests/test_sublevel.gd
+run_godot_check sublevel-modifiers --script res://tests/test_sublevel_modifiers.gd
+run_godot_check sublevel-stepper --script res://tests/test_sublevel_stepper.gd
+run_godot_check records-keep-running --script res://tests/test_records_keep_running.gd
+run_godot_check replay-wing --script res://tests/test_replay_wing.gd
 
 echo "All Vault Tycoon headless checks passed."

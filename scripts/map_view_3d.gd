@@ -56,6 +56,7 @@ var _hatch_proxy: MeshInstance3D
 var _shared_hex_mesh: CylinderMesh
 var _mat_rock: StandardMaterial3D
 var _mat_rock_border: StandardMaterial3D
+var _mat_vein: StandardMaterial3D
 var _mat_wall: StandardMaterial3D
 var _wall_rock_meshes: Dictionary = {}
 var _chamber_fill: OmniLight3D
@@ -153,6 +154,8 @@ func _ensure_materials() -> void:
 	if _mat_rock == null:
 		_mat_rock = _make_terrain_mat(Color(0.16, 0.14, 0.13))
 		_mat_rock_border = _make_terrain_mat(Color(0.125, 0.12, 0.11))
+		# Wing-seed salvage veins: copper-streaked rock that yields double rubble.
+		_mat_vein = _make_terrain_mat(Color(0.42, 0.27, 0.15))
 		_mat_floor = _make_terrain_mat(Color(0.43, 0.42, 0.39))
 		_mat_floor_dark = _make_terrain_mat(Color(0.27, 0.26, 0.24))
 		_mat_floor_lit = _make_terrain_mat(_mat_floor.albedo_color.lerp(Color(1.0, 0.78, 0.28), 0.12))
@@ -378,6 +381,8 @@ func _make_hex_instance(cell: Vector2i) -> MeshInstance3D:
 			mat = _mat_rock_border
 		elif map_grid.dig_marks.has(cell):
 			mat = _mat_dig
+		elif map_grid.is_vein(cell):
+			mat = _mat_vein
 		else:
 			mat = _mat_rock
 	else:
@@ -1010,6 +1015,7 @@ func _fixture_part(root: Node3D, part_name: String, mesh: PrimitiveMesh, center:
 
 func _sync_fixture_appearance(root: Node3D, building: VaultBuilding) -> void:
 	var inactive := building.is_power_consumer() and (not building.powered or building.manually_disabled)
+	_sync_mk2_trim(root, building)
 	for part: MeshInstance3D in root.get_children():
 		var mat := part.material_override as StandardMaterial3D
 		var color: Color = part.get_meta("original_albedo")
@@ -1022,6 +1028,36 @@ func _sync_fixture_appearance(root: Node3D, building: VaultBuilding) -> void:
 		mat.emission = part.get_meta("original_emission")
 		mat.emission_energy_multiplier = part.get_meta("original_emission_energy")
 		mat.emission_enabled = bool(part.get_meta("powered_emitter")) and building.complete and building.powered and not building.manually_disabled
+		if part.name == MK2_TRIM_NAME:
+			# The Mk II trim glows whenever the fixture is working, consumer or not.
+			mat.emission_enabled = building.complete and not inactive and not building.manually_disabled
+
+
+# Midgame slice 4: a fitted Mk II fixture wears a thin salvage-gold ring at its foot, glowing
+# while the fixture works, so the upgrade reads on the map without the inspector. Derived from
+# the saved upgrade_tier only; nothing new is saved.
+const MK2_TRIM_NAME := "MkIITrim"
+const MK2_TRIM_COLOR := Color("efc56b")
+const MK2_TRIM_ENERGY := 0.9
+
+
+func _sync_mk2_trim(root: Node3D, building: VaultBuilding) -> void:
+	var trim := root.get_node_or_null(MK2_TRIM_NAME) as MeshInstance3D
+	var wants := building.upgrade_tier >= VaultBuilding.UPGRADE_TIER_MAX
+	if wants and trim == null:
+		var ring := TorusMesh.new()
+		var radius := get_hex_prism_radius()
+		ring.outer_radius = radius * 0.86
+		ring.inner_radius = radius * 0.74
+		ring.rings = 24
+		ring.ring_segments = 6
+		_fixture_part(root, MK2_TRIM_NAME, ring, Vector3(0, 0.35, 0), MK2_TRIM_COLOR, true)
+		trim = root.get_node(MK2_TRIM_NAME) as MeshInstance3D
+		trim.scale = Vector3(1.0, 0.35, 1.0)
+		trim.set_meta("original_emission_energy", MK2_TRIM_ENERGY)
+	elif not wants and trim != null:
+		root.remove_child(trim)
+		trim.queue_free()
 
 
 func _building_color_for_kind(kind: int) -> Color:
