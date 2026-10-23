@@ -1634,13 +1634,25 @@ func _refresh_roster() -> void:
 		var button := Button.new()
 		var urgent := minf(resident.needs.food, minf(resident.needs.rest, minf(resident.needs.mood, resident.needs.health)))
 		var resident_status := _get_resident_order_status(resident)
-		button.text = "%s · %s · HP %d · MOOD %d · LOW %d" % [resident.resident_name, resident_status, floori(resident.needs.health), floori(resident.needs.mood), floori(urgent)] if resident.alive else "%s · DECEASED" % resident.resident_name
+		button.text = _roster_row_text(resident, resident_status, urgent)
 		button.tooltip_text = button.text
-		button.clip_text = true
+		# Two short lines: vitals, then what the resident is doing. Rare stacked
+		# command flags wrap instead of clipping at the panel edge.
+		button.add_theme_font_size_override("font_size", ROSTER_FONT_SIZE)
+		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.disabled = not resident.alive
 		button.pressed.connect(_on_resident_pressed.bind(resident.resident_id))
 		roster_box.add_child(button)
+
+
+const ROSTER_FONT_SIZE := 13
+
+
+func _roster_row_text(resident: VaultResident, resident_status: String, urgent: float) -> String:
+	if not resident.alive:
+		return "%s · DECEASED" % resident.resident_name
+	return "%s · HP %d · MOOD %d · LOW %d\n%s" % [resident.resident_name, floori(resident.needs.health), floori(resident.needs.mood), floori(urgent), resident_status]
 
 
 func _refresh_inspector() -> void:
