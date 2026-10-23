@@ -53,6 +53,7 @@ run_godot_check fixture-props --script res://tests/test_fixture_props.gd
 run_godot_check proxy-kind-on-load --script res://tests/test_proxy_kind_on_load.gd
 run_godot_check open-suggested-tab --script res://tests/test_open_suggested_tab.gd
 run_godot_check stockpile-zones --script res://tests/test_stockpile_zones.gd
+run_godot_check oxygen-forecast --script res://tests/test_oxygen_forecast.gd
 run_godot_check food-hauling --script res://tests/test_food_hauling.gd
 run_godot_check food-props --script res://tests/test_food_props.gd
 run_godot_check food-loop-playthrough --script res://tests/test_food_loop_playthrough.gd
