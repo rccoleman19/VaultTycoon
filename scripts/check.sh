@@ -43,6 +43,7 @@ run_godot_check save-snapshot-atomic --script res://tests/test_save_snapshot_ato
 run_godot_check mood-recreation --script res://tests/test_mood_recreation.gd
 run_godot_check stress-break-venting --script res://tests/test_stress_break_venting.gd
 run_godot_check work-priorities --script res://tests/test_work_priorities.gd
+run_godot_check work-tie-help-text --script res://tests/test_work_tie_help_text.gd
 run_godot_check breach-modal-speed-keys --script res://tests/test_breach_modal_speed_keys.gd
 run_godot_check medical --script res://tests/test_medical.gd
 run_godot_check medical-next-threshold --script res://tests/test_medical_next_threshold.gd

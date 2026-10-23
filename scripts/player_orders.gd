@@ -268,7 +268,7 @@ func _build_interface() -> void:
 	work_priorities_button = Button.new()
 	work_priorities_button.name = "WorkPrioritiesButton"
 	work_priorities_button.text = "PRIORITIES [P]"
-	work_priorities_button.tooltip_text = "RimWorld-style work tab: ranks 1 (highest) to 4, OFF never claims. Left-to-right Dig→Haul→Craft→Cook. Defaults already on at 3 — open only to specialize."
+	work_priorities_button.tooltip_text = "RimWorld-style work tab: ranks 1 (highest) to 4, OFF never claims. Same rank goes by job: build, food, rubble, then digs. Defaults already on at 3 — open only to specialize."
 	work_priorities_button.custom_minimum_size = Vector2(122, 28)
 	work_priorities_button.pressed.connect(toggle_work_priorities)
 	roster_header_row.add_child(work_priorities_button)
@@ -520,7 +520,8 @@ func _build_work_priorities_board() -> void:
 	title_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_row.add_child(title_stack)
 	var eyebrow := Label.new()
-	eyebrow.text = "WORK TAB // LEFT → RIGHT WITHIN EACH RANK"
+	eyebrow.name = "WorkPrioritiesEyebrow"
+	eyebrow.text = "WORK TAB // RANK 1 FIRST · TIES GO BY JOB"
 	eyebrow.add_theme_color_override("font_color", Color("8faeb7"))
 	title_stack.add_child(eyebrow)
 	var title := Label.new()
@@ -536,7 +537,9 @@ func _build_work_priorities_board() -> void:
 	title_row.add_child(work_priorities_close_button)
 
 	var explanation := Label.new()
-	explanation.text = "Like RimWorld: click to cycle 1 (do first) → 2 → 3 → 4 → OFF. Same rank scans Dig→Haul→Craft→Cook left to right. Everyone starts at 3 for all four — auto work runs without opening this board. Draft/force is optional override. Hatch urgency beats ranks; OFF still blocks. HAUL = salvage + food."
+	explanation.name = "WorkPrioritiesHelp"
+	# Mirrors JobSystem._job_claims_before: rank, then _job_priority kind order, then distance.
+	explanation.text = "Like RimWorld: click to cycle 1 (do first) → 2 → 3 → 4 → OFF. Same rank goes by job, not column: build, food, rubble, then digs; nearest first. Everyone starts at 3 for all four — auto work runs without opening this board. Draft/force is optional override. Hatch urgency beats ranks; OFF still blocks. HAUL = salvage + food."
 	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	explanation.custom_minimum_size.y = 42
 	content.add_child(explanation)
@@ -1847,7 +1850,7 @@ func _refresh_checklist() -> void:
 		lines.append("[color=#efc56b]LIGHTING[/color]  Powered Lumens cover %d tiles. Shed Lumens stop lighting cells; darkness costs awake residents 30 extra mood/day. [L] maps coverage" % LightingSystem.LUMEN_RADIUS)
 		lines.append("Optional: ZONE paints salvage + food drop-offs; CANCEL clears cells")
 		lines.append("Optional: Medical Bed ($8) heals injuries; disable to deny care")
-		lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled · left→right Dig·Haul·Craft·Cook (defaults 3)")
+		lines.append("[color=#8faeb7][OPTIONAL][/color]  PRIORITIES [P]: 1 highest · 4 lowest · OFF disabled · same rank: build, food, rubble, then digs (defaults 3)")
 		lines.append("[color=#8faeb7][OPTIONAL][/color]  MANUAL ORDERS (optional override): [R] draft/undraft; right-click force — ordinary auto-work does not need this")
 	checklist.text = "\n".join(lines)
 	if briefing_tips_label != null:

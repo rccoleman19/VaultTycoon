@@ -112,6 +112,8 @@ The priority board shows every resident as a row and **DIG**, **HAUL**, **CRAFT*
 
 **DIG** covers excavation. **HAUL** covers rubble recovery, raw-food and meal output, blueprint supply, and emergency patch delivery. **CRAFT** covers fixture assembly and emergency hatch patching. **COOK** covers meal preparation at a powered Nutrient Station.
 
+Within the same rank, jobs go by type rather than by board column: blueprint supply, then assembly, then food hauling and cooking, then rubble, then new digs. Finished meals wait until after digs while the vault holds more than two per living resident. Nearer jobs break the remaining ties, then older jobs.
+
 Turning a category OFF immediately releases that resident from an automatically claimed job in the disabled category, including safely returning carried salvage or food to its source job. Changing one enabled numeric value to another does not interrupt the current job; it affects the resident's next automatic claim. Emergency hatch supply and patch work remain an absolute override above the numeric board order for undrafted residents, while OFF Haul or Craft remains ineligible for automatic response and produces the existing blocker warning. A valid one-shot forced order is the deliberate exception: it bypasses both the numeric rank and OFF for that exact job only.
 
 ## Manual draft and forced orders
