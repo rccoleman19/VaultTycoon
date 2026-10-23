@@ -4,6 +4,9 @@ extends Node2D
 signal died(resident: VaultResident)
 
 const MOVE_SPEED := 3.4 * MapGrid.TILE_SIZE
+# Finishing a Rec Console session leaves a resident refreshed: work runs 20% faster for one day.
+const REC_BOOST_MULTIPLIER := 1.20
+const REC_BOOST_SECONDS := 40.0
 const WORK_TYPES: Array[String] = ["dig", "haul", "craft", "cook"]
 const PRIORITY_DISABLED := 0
 const PRIORITY_HIGHEST := 1
@@ -32,6 +35,7 @@ var job_phase := ""
 var carrying := 0
 var carrying_kind := ""
 var work_accumulator := 0.0
+var rec_boost_left := 0.0
 var medical_bed_id := -1
 var sleeping := false
 var bed_id := -1
@@ -201,6 +205,9 @@ func advance_needs(
 	needs.advance(day_fraction, lit, sleeping or medical_rest, in_bed or medical_rest, recreation_active, low_oxygen)
 	if needs.health <= 0.0:
 		kill()
+	# The boost is for awake work: it pauses while asleep and resumes on waking.
+	if rec_boost_left > 0.0 and not sleeping:
+		rec_boost_left = maxf(0.0, rec_boost_left - day_fraction * DayCycle.SECONDS_PER_DAY)
 	queue_redraw()
 
 
@@ -214,7 +221,7 @@ func apply_damage(amount: float) -> void:
 
 
 func get_work_multiplier() -> float:
-	var multiplier := 1.0
+	var multiplier := REC_BOOST_MULTIPLIER if rec_boost_left > 0.0 else 1.0
 	if needs.food < 30.0:
 		multiplier *= 0.75
 	if needs.rest < 25.0:
@@ -337,6 +344,8 @@ func kill() -> void:
 	manual_destination = NO_MANUAL_DESTINATION
 	clear_forced_order()
 	clear_path()
+	# The boost only decays while alive, so clear it here or a corpse keeps a frozen Rec boost.
+	rec_boost_left = 0.0
 	died.emit(self)
 	recreating = false
 	recreation_id = -1
@@ -371,6 +380,7 @@ func serialize() -> Dictionary:
 		"recreating": recreating,
 		"recreation_id": recreation_id,
 		"recreation_sessions": recreation_sessions,
+		"rec_boost_left": rec_boost_left,
 		"stress_break_left": stress_break_left,
 		"drafted": drafted,
 		"manual_destination": saved_manual_destination,
@@ -401,6 +411,9 @@ func deserialize(data: Dictionary) -> void:
 	recreating = bool(data.get("recreating", false)) and alive and not sleeping
 	recreation_id = int(data.get("recreation_id", -1)) if recreating else -1
 	recreation_sessions = maxi(0, int(data.get("recreation_sessions", 0)))
+	var saved_boost: Variant = data.get("rec_boost_left", 0.0)
+	var boost_ok := alive and typeof(saved_boost) in [TYPE_INT, TYPE_FLOAT] and is_finite(float(saved_boost))
+	rec_boost_left = clampf(float(saved_boost), 0.0, REC_BOOST_SECONDS) if boost_ok else 0.0
 	stress_break_left = maxf(0.0, float(data.get("stress_break_left", 0.0))) if alive and not recreating else 0.0
 	drafted = bool(data.get("drafted", false)) and alive
 	if drafted:

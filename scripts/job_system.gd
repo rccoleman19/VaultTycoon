@@ -617,6 +617,7 @@ func _handle_survival(resident: VaultResident, delta_seconds: float) -> bool:
 			if resident.needs.is_recreation_satisfied():
 				resident.needs.finish_recreation()
 				resident.recreation_sessions += 1
+				resident.rec_boost_left = VaultResident.REC_BOOST_SECONDS
 				_release_recreation(resident)
 			return true
 	if resident.needs.wants_recreation():
