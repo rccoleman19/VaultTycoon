@@ -59,6 +59,7 @@ run_godot_check oxygen-forecast --script res://tests/test_oxygen_forecast.gd
 run_godot_check food-hauling --script res://tests/test_food_hauling.gd
 run_godot_check food-props --script res://tests/test_food_props.gd
 run_godot_check food-loop-playthrough --script res://tests/test_food_loop_playthrough.gd
+run_godot_check air-fund-tip --script res://tests/test_air_fund_tip.gd
 run_godot_check air-loop-playthrough --script res://tests/test_air_loop_playthrough.gd
 run_godot_check hatch-walk-playthrough --script res://tests/test_hatch_walk_playthrough.gd
 run_godot_check forced-hatch-status --script res://tests/test_forced_hatch_status.gd
