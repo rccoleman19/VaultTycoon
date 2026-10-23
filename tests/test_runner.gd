@@ -22,6 +22,8 @@ func _init() -> void:
 func _run() -> void:
 	_run_case("main scene boots with a sealed four-resident wing", _test_scene_boot_and_initial_state)
 	_run_case("bed shortage compares undrafted bunk need with free completed bunks", _test_bed_shortage_alert)
+	_run_case("alert bar leads with CRITICAL, then O2 and food threats, then the rest", _test_alert_severity_order)
+	_run_case("starvation is not a Med Bed injury and an empty larder says NO MEALS", _test_starvation_not_injury)
 	_run_case("DETAILS respects manual choices through ongoing brownouts", _test_details_brownout_collapse)
 	_run_case("DETAILS opens once for each overlapping urgency onset", _test_details_overlapping_urgencies)
 	_run_case("DETAILS reopens when a cleared brownout recurs", _test_details_brownout_recurrence)
@@ -224,6 +226,93 @@ func _test_bed_shortage_alert() -> void:
 	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
 	game.player_orders.refresh()
 	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "one free completed bunk clears the floor sleeper's shortage immediately")
+	_dispose(game)
+
+
+func _test_alert_severity_order() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.residents[1].drafted = true
+	game.food_system.meals = 0
+	game.oxygen_system.oxygen = OxygenSystem.LOW_OXYGEN_THRESHOLD
+	game.player_orders.refresh()
+	var text := game.player_orders.alert_label.text
+	_assert_true(text.begins_with("OXYGEN LOW  ·  NO MEALS"), "with no CRITICAL the O2 then food threats lead the bar")
+	_assert_true(text.find("NO MEALS") < text.find("DRAFTED CREW 1 · AUTO WORK PAUSED"), "drafted crew falls behind the food threat")
+	game.residents[0].needs.food = 10.0
+	game.player_orders.refresh()
+	text = game.player_orders.alert_label.text
+	var segments := text.split("  ·  ")
+	_assert_equal(segments[0], "CRITICAL: Ari", "a resident CRITICAL leads the bar")
+	_assert_equal(segments[1], "OXYGEN LOW", "O2 follows the life threat")
+	_assert_equal(segments[2], "NO MEALS", "food follows O2")
+	_assert_true(segments.find("DRAFTED CREW 1 · AUTO WORK PAUSED") > 2, "the rest keep their wording behind the threats")
+	_assert_equal(text.count("CRITICAL: "), 1, "the CRITICAL segment appears once")
+	var expected := ["CRITICAL: Ari", "OXYGEN LOW", "NO MEALS", "DRAFTED CREW 1 · AUTO WORK PAUSED"]
+	for segment in expected:
+		_assert_true(segment in segments, "no segment is dropped: %s" % segment)
+	game.residents[0].needs.food = 80.0
+	game.residents[1].drafted = false
+	game.food_system.meals = 40
+	game.oxygen_system.oxygen = OxygenSystem.STARTING_OXYGEN
+	game.player_orders.refresh()
+	_assert_false(game.player_orders.alert_label.text.begins_with("CRITICAL"), "the lead clears with the threat")
+	_dispose(game)
+
+
+# QA 2026-10-18c #4: starving crew read as INJURED · NO MED BED and the empty larder as LOW MEALS.
+const MED_BED_FOOD_EDGE := 35.0
+
+
+func _test_starvation_not_injury() -> void:
+	var game := _spawn_game()
+	game.begin_shift()
+	game.food_system.meals = 0
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 0.0
+		resident.needs.health = 70.0
+	game.player_orders.refresh()
+	var text := game.player_orders.alert_label.text
+	_assert_false("INJURED" in text, "starving crew are not counted as injured")
+	_assert_true("NO MEALS" in text, "an empty larder says NO MEALS")
+	_assert_false("LOW MEALS" in text, "and not LOW MEALS")
+	_assert_true(text.begins_with("CRITICAL: "), "the starving resident still leads the bar")
+	game.food_system.meals = 2
+	game.player_orders.refresh()
+	text = game.player_orders.alert_label.text
+	_assert_true("LOW MEALS" in text and not "NO MEALS" in text, "a short larder still says LOW MEALS")
+	game.residents[0].needs.food = 80.0
+	game.residents[0].needs.health = 60.0
+	game.player_orders.refresh()
+	_assert_true("INJURED 1 · NO MED BED" in game.player_orders.alert_label.text, "a fed resident's lost HP is an injury")
+	game.residents[1].needs.food = MED_BED_FOOD_EDGE
+	game.player_orders.refresh()
+	_assert_true("INJURED 1 · NO MED BED" in game.player_orders.alert_label.text, "food 35 is still too hungry for a Med Bed")
+	game.residents[1].needs.food = MED_BED_FOOD_EDGE + 0.5
+	game.player_orders.refresh()
+	_assert_true("INJURED 2 · NO MED BED" in game.player_orders.alert_label.text, "above food 35 the injury counts")
+	# The model behind the rule: a Med Bed turns a hungry resident away.
+	game.residents[0].needs.health = 100.0
+	game.residents[2].needs.health = 100.0
+	game.residents[3].needs.health = 100.0
+	var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12))
+	var hungry: VaultResident = game.residents[1]
+	hungry.needs.food = MED_BED_FOOD_EDGE
+	hungry.position = game.map_grid.cell_to_world(bed.cell)
+	game.food_system.meals = 0
+	game.job_system.advance(0.5)
+	_assert_equal(hungry.medical_bed_id, -1, "a Med Bed does not admit a resident at food 35")
+	game.player_orders.refresh()
+	_assert_true("INJURED 0 · MED BEDS FREE 1" in game.player_orders.alert_label.text, "so they are not counted against it")
+	hungry.medical_bed_id = bed.building_id
+	bed.reserved_by = hungry.resident_id
+	game.player_orders.refresh()
+	_assert_true("INJURED 1 · MED BEDS FREE 0" in game.player_orders.alert_label.text, "a patient already in care still counts")
+	for resident: VaultResident in game.residents:
+		resident.alive = false
+	game.food_system.meals = 0
+	game.player_orders.refresh()
+	_assert_false("NO MEALS" in game.player_orders.alert_label.text, "no living crew, no meal alert")
 	_dispose(game)
 
 
