@@ -53,7 +53,8 @@ func _read_snapshot(path: String) -> Dictionary:
 	file.close()
 	if not parsed is Dictionary:
 		return {"ok": false, "message": "The local save is damaged."}
-	if int(parsed.get("version", -1)) != SAVE_VERSION or not parsed.get("game", null) is Dictionary:
+	var version: Variant = parsed.get("version", -1)
+	if typeof(version) not in [TYPE_INT, TYPE_FLOAT] or float(version) != SAVE_VERSION or not parsed.get("game", null) is Dictionary:
 		return {"ok": false, "message": "The local save uses an unsupported version."}
 	return {"ok": true, "message": "Wing loaded.", "snapshot": parsed["game"]}
 
