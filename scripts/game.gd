@@ -7,6 +7,83 @@ signal game_lost
 
 const SIMULATION_TICK := 0.1
 const RIGHT_PANEL_WIDTH := 310.0
+const LEGACY_WING_SEED := 0
+const MAX_WING_SEED := 0xFFFF
+var wing_seed := LEGACY_WING_SEED
+# Records + ladder C4: the sublevel this wing runs on (07 base, down to 03). Seed 0 is always 07.
+# Saved only below 07, as the additive "sublevel" key, so 07 and legacy saves keep their bytes.
+var sublevel := WingRecords.BASE_SUBLEVEL
+const SUBLEVEL_SAVE_VERSION := 1
+# Meta perks P1: one trade-off perk per wing, unlocked by the first win on a sublevel (derived from
+# WingRecords, so records keep their format). "" is NONE: the default, and the only choice for seed 0
+# and test runs (records off). The perk is applied once by new_game and saved as an additive key.
+const PERK_SAVE_VERSION := 1
+const PERK_PROVISIONING := "provisioning"
+const PROVISIONING_MEALS := 4
+const PROVISIONING_SALVAGE_COST := 8
+# Meta perks P3: FLOODLIGHT (power/light) buys a second lit starter Lumen with salvage; it takes the
+# core's last spare power but sheds first, so food and air still get power. It does not touch the
+# hatch clock or work rates. Ladder QA: v1 (Lumen at HIGH, free) cost idle 05/03 2-3 wins in 6.
+# VOLUNTEER (crew/labor) adds one more hand who eats from the stores; outfitting Gil costs 8 salvage.
+# Work rates and the hatch clock are untouched. QA: -6 / -2 meals wiped 05 (2/6); -8 salvage keeps 4/6+.
+const PERK_FLOODLIGHT := "floodlight"
+const FLOODLIGHT_CELL := Vector2i(20, 14)
+# The starter's deterministic id (core 1, starter Lumen 2, FLOODLIGHT 3); ids are never reused.
+const FLOODLIGHT_BUILDING_ID := 3
+const PERK_VOLUNTEER := "volunteer"
+const FLOODLIGHT_SALVAGE_COST := 6
+const VOLUNTEER_SALVAGE_COST := 8
+# Annex blueprints C1/B1: BUNKROOM, earned by a first Annex badge (any record with annex), takes the
+# same single slot as the perks: one built Bunk at the start, paid 14 salvage (a Bunk is 8 to build).
+const PERK_BUNKROOM := "bunkroom"
+const BUNKROOM_CELL := Vector2i(25, 17)
+const BUNKROOM_SALVAGE_COST := 14
+# B2 GROW NOOK, earned by Annex badges on 2 different sublevels: a Grow Tray blueprint placed at the
+# start with its materials on site (the crew still build it), paid with meals. Ladder QA: an unsupplied
+# plan hauled the opening salvage away from the Nutrient Station (05: 0/6), so it comes supplied; the
+# nook cell sits in the Annex corner, off the recommended-start cells (23,12 blocked the idle start).
+const PERK_GROW_NOOK := "grow_nook"
+const GROW_NOOK_CELL := Vector2i(26, 17)
+const GROW_NOOK_MEALS_COST := 2
+const GROW_NOOK_BADGES := 2
+const PERKS := {
+	PERK_PROVISIONING: {"name": "PROVISIONING", "unlock_level": 7, "detail": "+4 meals, -8 salvage"},
+	PERK_FLOODLIGHT: {"name": "FLOODLIGHT", "unlock_level": 5, "detail": "+1 lit Lumen (sheds first), -6 salvage"},
+	PERK_VOLUNTEER: {"name": "VOLUNTEER", "unlock_level": 3, "detail": "+1 resident, -8 salvage"},
+	PERK_BUNKROOM: {"name": "BUNKROOM", "unlock_annex": 1, "detail": "blueprint: +1 Bunk, -14 salvage"},
+	PERK_GROW_NOOK: {"name": "GROW NOOK", "unlock_annex": GROW_NOOK_BADGES, "detail": "blueprint: Grow Tray plan, -2 meals"},
+}
+const PERK_ORDER := [PERK_PROVISIONING, PERK_FLOODLIGHT, PERK_VOLUNTEER, PERK_BUNKROOM, PERK_GROW_NOOK]
+# The player's choice for the next wings (kept across NEW WING / REPLAY / stepping).
+var equipped_perk := ""
+# The perk this wing started with ("" = NONE); saved, shown on the outcome.
+var wing_perk := ""
+# Records + ladder C5: each sublevel below 07 carries one named modifier (not cumulative), applied
+# at NEW WING and, for the rule-based ones, restored on LOAD from the saved sublevel.
+# Ladder QA: 10, not 15, so the earliest seeded hatch (45 s) still warns after #111's 30 s idle-start
+# card (45 - 15 = 30 hid the card for good on the merged game: no bunks, no Air, the crew died).
+const EARLY_HATCH_ADVANCE_SECONDS := 10.0
+# Ladder QA: 05 starts lean instead of with thin veins (the default digs never reach a vein, so
+# THIN VEINS played exactly like 07). 30 of the usual 48 lands 05 between 06 and 04.
+const LEAN_STORES_SALVAGE := 30
+# Crew size, shared by NEW WING and the LOAD validator: 4, +1 on 03 (Fen), +1 for VOLUNTEER (Gil),
+# and LOAD also leaves room for the Annex resident (Eko) that Keep Running can add later.
+const BASE_CREW_SIZE := 4
+const ANNEX_RESIDENT_ROOM := 1
+const SUBLEVEL_MODIFIERS := {
+	6: {"name": "EARLY HATCH", "detail": "hatch test 10 s earlier"},
+	5: {"name": "LEAN STORES", "detail": "start with 30 salvage"},
+	4: {"name": "DARK START", "detail": "starter Lumen unbuilt (5 salvage)"},
+	3: {"name": "FIFTH MOUTH", "detail": "a fifth resident to feed"},
+}
+# Records + ladder: the per-wing sidecar store (scripts/wing_records.gd). Off for seed 0, and off
+# whenever the main loop runs a script (tests, QA drivers) unless records_path is injected, so no
+# test or tool ever touches the player's user://wing_records.json.
+var records_path := ""
+var _wing_records: WingRecords = null
+# Records + ladder C3: this run's record as written at the finish transition, for the outcome
+# panel's NEW RECORD mark. Transient: never saved, cleared by NEW WING and LOAD.
+var finish_record := {}
 const BUILD_KIND_BY_TOOL := {
 	"bed": VaultBuilding.Kind.BED,
 	"lamp": VaultBuilding.Kind.LAMP,
@@ -163,7 +240,44 @@ func _process(delta: float) -> void:
 	player_orders.refresh()
 
 
-func new_game(show_tutorial := false) -> void:
+func records_enabled() -> bool:
+	return _records_enabled_for(wing_seed)
+
+
+func _records_enabled_for(seed_value: int) -> bool:
+	if seed_value == LEGACY_WING_SEED:
+		return false
+	if records_path != "":
+		return true
+	var loop := Engine.get_main_loop()
+	return loop != null and loop.get_script() == null
+
+
+# Records + ladder C6: NEW WING starts on the deepest unlocked sublevel (07 when records are off).
+# new_game() itself still defaults to 07.
+func start_sublevel_for(seed_value: int) -> int:
+	return wing_records().unlocked_sublevel() if _records_enabled_for(seed_value) else WingRecords.BASE_SUBLEVEL
+
+
+func unlocked_sublevel() -> int:
+	return wing_records().unlocked_sublevel() if records_enabled() else WingRecords.BASE_SUBLEVEL
+
+
+func new_wing() -> void:
+	var rolled := roll_wing_seed()
+	new_game(true, rolled, start_sublevel_for(rolled))
+
+
+func wing_records() -> WingRecords:
+	if _wing_records == null:
+		_wing_records = WingRecords.new()
+	_wing_records.path = records_path if records_path != "" else WingRecords.DEFAULT_PATH
+	return _wing_records
+
+
+func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_sublevel := WingRecords.BASE_SUBLEVEL) -> void:
+	var seed_value := clampi(start_seed, LEGACY_WING_SEED, MAX_WING_SEED)
+	var level := WingRecords.BASE_SUBLEVEL if seed_value == LEGACY_WING_SEED else clampi(start_sublevel, WingRecords.DEEPEST_SUBLEVEL, WingRecords.BASE_SUBLEVEL)
 	player_orders.show_work_priorities(false)
 	for building in buildings:
 		building.free()
@@ -172,16 +286,21 @@ func new_game(show_tutorial := false) -> void:
 	buildings.clear()
 	residents.clear()
 	next_building_id = 1
-	map_grid.new_wing()
+	map_grid.new_wing(seed_value)
 	job_system.reset()
 	power_grid.reset()
 	lighting_system.reset()
 	food_system.reset()
 	oxygen_system.reset()
 	day_cycle.reset()
+	wing_seed = seed_value
+	sublevel = level
+	_apply_sublevel_rules()
 	breach_system.reset()
+	player_orders.show_wing_id(wing_seed)
 	ended = false
 	outcome = ""
+	finish_record = {}
 	active_tool = "select"
 	selected_resident_id = -1
 	selected_building_id = -1
@@ -191,12 +310,26 @@ func new_game(show_tutorial := false) -> void:
 	_reset_reclamation()
 	_reset_keep_running()
 	_spawn_starting_fixture(VaultBuilding.Kind.GENERATOR, Vector2i(24, 15), true)
-	_spawn_starting_fixture(VaultBuilding.Kind.LAMP, Vector2i(22, 14), false)
+	# Ladder QA: 04 DARK START with no Lumen at all was 1/6 (mood 0 by 60 s); an unbuilt one is 6/6.
+	if sublevel == 4:
+		_spawn_starting_blueprint(VaultBuilding.Kind.LAMP, Vector2i(22, 14))
+	else:
+		_spawn_starting_fixture(VaultBuilding.Kind.LAMP, Vector2i(22, 14), false)
+	if sublevel == 5:
+		food_system.salvage = LEAN_STORES_SALVAGE
+	wing_perk = equipped_perk if equipped_perk in unlocked_perks_for(seed_value) else ""
+	_apply_perk_start()
 	_spawn_starting_fixture(VaultBuilding.Kind.STOCKPILE, Vector2i(19, 17), false)
 	var names := ["Ari", "Bo", "Cyra", "Dax"]
 	var cells := [Vector2i(20, 15), Vector2i(21, 16), Vector2i(22, 17), Vector2i(23, 18)]
 	var starting_food := [65.0, 72.0, 79.0, 86.0]
 	var starting_rest := [55.0, 70.0, 82.0, 94.0]
+	var extra_crew := {"Fen": [Vector2i(24, 19), 72.0, 76.0], "Gil": [Vector2i(21, 19), 70.0, 72.0]}
+	for extra: String in extra_crew_names(sublevel, wing_perk):
+		names.append(extra)
+		cells.append(extra_crew[extra][0])
+		starting_food.append(extra_crew[extra][1])
+		starting_rest.append(extra_crew[extra][2])
 	for index in names.size():
 		var resident := VaultResident.new()
 		resident_root.add_child(resident)
@@ -205,6 +338,8 @@ func new_game(show_tutorial := false) -> void:
 		resident.needs.rest = starting_rest[index]
 		resident.died.connect(_on_resident_died)
 		residents.append(resident)
+	crew_traits_version = CREW_TRAITS_V1 if wing_seed != LEGACY_WING_SEED else 0
+	apply_crew_traits()
 	power_grid.recalculate(buildings)
 	refresh_lighting(true)
 	oxygen_system.refresh_rates(residents, buildings, false)
@@ -261,7 +396,7 @@ func _simulation_step(delta_seconds: float) -> void:
 		DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE,
 	)
 	var phase_before_step := breach_system.phase
-	var open_boundary := BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS
+	var open_boundary := breach_system.get_open_at()
 	var opening_at_step_end := (
 		phase_before_step == BreachSystem.Phase.WARNING
 		and next_elapsed >= open_boundary
@@ -940,7 +1075,7 @@ func _create_base_snapshot() -> Dictionary:
 	var resident_data: Array = []
 	for resident in residents:
 		resident_data.append(resident.serialize())
-	return {
+	var snapshot := {
 		"map": map_grid.serialize(),
 		"buildings": building_data,
 		"residents": resident_data,
@@ -954,7 +1089,21 @@ func _create_base_snapshot() -> Dictionary:
 		"camera": [world_camera.position.x, world_camera.position.y, world_camera.zoom.x],
 		"ended": ended,
 		"outcome": outcome,
+		"wing_seed": wing_seed,
 	}
+	# Wing-seed slice 2: additive, written only for a seeded layout, so legacy saves keep their bytes.
+	if map_grid.layout_seed != LEGACY_WING_SEED:
+		snapshot["map_layout"] = MAP_LAYOUT_SEEDED
+	# Wing-seed slice 3: additive marker; traits themselves are derived from seed + resident id.
+	if crew_traits_version == CREW_TRAITS_V1:
+		snapshot["crew_traits"] = CREW_TRAITS_V1
+	# Records + ladder C4: additive, written only below 07.
+	if sublevel != WingRecords.BASE_SUBLEVEL:
+		snapshot["sublevel"] = {"version": SUBLEVEL_SAVE_VERSION, "level": sublevel}
+	# Meta perks P1: additive, written only when the wing started with a perk.
+	if wing_perk != "":
+		snapshot["perk"] = {"version": PERK_SAVE_VERSION, "id": wing_perk}
+	return snapshot
 
 
 func apply_snapshot(snapshot: Dictionary) -> bool:
@@ -989,6 +1138,15 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	food_system.deserialize(snapshot.get("food", {}))
 	oxygen_system.deserialize(snapshot.get("oxygen", {}))
 	day_cycle.deserialize(snapshot.get("day", {}))
+	wing_seed = _snapshot_wing_seed(snapshot)
+	sublevel = _snapshot_sublevel(snapshot)
+	# LOAD restores which perk the wing started with; its start is in the saved stores, never re-granted.
+	wing_perk = str(snapshot.perk.id) if snapshot.get("perk") is Dictionary else ""
+	map_grid.apply_layout_seed(wing_seed if int(snapshot.get("map_layout", 0)) == MAP_LAYOUT_SEEDED else LEGACY_WING_SEED)
+	_apply_sublevel_rules()
+	player_orders.show_wing_id(wing_seed)
+	crew_traits_version = CREW_TRAITS_V1 if wing_seed != LEGACY_WING_SEED and int(snapshot.get("crew_traits", 0)) == CREW_TRAITS_V1 else 0
+	apply_crew_traits()
 	breach_system.deserialize(snapshot.get("breach", {}), day_cycle.elapsed_seconds)
 	next_building_id = int(snapshot.get("next_building_id", 1))
 	wing_orders_claimed.clear()
@@ -1015,11 +1173,13 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	_idle_start_floor_count = -1
 	ended = bool(snapshot.get("ended", false))
 	outcome = str(snapshot.get("outcome", ""))
+	finish_record = {}
 	var camera_data: Array = snapshot.get("camera", [])
 	if camera_data.size() >= 3:
 		world_camera.position = Vector2(float(camera_data[0]), float(camera_data[1]))
 		world_camera.zoom = Vector2.ONE * clampf(float(camera_data[2]), 0.75, 1.8)
 	power_grid.reset()
+	_mark_floodlight()
 	power_grid.recalculate(buildings)
 	refresh_lighting(true)
 	job_system.rebuild_from_state(snapshot.get("jobs", {}))
@@ -1041,6 +1201,148 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 		else:
 			player_orders.show_outcome(false, 0)
 	return true
+
+
+# Wing seed (QA 2026-10-18c #2, slice 1). Additive snapshot key: a save without it is the legacy wing.
+const MAP_LAYOUT_SEEDED := 1
+const CREW_TRAITS_V1 := 1
+var crew_traits_version := 0
+
+
+# Gives every resident its seeded trait (or none): new games, and loads after the seed is known.
+func apply_crew_traits() -> void:
+	var crew := VaultResident.crew_traits_for_seed(wing_seed if crew_traits_version == CREW_TRAITS_V1 else LEGACY_WING_SEED)
+	for resident: VaultResident in residents:
+		var slot := resident.resident_id - 1
+		resident.set_trait(crew[slot] if slot >= 0 and slot < crew.size() else "")
+
+
+func _snapshot_wing_seed(snapshot: Dictionary) -> int:
+	return int(snapshot.get("wing_seed", LEGACY_WING_SEED))
+
+
+static func sublevel_modifier(level: int) -> Dictionary:
+	return SUBLEVEL_MODIFIERS.get(level, {})
+
+
+# The hatch warning time for a wing: 06 EARLY HATCH moves it 10 s earlier (the 20 s grace is kept).
+static func warning_at_for(seed_value: int, level: int) -> float:
+	var warn := BreachSystem.warning_at_for_seed(seed_value)
+	if seed_value != LEGACY_WING_SEED and level == 6:
+		warn -= EARLY_HATCH_ADVANCE_SECONDS
+	return warn
+
+
+func _apply_sublevel_rules() -> void:
+	breach_system.warning_at = warning_at_for(wing_seed, sublevel)
+
+
+# Meta perks P1: the perks the player has unlocked, in display order. Empty when records are off
+# (seed 0, tests), so those wings always start on NONE.
+func unlocked_perks() -> Array:
+	return unlocked_perks_for(wing_seed)
+
+
+func unlocked_perks_for(seed_value: int) -> Array:
+	var unlocked := []
+	if not _records_enabled_for(seed_value):
+		return unlocked
+	var store := wing_records()
+	for id: String in PERK_ORDER:
+		if store.annex_badge_sublevels() >= int(PERKS[id].unlock_annex) if PERKS[id].has("unlock_annex") else store.has_win_on(int(PERKS[id].unlock_level)):
+			unlocked.append(id)
+	return unlocked
+
+
+static func perk_name(id: String) -> String:
+	return str(PERKS[id].name) if PERKS.has(id) else "NONE"
+
+
+func _apply_perk_start() -> void:
+	match wing_perk:
+		PERK_PROVISIONING:
+			food_system.meals += PROVISIONING_MEALS
+			food_system.salvage = maxi(0, food_system.salvage - PROVISIONING_SALVAGE_COST)
+		PERK_FLOODLIGHT:
+			_spawn_starting_fixture(VaultBuilding.Kind.LAMP, FLOODLIGHT_CELL, false)
+			food_system.salvage = maxi(0, food_system.salvage - FLOODLIGHT_SALVAGE_COST)
+		PERK_VOLUNTEER:
+			food_system.salvage = maxi(0, food_system.salvage - VOLUNTEER_SALVAGE_COST)
+		PERK_BUNKROOM:
+			_spawn_starting_fixture(VaultBuilding.Kind.BED, BUNKROOM_CELL, false)
+			food_system.salvage = maxi(0, food_system.salvage - BUNKROOM_SALVAGE_COST)
+		PERK_GROW_NOOK:
+			_spawn_starting_blueprint(VaultBuilding.Kind.GROW_TRAY, GROW_NOOK_CELL, true)
+			food_system.meals = maxi(0, food_system.meals - GROW_NOOK_MEALS_COST)
+	_mark_floodlight()
+
+
+# FLOODLIGHT's starter Lumen sheds first; re-derived from the wing's perk on NEW WING and LOAD. Matched by
+# id and cell, so a Lumen the player later builds on that cell keeps its normal priority.
+func _mark_floodlight() -> void:
+	for building: VaultBuilding in buildings:
+		building.shed_first = wing_perk == PERK_FLOODLIGHT and building.building_id == FLOODLIGHT_BUILDING_ID and building.kind == VaultBuilding.Kind.LAMP and building.cell == FLOODLIGHT_CELL
+
+
+# Only {"version": 1, "id": <known perk>} on a seeded wing; NONE is never written.
+func _is_perk_data_valid(data: Variant, seed_value: int) -> bool:
+	if not data is Dictionary or (data as Dictionary).size() != 2 or seed_value == LEGACY_WING_SEED:
+		return false
+	return _is_integer_in_range(data.get("version"), PERK_SAVE_VERSION, PERK_SAVE_VERSION) and typeof(data.get("id")) == TYPE_STRING and PERKS.has(data.id)
+
+
+# The residents a wing adds to the base four: Fen on 03, Gil with VOLUNTEER.
+static func extra_crew_names(level: int, perk: String) -> Array:
+	var extra := []
+	if level == 3:
+		extra.append("Fen")
+	if perk == PERK_VOLUNTEER:
+		extra.append("Gil")
+	return extra
+
+
+static func starting_crew_size(level: int, perk: String) -> int:
+	return BASE_CREW_SIZE + extra_crew_names(level, perk).size()
+
+
+# LOAD's cap: the wing's starting crew plus room for the Annex resident.
+static func max_crew_size(level: int, perk: String) -> int:
+	return starting_crew_size(level, perk) + ANNEX_RESIDENT_ROOM
+
+
+func _snapshot_perk(snapshot: Dictionary) -> String:
+	var data: Variant = snapshot.get("perk")
+	return str(data.get("id", "")) if data is Dictionary else ""
+
+
+func _snapshot_sublevel(snapshot: Dictionary) -> int:
+	var data: Variant = snapshot.get("sublevel")
+	return int(data.level) if data is Dictionary else WingRecords.BASE_SUBLEVEL
+
+
+# Only {"version": 1, "level": 03..06} on a seeded wing; 07 is never written.
+func _is_sublevel_data_valid(data: Variant, seed_value: int) -> bool:
+	if not data is Dictionary or (data as Dictionary).size() != 2 or seed_value == LEGACY_WING_SEED:
+		return false
+	return _is_integer_in_range(data.get("version"), SUBLEVEL_SAVE_VERSION, SUBLEVEL_SAVE_VERSION) and _is_integer_in_range(data.get("level"), WingRecords.DEEPEST_SUBLEVEL, WingRecords.BASE_SUBLEVEL - 1)
+
+
+# The only entropy in the game: the NEW WING button reads the clock once and hands it to the pure
+# pick_wing_seed(). Load, snapshot, simulation and UI refresh never roll.
+func roll_wing_seed() -> int:
+	return pick_wing_seed(Time.get_ticks_usec() ^ int(Time.get_unix_time_from_system() * 1000.0), wing_seed)
+
+
+# Pure and bounded: a seed in 1..MAX_WING_SEED whose breach window differs from the current wing's,
+# so back-to-back wings always feel different. Eight windows, so the scan ends within 8 steps.
+static func pick_wing_seed(entropy: int, current_seed: int) -> int:
+	var current_window := BreachSystem.warning_at_for_seed(current_seed)
+	var candidate := 1 + BreachSystem.seed_hash(entropy & 0x7FFFFFFF, 2) % MAX_WING_SEED
+	for step in MAX_WING_SEED:
+		if BreachSystem.warning_at_for_seed(candidate) != current_window:
+			return candidate
+		candidate = 1 + candidate % MAX_WING_SEED
+	return candidate
 
 
 func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
@@ -1068,14 +1370,35 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 		return false
 	if snapshot.has("outcome") and typeof(snapshot.outcome) != TYPE_STRING:
 		return false
+	if snapshot.has("wing_seed") and not _is_integer_in_range(snapshot.wing_seed, LEGACY_WING_SEED, MAX_WING_SEED):
+		return false
+	# Wing-seed slice 2: a seeded layout is only valid on a seeded wing, and only version 1 exists.
+	if snapshot.has("map_layout") and (not _is_integer_in_range(snapshot.map_layout, MAP_LAYOUT_SEEDED, MAP_LAYOUT_SEEDED)):
+		return false
+	if snapshot.has("crew_traits") and not _is_integer_in_range(snapshot.crew_traits, CREW_TRAITS_V1, CREW_TRAITS_V1):
+		return false
+	if snapshot.has("sublevel") and not _is_sublevel_data_valid(snapshot.sublevel, _snapshot_wing_seed(snapshot)):
+		return false
+	if snapshot.has("perk") and not _is_perk_data_valid(snapshot.perk, _snapshot_wing_seed(snapshot)):
+		return false
+	# A seeded save is always new, so it must carry a real breach state and clock; only the legacy
+	# wing may fall back to the historical synthesis.
+	if _snapshot_wing_seed(snapshot) != LEGACY_WING_SEED:
+		var seeded_breach: Variant = snapshot.get("breach")
+		var seeded_day: Variant = snapshot.get("day")
+		if not seeded_breach is Dictionary or seeded_breach.is_empty() or not seeded_day is Dictionary:
+			return false
+		var seeded_elapsed: Variant = seeded_day.get("elapsed_seconds")
+		if typeof(seeded_elapsed) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(seeded_elapsed)) or float(seeded_elapsed) < 0.0:
+			return false
 	if snapshot.has("breach"):
 		if not day_data is Dictionary:
 			return false
-		if not breach_system.is_serialized_data_valid(breach_data, day_data.get("elapsed_seconds")):
+		if not breach_system.is_serialized_data_valid(breach_data, day_data.get("elapsed_seconds"), warning_at_for(_snapshot_wing_seed(snapshot), _snapshot_sublevel(snapshot))):
 			return false
 	if snapshot.has("oxygen") and not oxygen_system.is_serialized_data_valid(oxygen_data):
 		return false
-	if resident_data.is_empty() or resident_data.size() > 5:
+	if resident_data.is_empty() or resident_data.size() > max_crew_size(_snapshot_sublevel(snapshot), _snapshot_perk(snapshot)):
 		return false
 	var saved_cells: Variant = map_data.get("cells")
 	if not saved_cells is Array or saved_cells.size() != MapGrid.WIDTH * MapGrid.HEIGHT:
@@ -1291,6 +1614,18 @@ func _serialized_building_by_id(building_data: Array, building_id: int) -> Dicti
 		if entry is Dictionary and int(entry.get("id", -1)) == building_id:
 			return entry
 	return {}
+
+
+# Ladder 04 DARK START: the starter Lumen begins as a blueprint the crew supply and build.
+func _spawn_starting_blueprint(kind: int, cell: Vector2i, supplied := false) -> void:
+	var building := VaultBuilding.new()
+	building_root.add_child(building)
+	building.configure(next_building_id, kind as VaultBuilding.Kind, cell)
+	if supplied:
+		building.delivered = building.get_cost()
+	next_building_id += 1
+	buildings.append(building)
+	job_system.queue_building(building)
 
 
 func _spawn_starting_fixture(kind: int, cell: Vector2i, core: bool) -> void:
@@ -1660,6 +1995,7 @@ func _finish_win() -> void:
 	ended = true
 	outcome = "win"
 	user_paused = true
+	_record_finish(true)
 	save_game(false)
 	player_orders.show_outcome(true, get_alive_count())
 	game_won.emit(get_alive_count())
@@ -1671,10 +2007,32 @@ func _finish_loss() -> void:
 	ended = true
 	outcome = "loss"
 	user_paused = true
+	_record_finish(false)
 	player_orders.show_outcome(false, 0)
 	if keep_running:
 		player_orders.note_keep_running_loss()
 	game_lost.emit()
+
+
+# Records + ladder C3: a finished seeded run merges into its wing record once, here at the
+# transition (show_outcome also runs on LOAD, so it never writes). A win carries the crew grade,
+# a loss the day reached. A failed or refused write never blocks the outcome.
+func _record_finish(won: bool) -> void:
+	finish_record = {}
+	if not records_enabled():
+		return
+	var store := wing_records()
+	var level := sublevel
+	var previous := store.get_record(wing_seed, level)
+	var stars: Variant = int(player_orders.crew_grade()["stars"]) if won else null
+	var day := clampi(keep_running_day() if keep_running else day_cycle.current_day, 1, WingRecords.MAX_DAY)
+	var unlocked_before := store.unlocked_sublevel()
+	if store.record(wing_seed, won, stars, day, level):
+		finish_record = {"previous": previous, "current": store.get_record(wing_seed, level)}
+		var unlocked_now := store.unlocked_sublevel()
+		# Only the next sublevel down counts as this win's unlock (03 is the floor).
+		if unlocked_now < unlocked_before and unlocked_now == level - 1:
+			finish_record["unlocked"] = unlocked_now
 
 
 func _tool_help(tool: String) -> String:
@@ -1735,6 +2093,7 @@ func _advance_keep_running(delta_seconds: float) -> void:
 	annex_welcome_left = maxf(0.0, annex_welcome_left - delta_seconds)
 	if keep_running_day() != day_before:
 		_maybe_feast()
+		_record_progress()
 		save_game(false)
 
 
@@ -1998,19 +2357,35 @@ var _annex_room_noted := 0
 func _on_annex_completed() -> void:
 	_annex_room_noted = 0
 	_grant_annex_payoff()
+	_record_progress(true)
 	annex_welcome_left = ANNEX_WELCOME_SECONDS
 	status_message = ANNEX_OPEN_STATUS % ANNEX_RESIDENT_NAME
 	status_message_left = 10.0
 
 
+# Records x Keep Running seam: the Annex resident takes the next id after the wing's starting crew
+# (5 on a plain wing; 6 on 03 where Fen is 5, or with VOLUNTEER where Gil is; 7 with both).
+func annex_resident_id() -> int:
+	return starting_crew_size(sublevel, wing_perk) + 1
+
+
+# Records x Keep Running seam: a kept-running vault already recorded its win at the finish. Each
+# new keep-running day raises best_day and a finished Annex sets the wing's annex badge (never
+# stars: they grade the 7-day run). Merges are max / OR, so repeats are harmless.
+func _record_progress(annex := false) -> void:
+	if not keep_running or not records_enabled():
+		return
+	wing_records().record(wing_seed, true, null, clampi(keep_running_day(), 1, WingRecords.MAX_DAY), sublevel, annex)
+
+
 func annex_resident() -> VaultResident:
 	for resident in residents:
-		if resident.resident_id == ANNEX_RESIDENT_ID:
+		if resident.resident_id == annex_resident_id():
 			return resident
 	return null
 
 
-# Idempotent: a vault that already has resident 5 gets nothing twice. All or nothing: without a
+# Idempotent: a vault that already has its Annex resident gets nothing twice. All or nothing: without a
 # free cell for every fixture it grants nothing (the caller waits, see annex_room_short).
 func _grant_annex_payoff() -> void:
 	if annex_resident() != null or annex_room_short() > 0:
@@ -2021,7 +2396,7 @@ func _grant_annex_payoff() -> void:
 	var spawn_cell: Vector2i = cells[-1] if cells.size() > ANNEX_FIXTURES.size() else map_grid.get_chamber_center()
 	var resident := VaultResident.new()
 	resident_root.add_child(resident)
-	resident.configure(ANNEX_RESIDENT_ID, ANNEX_RESIDENT_NAME, spawn_cell, map_grid)
+	resident.configure(annex_resident_id(), ANNEX_RESIDENT_NAME, spawn_cell, map_grid)
 	resident.needs.food = 80.0
 	resident.needs.rest = 80.0
 	resident.died.connect(_on_resident_died)

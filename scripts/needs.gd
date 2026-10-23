@@ -21,6 +21,9 @@ var food := 88.0
 var rest := 78.0
 var mood := 72.0
 var health := 100.0
+# Wing-seed slice 3 crew traits: derived from the wing seed, never serialized. 1.0 = no trait.
+var food_drain_scale := 1.0
+var base_mood_loss_scale := 1.0
 
 # Keep the Slice 1-4 property available to old tests and compatible code while
 # treating the value as the resident's overall mood from Slice 5 onward.
@@ -39,7 +42,7 @@ func advance(
 	recreation_active := false,
 	low_oxygen := false,
 ) -> void:
-	food = clampf(food - 60.0 * day_fraction, 0.0, 100.0)
+	food = clampf(food - 60.0 * food_drain_scale * day_fraction, 0.0, 100.0)
 	if sleeping:
 		var recovery := 96.0 if in_bed else 48.0
 		rest = clampf(rest + recovery * day_fraction, 0.0, 100.0)
@@ -95,7 +98,7 @@ func get_mood_state() -> String:
 func get_mood_factors(is_lit: bool, sleeping: bool, low_oxygen := false) -> String:
 	if sleeping:
 		return "Resting · mood stable"
-	var loss := BASE_MOOD_LOSS_PER_DAY
+	var loss := BASE_MOOD_LOSS_PER_DAY * base_mood_loss_scale
 	var factors: Array[String] = ["Lit" if is_lit else "Dark"]
 	if not is_lit:
 		loss += DARKNESS_MOOD_LOSS_PER_DAY
@@ -147,7 +150,7 @@ static func is_serialized_data_valid(data: Variant) -> bool:
 func _get_mood_delta_per_day(is_lit: bool, sleeping: bool, low_oxygen: bool) -> float:
 	if sleeping:
 		return 0.0
-	var delta := -BASE_MOOD_LOSS_PER_DAY
+	var delta := -BASE_MOOD_LOSS_PER_DAY * base_mood_loss_scale
 	if not is_lit:
 		delta -= DARKNESS_MOOD_LOSS_PER_DAY
 	if food < 35.0:

@@ -15,6 +15,16 @@ const PRIORITY_OFF := PRIORITY_DISABLED
 const WORK_PRIORITY_OFF := PRIORITY_DISABLED
 const MIN_WORK_PRIORITY := PRIORITY_HIGHEST
 const MAX_WORK_PRIORITY := PRIORITY_LOWEST
+# Wing-seed slice 3: one seeded trait per resident, each a single small upside. Frozen order.
+const TRAIT_POOL: Array[String] = ["DIGGER", "CHEF", "FRUGAL", "CALM", "PATCHER"]
+const TRAIT_EFFECTS := {
+	"DIGGER": "Dig +25%",
+	"CHEF": "Cook +25%",
+	"FRUGAL": "Hunger -15%",
+	"CALM": "Mood loss -25%",
+	"PATCHER": "Patch +15%",
+}
+const TRAIT_SALT := 300
 
 var resident_id := 0
 var resident_name := "Resident"
@@ -42,6 +52,7 @@ var drafted := false
 var manual_destination := NO_MANUAL_DESTINATION
 var is_forced_job := false
 var forced_order: Dictionary = {}
+var trait_id := ""
 
 var _path: Array[Vector2i] = []
 var _path_index := 0
@@ -207,6 +218,34 @@ func apply_damage(amount: float) -> void:
 	if needs.health <= 0.0:
 		kill()
 	queue_redraw()
+
+
+# The seed's crew as a 5-slot permutation of TRAIT_POOL; resident N takes slot N - 1. Seed 0: none.
+static func crew_traits_for_seed(wing_seed: int) -> Array[String]:
+	var crew: Array[String] = []
+	if wing_seed == 0:
+		return crew
+	var remaining: Array[String] = TRAIT_POOL.duplicate()
+	for slot in TRAIT_POOL.size():
+		crew.append(remaining.pop_at(BreachSystem.seed_hash(wing_seed, TRAIT_SALT + slot) % remaining.size()))
+	return crew
+
+
+func set_trait(new_trait: String) -> void:
+	trait_id = new_trait
+	needs.food_drain_scale = 0.85 if new_trait == "FRUGAL" else 1.0
+	needs.base_mood_loss_scale = 0.75 if new_trait == "CALM" else 1.0
+
+
+func get_trait_factor(work: String) -> float:
+	match work:
+		"dig":
+			return 1.25 if trait_id == "DIGGER" else 1.0
+		"cook":
+			return 1.25 if trait_id == "CHEF" else 1.0
+		"patch":
+			return 1.15 if trait_id == "PATCHER" else 1.0
+	return 1.0
 
 
 func get_work_multiplier() -> float:
