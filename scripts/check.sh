@@ -83,6 +83,7 @@ run_godot_check manual-draft-forced-orders --script res://tests/test_manual_draf
 run_godot_check terrain-aware-picking --script res://tests/test_terrain_aware_picking.gd
 run_godot_check hatch-path-cache --script res://tests/test_hatch_path_cache.gd
 run_godot_check boot --quit-after 5
+run_godot_check topbar-fit --script res://tests/test_topbar_fit.gd
 
 # Fresh-clone cold boot: class cache must resolve global GDScript classes without an editor visit.
 COLD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vault-tycoon-cold.XXXXXX")"
