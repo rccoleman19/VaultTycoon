@@ -218,6 +218,7 @@ func _simulation_step(delta_seconds: float) -> void:
 			job_system.is_actively_recreating(resident) or (resident.stress_break_left > 0.0 and not resident.drafted),
 			oxygen_system.is_low(),
 		)
+	_update_dark_alert(delta_seconds)
 	var next_elapsed := minf(
 		day_cycle.elapsed_seconds + delta_seconds,
 		DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE,
@@ -397,6 +398,33 @@ func is_resident_lit(resident: VaultResident) -> bool:
 		and resident.alive
 		and lighting_system.is_cell_lit(resident.get_cell(map_grid))
 	)
+
+
+# The DARKNESS alert counts a resident only after DARK_ALERT_ONSET s unlit and drops them only
+# after DARK_ALERT_RELEASE s lit, so crew crossing a Lumen edge don't flicker it. The HUD D-count
+# and the darkness mood penalty still use the live cell every tick.
+const DARK_ALERT_ONSET := 2.0
+const DARK_ALERT_RELEASE := 6.0
+
+
+func _update_dark_alert(delta_seconds: float) -> void:
+	for resident: VaultResident in residents:
+		var dark := resident.alive and not is_resident_lit(resident)
+		if dark == resident.dark_alert_flagged:
+			resident._dark_alert_dwell = 0.0
+			continue
+		resident._dark_alert_dwell += delta_seconds
+		if resident._dark_alert_dwell >= (DARK_ALERT_ONSET if dark else DARK_ALERT_RELEASE) - 0.0001:
+			resident.dark_alert_flagged = dark
+			resident._dark_alert_dwell = 0.0
+
+
+func get_dark_alert_count() -> int:
+	var count := 0
+	for resident: VaultResident in residents:
+		if resident.alive and resident.dark_alert_flagged:
+			count += 1
+	return count
 
 
 func get_dark_resident_count() -> int:
