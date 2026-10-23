@@ -280,6 +280,17 @@ func _dig_bucket(cell: Vector2i) -> int:
 	return floori(clampf(progress / 8.0, 0.0, 1.0) * 8.0)
 
 
+## Rendered prism height. _make_hex_instance and picking share it, so hit tests
+## always match what is drawn (rock, partly dug rock, hovered rock, floor).
+func _terrain_top(cell: Vector2i) -> float:
+	if map_grid.get_tile(cell) != MapGrid.Tile.ROCK:
+		return FLOOR_HEIGHT
+	var height := lerpf(DIG_HEIGHT, FLOOR_HEIGHT, _dig_bucket(cell) / 8.0) if map_grid.dig_marks.has(cell) else ROCK_HEIGHT
+	if cell == map_grid.hover_cell and map_grid.preview_tool != "select" and not map_grid.dig_marks.has(cell):
+		height = maxf(height, DIG_HEIGHT)
+	return height
+
+
 func _map_signature() -> String:
 	var hover := map_grid.hover_cell
 	var dig_cells := map_grid.dig_marks.keys()
@@ -309,11 +320,10 @@ func _make_hex_instance(cell: Vector2i) -> MeshInstance3D:
 	var instance := MeshInstance3D.new()
 	instance.mesh = _shared_hex_mesh
 	var center := map_grid.cell_to_world(cell)
-	var height := FLOOR_HEIGHT
+	var height := _terrain_top(cell)
 	var mat := _mat_floor
 	var is_rock := map_grid.get_tile(cell) == MapGrid.Tile.ROCK
 	if is_rock:
-		height = lerpf(DIG_HEIGHT, FLOOR_HEIGHT, _dig_bucket(cell) / 8.0) if map_grid.dig_marks.has(cell) else ROCK_HEIGHT
 		if map_grid.is_border(cell):
 			mat = _mat_rock_border
 		elif map_grid.dig_marks.has(cell):
@@ -338,8 +348,6 @@ func _make_hex_instance(cell: Vector2i) -> MeshInstance3D:
 		mat = _mat_hover_ok
 	if cell == map_grid.hover_cell and map_grid.preview_tool != "select":
 		mat = _mat_hover_ok if _is_view_preview_valid(map_grid.preview_tool, cell) else _mat_hover_bad
-		if is_rock and not map_grid.dig_marks.has(cell):
-			height = maxf(height, DIG_HEIGHT)
 	instance.scale = Vector3(1.0, height, 1.0)
 	instance.position = Vector3(center.x, height * 0.5, center.y)
 	# CylinderMesh vertices sit on ±Z at yaw 0. World Z is the row axis, so yaw 0 is pointy-top and matches odd-r centers. +30° would turn the mesh flat-top and open interior seams.
@@ -373,10 +381,205 @@ func screen_to_world_xz(screen_pos: Vector2) -> Vector2:
 	return Vector2(hit.x, hit.z)
 
 
+## Terrain-aware screen→hex: the nearest rendered hex prism, fixture or hatch
+## marker the ray hits (a fixture or the hatch resolves to its own hex); off the
+## map, the legacy y=0 plane. Residents never block it.
 func pick_cell(screen_pos: Vector2) -> Vector2i:
 	if map_grid == null:
 		return Vector2i(-1, -1)
+	if camera_3d != null:
+		var hit := _pick_solid(camera_3d.project_ray_origin(screen_pos), camera_3d.project_ray_normal(screen_pos))
+		if hit.has("cell"):
+			return hit.cell
 	return map_grid.world_to_cell(screen_to_world_xz(screen_pos))
+
+
+## Nearest resident whose drawn capsule the ray hits in front of the terrain,
+## fixtures and the hatch marker, or -1.
+## Uses the proxy transform (drawn position, lying poses), never occupancy. Dead
+## residents still occlude; the caller decides who is selectable.
+func pick_resident_id(screen_pos: Vector2, residents: Array[VaultResident]) -> int:
+	if camera_3d == null or map_grid == null:
+		return -1
+	var from := camera_3d.project_ray_origin(screen_pos)
+	var dir := camera_3d.project_ray_normal(screen_pos)
+	var best_t: float = _pick_solid(from, dir).get("t", INF)
+	var best_id := -1
+	for resident: VaultResident in residents:
+		if not is_instance_valid(resident):
+			continue
+		var proxy: MeshInstance3D = _resident_proxies.get(resident.resident_id)
+		if proxy == null or not is_instance_valid(proxy) or not proxy.visible:
+			continue
+		var to_local := proxy.global_transform.affine_inverse()
+		var t := _ray_capsule(to_local * from, to_local.basis * dir)
+		if t < best_t:
+			best_t = t
+			best_id = resident.resident_id
+	return best_id
+
+
+## Nearest drawn solid: a hex prism, a fixture part or the hatch marker, as
+## {"cell", "t"}, or {}.
+func _pick_solid(from: Vector3, dir: Vector3) -> Dictionary:
+	var hit := _pick_terrain(from, dir)
+	var fixture := _pick_fixture(from, dir)
+	if fixture.get("t", INF) < hit.get("t", INF):
+		return fixture
+	return hit
+
+
+## Nearest fixture part or hatch marker the ray hits, as drawn (blueprint scale
+## included), with that solid's own hex. The build ghost is not a fixture.
+func _pick_fixture(from: Vector3, dir: Vector3) -> Dictionary:
+	var best := {}
+	if dir.y > -0.00001 or from.y < 0.0:
+		return best
+	# Every fixture is drawn inside its own hex, so skip hexes whose circumcircle
+	# the ray's ground track (camera down to y=0) never comes near.
+	var floor_hit := from + dir * (-from.y / dir.y)
+	var track_a := Vector2(from.x, from.z)
+	var track_b := Vector2(floor_hit.x, floor_hit.z)
+	for id: int in _building_proxies:
+		var proxy: Node3D = _building_proxies[id]
+		if proxy == null or not is_instance_valid(proxy) or not proxy.visible or not proxy.is_inside_tree():
+			continue
+		var foot := Vector2(proxy.global_position.x, proxy.global_position.z)
+		if Geometry2D.get_closest_point_to_segment(foot, track_a, track_b).distance_to(foot) > MapGrid.HEX_SIZE:
+			continue
+		var cell := map_grid.world_to_cell(foot)
+		for child: Node in proxy.get_children():
+			best = _nearer_part(best, child as MeshInstance3D, cell, from, dir)
+	if _hatch_proxy != null and is_instance_valid(_hatch_proxy) and _hatch_proxy.is_inside_tree():
+		best = _nearer_part(best, _hatch_proxy, BreachSystem.HATCH_CELL, from, dir)
+	return best
+
+
+func _nearer_part(best: Dictionary, part: MeshInstance3D, cell: Vector2i, from: Vector3, dir: Vector3) -> Dictionary:
+	if part == null or part.mesh == null or not part.visible:
+		return best
+	var to_local := part.global_transform.affine_inverse()
+	var t := _ray_part(to_local * from, to_local.basis * dir, part.mesh)
+	return {"cell": cell, "t": t} if t < best.get("t", INF) else best
+
+
+## Ray parameter (equal to the world distance: an affine map keeps it) where a
+## part-local ray enters a part: CylinderMesh as a Y-axis cylinder, any other
+## mesh as its box. INF on a miss.
+func _ray_part(origin: Vector3, dir: Vector3, mesh: Mesh) -> float:
+	var cylinder := mesh as CylinderMesh
+	if cylinder != null:
+		var radius := maxf(cylinder.top_radius, cylinder.bottom_radius)
+		var half := cylinder.height * 0.5
+		var best := INF
+		var a := dir.x * dir.x + dir.z * dir.z
+		if a > 0.00000001:
+			var b := origin.x * dir.x + origin.z * dir.z
+			var disc := b * b - a * (origin.x * origin.x + origin.z * origin.z - radius * radius)
+			if disc >= 0.0:
+				var t := (-b - sqrt(disc)) / a
+				if t >= 0.0 and absf(origin.y + dir.y * t) <= half:
+					best = t
+		if absf(dir.y) > 0.00000001:
+			for cap_y: float in [-half, half]:
+				var t := (cap_y - origin.y) / dir.y
+				var p := origin + dir * t
+				if t >= 0.0 and t < best and p.x * p.x + p.z * p.z <= radius * radius:
+					best = t
+		return best
+	var hit: Variant = mesh.get_aabb().intersects_ray(origin, dir)
+	if hit == null:
+		return INF
+	return ((hit as Vector3) - origin).dot(dir) / dir.length_squared()
+
+
+func _pick_terrain(from: Vector3, dir: Vector3) -> Dictionary:
+	if dir.y > -0.00001:
+		return {}
+	var t_floor := -from.y / dir.y
+	if t_floor < 0.0:
+		return {}
+	# Every prism sits in 0 <= y <= ROCK_HEIGHT, so only hexes under that span of
+	# the ray can be hit. Half-hex samples plus neighbors cover every such hex.
+	var a := from + dir * maxf(0.0, (ROCK_HEIGHT - from.y) / dir.y)
+	var b := from + dir * t_floor
+	var steps := maxi(1, ceili(Vector2(b.x - a.x, b.z - a.z).length() / (MapGrid.HEX_SIZE * 0.5)))
+	var candidates: Dictionary = {}
+	for i: int in steps + 1:
+		var p := a.lerp(b, float(i) / float(steps))
+		var sampled := map_grid.world_to_cell(Vector2(p.x, p.z))
+		candidates[sampled] = true
+		for neighbor: Vector2i in map_grid.get_neighbors(sampled):
+			candidates[neighbor] = true
+	var best_t := INF
+	var best_cell := Vector2i(-1, -1)
+	for cell: Vector2i in candidates:
+		if not map_grid.is_inside(cell):
+			continue
+		var t := _ray_hex_prism(from, dir, cell, _terrain_top(cell))
+		if t < best_t:
+			best_t = t
+			best_cell = cell
+	if best_t == INF:
+		return {}
+	return {"cell": best_cell, "t": best_t}
+
+
+## Entry distance into the convex pointy-top prism (full HEX_SIZE, y 0..top), or INF.
+func _ray_hex_prism(from: Vector3, dir: Vector3, cell: Vector2i, top: float) -> float:
+	var center := map_grid.cell_to_world(cell)
+	var apothem := MapGrid.HEX_SIZE * sqrt(3.0) * 0.5
+	var t_enter := 0.0
+	var t_exit := INF
+	for plane: int in 8:
+		var normal := Vector3.UP
+		var offset := top
+		if plane == 1:
+			normal = Vector3.DOWN
+			offset = 0.0
+		elif plane >= 2:
+			var angle := float(plane - 2) * PI / 3.0 + PI / 6.0
+			normal = Vector3(sin(angle), 0.0, cos(angle))
+			offset = normal.x * center.x + normal.z * center.y + apothem
+		var denom := normal.dot(dir)
+		var room := offset - normal.dot(from)
+		if absf(denom) < 0.0000001:
+			if room < 0.0:
+				return INF
+			continue
+		var t := room / denom
+		if denom < 0.0:
+			t_enter = maxf(t_enter, t)
+		else:
+			t_exit = minf(t_exit, t)
+		if t_enter > t_exit:
+			return INF
+	return t_enter
+
+
+## Ray vs the colonist CapsuleMesh in proxy-local space (axis Y, unit-length dir).
+func _ray_capsule(origin: Vector3, dir: Vector3) -> float:
+	var half_axis := COLONIST_HEIGHT * 0.5 - COLONIST_RADIUS
+	var best := INF
+	var a := dir.x * dir.x + dir.z * dir.z
+	if a > 0.00000001:
+		var b := origin.x * dir.x + origin.z * dir.z
+		var c := origin.x * origin.x + origin.z * origin.z - COLONIST_RADIUS * COLONIST_RADIUS
+		var disc := b * b - a * c
+		if disc >= 0.0:
+			var t := (-b - sqrt(disc)) / a
+			if t >= 0.0 and absf(origin.y + dir.y * t) <= half_axis:
+				best = t
+	for cap_y: float in [-half_axis, half_axis]:
+		var o := origin - Vector3(0.0, cap_y, 0.0)
+		var b := o.dot(dir)
+		var disc := b * b - (o.dot(o) - COLONIST_RADIUS * COLONIST_RADIUS)
+		if disc < 0.0:
+			continue
+		var t := -b - sqrt(disc)
+		if t >= 0.0 and t < best:
+			best = t
+	return best
 
 
 func sync_actors(residents: Array[VaultResident], buildings: Array[VaultBuilding], show_hatch: bool, jobs: Array = [], breach_phase: BreachSystem.Phase = BreachSystem.Phase.DORMANT, patch_work_left: float = BreachSystem.PATCH_WORK_SECONDS) -> void:
