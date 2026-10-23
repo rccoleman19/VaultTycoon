@@ -68,6 +68,7 @@ run_godot_check fresh-wing-next-walk --script res://tests/test_fresh_wing_next_w
 run_godot_check fresh-wing-charge-finish --script res://tests/test_fresh_wing_charge_finish.gd
 run_godot_check preview-tool-on-load --script res://tests/test_preview_tool_on_load.gd
 run_godot_check fresh-wing-grow-finish --script res://tests/test_fresh_wing_grow_finish.gd
+run_godot_check air-haze --script res://tests/test_air_haze.gd
 run_godot_check fresh-wing-nutrient-finish --script res://tests/test_fresh_wing_nutrient_finish.gd
 run_godot_check breach-alarm --script res://tests/test_breach_alarm.gd
 run_godot_check fresh-wing-air-finish --script res://tests/test_fresh_wing_air_finish.gd
