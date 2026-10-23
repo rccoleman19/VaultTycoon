@@ -395,11 +395,11 @@ Within one fixture kind, newer fixtures shed before older fixtures. The critical
 | Exhaustion | Additional -12 mood per day while rest is below 30 |
 | Low oxygen | Additional -24 mood per day while oxygen is at or below 35% |
 | Fully stacked awake pressure | -96 mood per day |
-| Protected states | Sleep and physically active Rec Console use suspend passive mood loss |
+| Protected states | Sleep, physically active Rec Console use, and an undrafted stress break suspend passive mood loss |
 | Unbedded collapse | Waking from floor sleep costs 12 mood once |
 | Low-mood work speed | Mood below 30 multiplies work by 0.70; combined need penalties have a 0.35 floor |
 | HUD tiers | STEADY at 70+, STRAINED at 40–69.999, STRESSED above 9 and below 40, BREAK RISK at 9 or lower |
-| Stress-break fallback | Mood at or below 9 starts a 7-second break and restores 8 mood when complete |
+| Stress-break fallback | Mood at or below 9 starts a 7-second break, holds mood during it, and restores 16 mood when complete; drafting, the hatch response, or Med Bed admission ends it early without the bonus |
 | Severe mood | Mood at or below 5 costs 5 health per day |
 | Recreation trigger | Mood at or below 35 seeks the nearest reachable powered free console |
 | Console recovery | +18 mood per simulation second while present; finishes at exactly 85 |
