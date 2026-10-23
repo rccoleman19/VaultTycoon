@@ -45,6 +45,7 @@ run_godot_check stress-break-venting --script res://tests/test_stress_break_vent
 run_godot_check work-priorities --script res://tests/test_work_priorities.gd
 run_godot_check work-tie-help-text --script res://tests/test_work_tie_help_text.gd
 run_godot_check breach-modal-speed-keys --script res://tests/test_breach_modal_speed_keys.gd
+run_godot_check next-tip-warning --script res://tests/test_next_tip_warning.gd
 run_godot_check medical --script res://tests/test_medical.gd
 run_godot_check medical-next-threshold --script res://tests/test_medical_next_threshold.gd
 run_godot_check survival-next --script res://tests/test_survival_next.gd
@@ -68,6 +69,7 @@ run_godot_check lit-signature --script res://tests/test_lit_signature.gd
 run_godot_check lighting-darkness --script res://tests/test_lighting_darkness.gd
 run_godot_check manual-draft-forced-orders --script res://tests/test_manual_draft_forced_orders.gd
 run_godot_check terrain-aware-picking --script res://tests/test_terrain_aware_picking.gd
+run_godot_check hatch-path-cache --script res://tests/test_hatch_path_cache.gd
 run_godot_check boot --quit-after 5
 
 # Fresh-clone cold boot: class cache must resolve global GDScript classes without an editor visit.

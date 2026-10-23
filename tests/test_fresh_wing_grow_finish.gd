@@ -1,5 +1,6 @@
 extends "res://tests/test_runner.gd"
 
+const HATCH_WATCH := ["Next: YOU watch hatch · THEY auto-patch", "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft.", "select"]
 const TICK_CAP := 799
 const CHARGE := ["Next: YOU place a Charge Node · THEY supply/build", "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.", "generator"]
 const FINISH_CHARGE := ["Next: YOU leave Haul + Craft on · THEY finish the Charge Node", "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.", "select"]
@@ -175,6 +176,10 @@ func _walk() -> void:
 
 
 func _act(game: VaultGame, tuple: Array) -> bool:
+	if tuple == HATCH_WATCH:
+		if not game.breach_system.is_response_active():
+			return _stop(game, "hatch watch tip outside an active response")
+		return true # Auto response covered; wait.
 	if tuple == FINISH_GROW:
 		if _grow == null or _grow.complete or not game.buildings.has(_grow):
 			return _stop(game, "Grow finish without retained unfinished blueprint")

@@ -1,5 +1,6 @@
 extends "res://tests/test_runner.gd"
 
+const HATCH_WATCH := ["Next: YOU watch hatch · THEY auto-patch", "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft.", "select"]
 const TICK_CAP := 1600
 const SEAL_DEADLINE := BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS
 const FINISH_AIR := ["Next: YOU leave Haul + Craft on · THEY finish the Air Recycler", "Keep Haul + Craft above OFF so crew supply and finish the Air Recycler blueprint.", "select"]
@@ -345,6 +346,10 @@ func _walk() -> void:
 
 
 func _act(game: VaultGame, tuple: Array) -> bool:
+	if tuple == HATCH_WATCH:
+		if not game.breach_system.is_response_active():
+			return _stop(game, "hatch watch tip outside an active response")
+		return true # Auto response covered; wait.
 	if _air != null and tuple not in [AIR, FINISH_AIR, ENABLE_AIR, FINISH]:
 		return _stop(game, "post-Air Rec/medical/unexpected Next blocks walk: %s" % str(tuple))
 	if tuple == FINISH_AIR:
