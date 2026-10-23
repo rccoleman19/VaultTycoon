@@ -74,6 +74,7 @@ run_godot_check breach-alarm --script res://tests/test_breach_alarm.gd
 run_godot_check fresh-wing-air-finish --script res://tests/test_fresh_wing_air_finish.gd
 run_godot_check lit-signature --script res://tests/test_lit_signature.gd
 run_godot_check lighting-darkness --script res://tests/test_lighting_darkness.gd
+run_godot_check thin-air-work --script res://tests/test_thin_air_work.gd
 run_godot_check manual-draft-forced-orders --script res://tests/test_manual_draft_forced_orders.gd
 run_godot_check terrain-aware-picking --script res://tests/test_terrain_aware_picking.gd
 run_godot_check hatch-path-cache --script res://tests/test_hatch_path_cache.gd
