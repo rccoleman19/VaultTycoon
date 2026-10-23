@@ -67,6 +67,7 @@ run_godot_check continuous-food-air-walk --script res://tests/test_continuous_fo
 run_godot_check post-seal-designate-pressure --script res://tests/test_post_seal_designate_pressure.gd
 run_godot_check loss-screen-tool-help --script res://tests/test_loss_screen_tool_help.gd
 run_godot_check fresh-wing-next-walk --script res://tests/test_fresh_wing_next_walk.gd
+run_godot_check loss-clock --script res://tests/test_loss_clock.gd
 run_godot_check fresh-wing-charge-finish --script res://tests/test_fresh_wing_charge_finish.gd
 run_godot_check preview-tool-on-load --script res://tests/test_preview_tool_on_load.gd
 run_godot_check fresh-wing-grow-finish --script res://tests/test_fresh_wing_grow_finish.gd

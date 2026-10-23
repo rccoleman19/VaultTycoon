@@ -10,6 +10,8 @@ const DAYS_TO_SURVIVE := 7
 var elapsed_seconds := 0.0
 var current_day := 1
 var completed := false
+# Set by VaultGame.outcome: a lost wing never reads as a completed shift.
+var wing_lost := false
 
 
 func reset() -> void:
@@ -36,6 +38,8 @@ func get_day_fraction() -> float:
 
 
 func get_clock_text() -> String:
+	if wing_lost:
+		return "DAY %d · WING LOST" % current_day
 	if completed:
 		return "DAY 7 COMPLETE"
 	var hours := floori(get_day_fraction() * 24.0)

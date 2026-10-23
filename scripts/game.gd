@@ -73,7 +73,11 @@ var simulation_speed := 1
 var user_paused := true
 var tutorial_open := true
 var ended := false
-var outcome := ""
+var outcome := "":
+	set(value):
+		outcome = value
+		if day_cycle != null:
+			day_cycle.wing_lost = value == "loss"
 var status_message := "Select DIG and mark rock beside the chamber."
 var status_message_left := 0.0
 
