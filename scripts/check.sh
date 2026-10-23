@@ -67,6 +67,7 @@ run_godot_check next-tip-warning --script res://tests/test_next_tip_warning.gd
 run_godot_check medical --script res://tests/test_medical.gd
 run_godot_check medical-next-threshold --script res://tests/test_medical_next_threshold.gd
 run_godot_check survival-next --script res://tests/test_survival_next.gd
+run_godot_check salvage-guidance --script res://tests/test_salvage_guidance.gd
 run_godot_check fixture-props --script res://tests/test_fixture_props.gd
 run_godot_check proxy-kind-on-load --script res://tests/test_proxy_kind_on_load.gd
 run_godot_check open-suggested-tab --script res://tests/test_open_suggested_tab.gd
@@ -78,6 +79,7 @@ run_godot_check food-props --script res://tests/test_food_props.gd
 run_godot_check food-loop-playthrough --script res://tests/test_food_loop_playthrough.gd
 run_godot_check air-fund-tip --script res://tests/test_air_fund_tip.gd
 run_godot_check air-loop-playthrough --script res://tests/test_air_loop_playthrough.gd
+run_godot_check loss-screen-status --script res://tests/test_loss_screen_status.gd
 run_godot_check hatch-walk-playthrough --script res://tests/test_hatch_walk_playthrough.gd
 run_godot_check forced-hatch-status --script res://tests/test_forced_hatch_status.gd
 run_godot_check continuous-food-air-walk --script res://tests/test_continuous_food_air_walk.gd
