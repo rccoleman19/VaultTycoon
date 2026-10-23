@@ -455,18 +455,26 @@ func get_breach_response_status() -> String:
 		return "PATCH COMPLETE · HATCH STABLE"
 	if breach.needs_supply():
 		var remaining := maxi(0, BreachSystem.PATCH_COST - breach.patch_delivered - _breach_supply_in_transit())
-		if not _has_allowed_worker(JobType.SUPPLY_BREACH):
-			return "BLOCKED · ENABLE HAUL"
-		if not _has_worker_path(JobType.SUPPLY_BREACH):
+		var forced_hauler := _forced_breach_responder(JobType.SUPPLY_BREACH)
+		if forced_hauler == null:
+			if not _has_allowed_worker(JobType.SUPPLY_BREACH):
+				return "BLOCKED · ENABLE HAUL"
+			if not _has_worker_path(JobType.SUPPLY_BREACH):
+				return "BLOCKED · NO PATH TO HATCH"
+		elif map_grid.find_path(forced_hauler.get_cell(map_grid), BreachSystem.HATCH_CELL).is_empty():
 			return "BLOCKED · NO PATH TO HATCH"
 		if food.salvage < remaining:
 			return "BLOCKED · NEEDS %d SALVAGE" % (remaining - food.salvage)
 		if _has_reserved_job(JobType.SUPPLY_BREACH):
 			return "HAUL RESPONSE EN ROUTE"
 		return "AWAITING HAUL RESPONSE"
-	if not _has_allowed_worker(JobType.PATCH_BREACH):
-		return "BLOCKED · ENABLE CRAFT"
-	if not _has_worker_path(JobType.PATCH_BREACH):
+	var forced_patcher := _forced_breach_responder(JobType.PATCH_BREACH)
+	if forced_patcher == null:
+		if not _has_allowed_worker(JobType.PATCH_BREACH):
+			return "BLOCKED · ENABLE CRAFT"
+		if not _has_worker_path(JobType.PATCH_BREACH):
+			return "BLOCKED · NO PATH TO HATCH"
+	elif map_grid.find_path(forced_patcher.get_cell(map_grid), BreachSystem.HATCH_CELL).is_empty():
 		return "BLOCKED · NO PATH TO HATCH"
 	if _has_reserved_job(JobType.PATCH_BREACH):
 		return "PATCH CREW RESPONDING"
@@ -1235,6 +1243,19 @@ func _has_worker_path(type: int) -> bool:
 			if not map_grid.find_path(resident.get_cell(map_grid), BreachSystem.HATCH_CELL).is_empty():
 				return true
 	return false
+
+
+# A player-forced hatch order bypasses OFF (force_job_at), so while its exact
+# reservation is live the automatic permission/path checks do not apply; the
+# status follows that resident instead. Returns null when there is none.
+func _forced_breach_responder(type: int) -> VaultResident:
+	for resident: VaultResident in game.residents:
+		if not resident.alive or resident.drafted or not resident.is_forced_job or resident.current_job_type != type:
+			continue
+		var job := _find_job(resident.current_job_id)
+		if not job.is_empty() and not bool(job.get("done", false)) and int(job.get("reserved_by", -1)) == resident.resident_id:
+			return resident
+	return null
 
 
 func _has_reserved_job(type: int) -> bool:
