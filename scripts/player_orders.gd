@@ -815,14 +815,15 @@ func refresh() -> void:
 	if game == null or clock_label == null:
 		return
 	clock_label.text = game.day_cycle.get_clock_text()
-	resource_label.text = "MEALS %d (+%d)  RAW %d (+%d)  SALVAGE %d" % [
+	resource_label.text = "MEALS %d (+%d)%s  RAW %d (+%d)  SALVAGE %d" % [
 		game.food_system.meals,
 		game.job_system.get_pending_meals(),
+		_meal_runway_text(),
 		game.food_system.raw_food,
 		game.job_system.get_pending_raw_food(),
 		game.food_system.salvage,
 	]
-	resource_label.tooltip_text = "Stored inventory; values in parentheses are produced food still awaiting Haul delivery."
+	resource_label.tooltip_text = "Stored inventory; values in parentheses are produced food still awaiting Haul delivery. DAYS = stored + pending meals per living resident (each eats one meal a day)."
 	command_buttons.zone.text = "ZONE %d" % game.map_grid.stockpile_cells.size()
 	command_buttons.zone.tooltip_text = "Stockpile: %d cells. Salvage, raw food, and meals prefer reachable zones; otherwise Salvage Bay / chamber center. Click/drag to paint; CANCEL [X] clears." % game.map_grid.stockpile_cells.size()
 	var step: Dictionary = _refresh_objective()
@@ -1902,6 +1903,15 @@ func _refresh_lighting() -> void:
 	lighting_overlay_button.text = "[L] MAP %s" % ("ON" if lighting.is_coverage_overlay_visible() else "OFF")
 	lighting_overlay_button.modulate = Color("efc56b") if lighting.is_coverage_overlay_visible() else Color.WHITE
 
+
+# Each resident burns 60 food per day and a meal restores 60, so one meal
+# feeds one resident for one day. Floor to a tenth so the HUD never overpromises.
+func _meal_runway_text() -> String:
+	var alive := game.get_alive_count()
+	if game.ended or alive <= 0:
+		return ""
+	var meals := game.food_system.meals + game.job_system.get_pending_meals()
+	return " · %.1f DAYS" % (floorf(float(meals) * 10.0 / float(alive)) / 10.0)
 
 func _refresh_oxygen() -> void:
 	var oxygen := game.oxygen_system

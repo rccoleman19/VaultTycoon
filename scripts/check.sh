@@ -41,6 +41,7 @@ run_godot_check import --editor --quit
 run_godot_check tests --script res://tests/test_runner.gd
 run_godot_check save-snapshot-atomic --script res://tests/test_save_snapshot_atomic.gd
 run_godot_check mood-recreation --script res://tests/test_mood_recreation.gd
+run_godot_check meal-runway --script res://tests/test_meal_runway.gd
 run_godot_check stress-break-venting --script res://tests/test_stress_break_venting.gd
 run_godot_check work-priorities --script res://tests/test_work_priorities.gd
 run_godot_check work-tie-help-text --script res://tests/test_work_tie_help_text.gd
