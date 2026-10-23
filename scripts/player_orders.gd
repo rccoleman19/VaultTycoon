@@ -993,7 +993,7 @@ func _primary_next_step() -> Dictionary:
 			mood_break_risk = true
 		if resident.needs.wants_recreation():
 			rec_wanted = true
-		if resident.needs.health < 100.0 and resident.medical_bed_id < 0:
+		if resident.needs.wants_medical_care() and resident.medical_bed_id < 0:
 			injured_without_reservation = true
 	if critical_resident and game.food_system.meals < game.get_alive_count():
 		var completed_kitchens := game.get_completed_building_count(VaultBuilding.Kind.KITCHEN)

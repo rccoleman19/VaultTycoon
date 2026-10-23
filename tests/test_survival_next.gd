@@ -199,7 +199,7 @@ func _test_interrupts_and_priority() -> void:
 	resident.needs.food = 100.0
 	game.food_system.meals = 12
 	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
-	resident.needs.health = 99.0
+	resident.needs.health = 95.0
 	_assert_equal(game.player_orders._primary_next_step()["text"], REC_NEXT, "recreation beats medical care")
 	resident.needs.mood = 100.0
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
@@ -601,7 +601,7 @@ func _test_progression_food_capacity_guards() -> void:
 	_assert_step(game, FINISH_CHARGE_NEXT, "select", FINISH_CHARGE_HELP)
 	game.food_system.meals = game.get_alive_count()
 	game.residents[0].needs.food = 100.0
-	game.residents[0].needs.health = 99.0
+	game.residents[0].needs.health = 95.0
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
 	game.residents[0].needs.health = 100.0
 	for resident: VaultResident in game.residents:
@@ -783,7 +783,7 @@ func _test_interrupts_before_cook() -> void:
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 0, "no completed rec console is available")
 	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
 	resident.needs.mood = 100.0
-	resident.needs.health = 99.0
+	resident.needs.health = 95.0
 	_assert_equal(resident.medical_bed_id, -1, "injured resident has no medical reservation")
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.MEDICAL_BED), 0, "no usable med bed is available")
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
@@ -877,7 +877,7 @@ func _test_interrupts_before_haul() -> void:
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 0, "Haul interrupt case has no rec console")
 	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
 	resident.needs.mood = 100.0
-	resident.needs.health = 99.0
+	resident.needs.health = 95.0
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.MEDICAL_BED), 0, "Haul interrupt case has no med bed")
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
 	resident.needs.health = 100.0
@@ -1125,7 +1125,7 @@ func _test_offline_rec_priority() -> void:
 			match lower_step:
 				"medical":
 					game.residents[0].needs.food = 100.0
-					game.residents[0].needs.health = 99.0
+					game.residents[0].needs.health = 95.0
 					expected = MED_NEXT
 				"bunks":
 					game.food_system.meals = game.get_alive_count()
@@ -1154,7 +1154,7 @@ func _test_offline_rec_priority() -> void:
 func _test_medical_availability() -> void:
 	var game := _healthy_game()
 	var resident: VaultResident = game.residents[0]
-	resident.needs.health = 99.0
+	resident.needs.health = 95.0
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
 	var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12))
 	_assert_dig(game, "free usable medical bed avoids the medical interrupt")
@@ -1166,14 +1166,14 @@ func _test_medical_availability() -> void:
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
 	resident.medical_bed_id = bed.building_id
 	_assert_dig(game, "only injured resident already reserved does not request a med bed")
-	game.residents[1].needs.health = 99.0
+	game.residents[1].needs.health = 95.0
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
 	_dispose(game)
 
 
 func _test_medical_finish_restore() -> void:
 	var game := _healthy_game()
-	game.residents[0].needs.health = 99.0
+	game.residents[0].needs.health = 95.0
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12)), "Med Bed blueprint can be placed")
 	var bed := game.get_building_at(Vector2i(20, 12))
 	_assert_false(bed.complete, "Med Bed blueprint starts unfinished")
@@ -1193,7 +1193,7 @@ func _test_medical_finish_restore() -> void:
 
 func _test_medical_enable_restore() -> void:
 	var game := _healthy_game()
-	game.residents[0].needs.health = 99.0
+	game.residents[0].needs.health = 95.0
 	var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12))
 	var spare := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(21, 12))
 	bed.manually_disabled = true
@@ -1216,7 +1216,7 @@ func _test_medical_enable_restore() -> void:
 
 func _test_medical_mixed_fallbacks() -> void:
 	var game := _healthy_game()
-	game.residents[0].needs.health = 99.0
+	game.residents[0].needs.health = 95.0
 	var reserved := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12))
 	reserved.reserved_by = game.residents[1].resident_id
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
@@ -1239,7 +1239,7 @@ func _test_medical_mixed_fallbacks() -> void:
 	spare.reserved_by = -1
 	_assert_step(game, ENABLE_MED_NEXT, "select", ENABLE_MED_HELP)
 	_assert_true(game.toggle_building_enabled(spare.building_id), "enable free spare beside occupied bed")
-	game.residents[2].needs.health = 99.0
+	game.residents[2].needs.health = 95.0
 	_assert_dig(game, "one free enabled spare suppresses Med guidance for multiple waiting injuries")
 	_dispose(game)
 
@@ -1303,7 +1303,7 @@ func _test_medical_guards() -> void:
 			var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12))
 			bed.manually_disabled = true
 		_assert_dig(game, "health 100 suppresses Med enable/finish")
-		resident.needs.health = 99.0
+		resident.needs.health = 95.0
 		_assert_step(game, FINISH_MED_NEXT if unfinished else ENABLE_MED_NEXT, "select", FINISH_MED_HELP if unfinished else ENABLE_MED_HELP)
 		resident.alive = false
 		_assert_dig(game, "dead injured resident suppresses Med enable/finish")
@@ -1342,7 +1342,7 @@ func _test_medical_priority() -> void:
 			else:
 				var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(21, 12))
 				bed.manually_disabled = true
-			resident.needs.health = 99.0
+			resident.needs.health = 95.0
 			_assert_step(game, FINISH_MED_NEXT if unfinished else ENABLE_MED_NEXT, "select", FINISH_MED_HELP if unfinished else ENABLE_MED_HELP)
 			resident.needs.mood = 9.0
 			_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
@@ -1364,7 +1364,7 @@ func _test_medical_priority() -> void:
 
 func _test_medical_brownout() -> void:
 	var game := _healthy_game()
-	game.residents[0].needs.health = 99.0
+	game.residents[0].needs.health = 95.0
 	var bed := _add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(20, 12))
 	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(21, 12))
 	game.power_grid.recalculate(game.buildings)
@@ -1692,7 +1692,7 @@ func _test_bunk_finish_priority() -> void:
 	resident.needs.food = 19.0
 	game.food_system.meals = 0
 	resident.needs.mood = 9.0
-	resident.needs.health = 99.0
+	resident.needs.health = 95.0
 	_assert_step(game, KITCHEN_NEXT, "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
 	resident.needs.food = 100.0
 	game.food_system.meals = game.get_alive_count()
@@ -1707,7 +1707,7 @@ func _test_bunk_finish_priority() -> void:
 		resident = game.residents[0]
 		resident.needs.rest = 28.0
 		resident.needs.mood = 9.0
-		resident.needs.health = 99.0
+		resident.needs.health = 95.0
 		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(21, 12)), "offline Rec priority case has bunk blueprint")
 		var rec := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(22, 12))
 		rec.manually_disabled = disabled
@@ -1995,7 +1995,7 @@ func _test_charge_finish_priority() -> void:
 	game.residents[0].needs.mood = 9.0
 	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
 	game.residents[0].needs.mood = 100.0
-	game.residents[0].needs.health = 99.0
+	game.residents[0].needs.health = 95.0
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
 	game.residents[0].needs.health = 100.0
 	game.residents[0].needs.rest = 28.0
@@ -2105,7 +2105,7 @@ func _test_air_priority() -> void:
 	game.residents[0].needs.mood = 9.0
 	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
 	game.residents[0].needs.mood = 100.0
-	game.residents[0].needs.health = 99.0
+	game.residents[0].needs.health = 95.0
 	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
 	game.residents[0].needs.health = 100.0
 	for x in range(17, 29):
