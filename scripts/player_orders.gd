@@ -1216,8 +1216,13 @@ func _breach_blocker_step() -> Dictionary:
 			"respond to hatch",
 			"Drafted crew never answer the hatch. Select a drafted resident and press R to undraft.",
 		)
+	# A forced hatch supply order covers its trip, but cannot enable the
+	# automatic rubble hauling needed to fund a salvage shortfall.
+	var missing_work: Array = response.missing_work.duplicate()
+	if response.salvage_shortfall > 0 and not response.automatic_haul and not missing_work.has("haul"):
+		missing_work.push_front("haul")
 	var missing: Array[String] = []
-	for work_type: String in response.missing_work:
+	for work_type: String in missing_work:
 		missing.append(work_type.capitalize())
 	if not missing.is_empty():
 		var names := " + ".join(missing)
@@ -1228,9 +1233,12 @@ func _breach_blocker_step() -> Dictionary:
 		)
 	if response.state == JobSystem.HatchResponseState.NO_PATH:
 		# Same check as DETAILS "NO PATH TO HATCH". DIG [E] is never locked by the modal.
+		var path_blocker := "No undrafted %s crew can walk to the hatch." % ("Haul" if response.job_type == JobSystem.JobType.SUPPLY_BREACH else "Craft")
+		if response.responder != null:
+			path_blocker = "%s can't walk to the hatch." % response.responder.resident_name
 		return {
 			"text": "Next: YOU mark a tunnel to the hatch [E] · THEY dig it out",
-			"help": "No undrafted %s crew can walk to the hatch. Mark rock with DIG [E] to connect them to the hatch; crew with Dig above OFF dig it out." % ("Haul" if response.job_type == JobSystem.JobType.SUPPLY_BREACH else "Craft"),
+			"help": "%s Mark rock with DIG [E] to connect them to the hatch; crew with Dig above OFF dig it out." % path_blocker,
 			"tool": "dig",
 		}
 	var shortfall: int = response.salvage_shortfall

@@ -86,6 +86,7 @@ run_godot_check loss-screen-status --script res://tests/test_loss_screen_status.
 run_godot_check hatch-walk-playthrough --script res://tests/test_hatch_walk_playthrough.gd
 run_godot_check forced-hatch-status --script res://tests/test_forced_hatch_status.gd
 run_godot_check f6-forced-responder-seam --script res://tests/test_f6_forced_responder_seam.gd
+run_godot_check f6-p3-guidance --script res://tests/test_f6_p3_guidance.gd
 run_godot_check continuous-food-air-walk --script res://tests/test_continuous_food_air_walk.gd
 run_godot_check roster-fit --script res://tests/test_roster_fit.gd
 run_godot_check post-seal-designate-pressure --script res://tests/test_post_seal_designate_pressure.gd

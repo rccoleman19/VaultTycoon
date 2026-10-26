@@ -451,6 +451,7 @@ func get_queued_count() -> int:
 
 # Shared response for DETAILS and Next. State/responder describe the current
 # stage; missing_work also includes the later Craft stage without a path search.
+# automatic_haul tracks eligibility to turn rubble into salvage for funding.
 func get_hatch_response() -> Dictionary:
 	var response := {
 		"state": HatchResponseState.WATCHING,
@@ -459,6 +460,7 @@ func get_hatch_response() -> Dictionary:
 		"has_living_crew": false,
 		"has_undrafted_crew": false,
 		"missing_work": [],
+		"automatic_haul": false,
 		"salvage_shortfall": 0,
 	}
 	if breach == null or breach.phase == BreachSystem.Phase.DORMANT:
@@ -478,7 +480,8 @@ func get_hatch_response() -> Dictionary:
 				response.has_undrafted_crew = true
 	# DETAILS describes the current stage; Next also prepares the later Craft
 	# stage. A live forced order covers only its own stage, including with OFF.
-	if supplying and forced_responder == null and not _has_allowed_worker(JobType.SUPPLY_BREACH):
+	response.automatic_haul = _has_allowed_worker(JobType.HAUL_RUBBLE)
+	if supplying and forced_responder == null and not response.automatic_haul:
 		response.missing_work.append("haul")
 	if (supplying or forced_responder == null) and not _has_allowed_worker(JobType.PATCH_BREACH):
 		response.missing_work.append("craft")
