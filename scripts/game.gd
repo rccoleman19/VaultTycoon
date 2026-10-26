@@ -46,14 +46,22 @@ const PERK_GROW_NOOK := "grow_nook"
 const GROW_NOOK_CELL := Vector2i(26, 17)
 const GROW_NOOK_MEALS_COST := 2
 const GROW_NOOK_BADGES := 2
+# B3 RELAY LUMEN, earned by an Annex badge on a 3-star win (a record with best_stars 3 and annex): one
+# built Lumen on a far corner tile of the start room that lights the dig front, at the lowest power
+# priority (it sheds before food and air, like FLOODLIGHT's), paid 10 salvage (a Lumen is 5 to build).
+const PERK_RELAY_LUMEN := "relay_lumen"
+const RELAY_LUMEN_CELL := Vector2i(18, 13)
+const RELAY_LUMEN_SALVAGE_COST := 10
+const RELAY_LUMEN_STARS := 3
 const PERKS := {
 	PERK_PROVISIONING: {"name": "PROVISIONING", "unlock_level": 7, "detail": "+4 meals, -8 salvage"},
 	PERK_FLOODLIGHT: {"name": "FLOODLIGHT", "unlock_level": 5, "detail": "+1 lit Lumen (sheds first), -6 salvage"},
 	PERK_VOLUNTEER: {"name": "VOLUNTEER", "unlock_level": 3, "detail": "+1 resident, -8 salvage"},
 	PERK_BUNKROOM: {"name": "BUNKROOM", "unlock_annex": 1, "detail": "blueprint: +1 Bunk, -14 salvage"},
 	PERK_GROW_NOOK: {"name": "GROW NOOK", "unlock_annex": GROW_NOOK_BADGES, "detail": "blueprint: Grow Tray plan, -2 meals"},
+	PERK_RELAY_LUMEN: {"name": "RELAY LUMEN", "unlock_annex_stars": RELAY_LUMEN_STARS, "detail": "blueprint: +1 low Lumen, -10 salvage"},
 }
-const PERK_ORDER := [PERK_PROVISIONING, PERK_FLOODLIGHT, PERK_VOLUNTEER, PERK_BUNKROOM, PERK_GROW_NOOK]
+const PERK_ORDER := [PERK_PROVISIONING, PERK_FLOODLIGHT, PERK_VOLUNTEER, PERK_BUNKROOM, PERK_GROW_NOOK, PERK_RELAY_LUMEN]
 # The player's choice for the next wings (kept across NEW WING / REPLAY / stepping).
 var equipped_perk := ""
 # The perk this wing started with ("" = NONE); saved, shown on the outcome.
@@ -1320,7 +1328,11 @@ func unlocked_perks_for(seed_value: int) -> Array:
 		return unlocked
 	var store := wing_records()
 	for id: String in PERK_ORDER:
-		if store.annex_badge_sublevels() >= int(PERKS[id].unlock_annex) if PERKS[id].has("unlock_annex") else store.has_win_on(int(PERKS[id].unlock_level)):
+		var perk: Dictionary = PERKS[id]
+		if perk.has("unlock_annex_stars"):
+			if store.has_annex_badge_with_stars(int(perk.unlock_annex_stars)):
+				unlocked.append(id)
+		elif store.annex_badge_sublevels() >= int(perk.unlock_annex) if perk.has("unlock_annex") else store.has_win_on(int(perk.unlock_level)):
 			unlocked.append(id)
 	return unlocked
 
@@ -1345,14 +1357,18 @@ func _apply_perk_start() -> void:
 		PERK_GROW_NOOK:
 			_spawn_starting_blueprint(VaultBuilding.Kind.GROW_TRAY, GROW_NOOK_CELL, true)
 			food_system.meals = maxi(0, food_system.meals - GROW_NOOK_MEALS_COST)
+		PERK_RELAY_LUMEN:
+			_spawn_starting_fixture(VaultBuilding.Kind.LAMP, RELAY_LUMEN_CELL, false)
+			food_system.salvage = maxi(0, food_system.salvage - RELAY_LUMEN_SALVAGE_COST)
 	_mark_floodlight()
 
 
-# FLOODLIGHT's starter Lumen sheds first; re-derived from the wing's perk on NEW WING and LOAD. Matched by
-# id and cell, so a Lumen the player later builds on that cell keeps its normal priority.
+# FLOODLIGHT's (and RELAY LUMEN's) extra Lumen sheds first; re-derived from the wing's perk on NEW WING and
+# LOAD. Matched by id and cell, so a Lumen the player later builds on that cell keeps its normal priority.
 func _mark_floodlight() -> void:
+	var cell := FLOODLIGHT_CELL if wing_perk == PERK_FLOODLIGHT else RELAY_LUMEN_CELL
 	for building: VaultBuilding in buildings:
-		building.shed_first = wing_perk == PERK_FLOODLIGHT and building.building_id == FLOODLIGHT_BUILDING_ID and building.kind == VaultBuilding.Kind.LAMP and building.cell == FLOODLIGHT_CELL
+		building.shed_first = wing_perk in [PERK_FLOODLIGHT, PERK_RELAY_LUMEN] and building.building_id == FLOODLIGHT_BUILDING_ID and building.kind == VaultBuilding.Kind.LAMP and building.cell == cell
 
 
 # Only {"version": 1, "id": <known perk>} on a seeded wing; NONE is never written.
