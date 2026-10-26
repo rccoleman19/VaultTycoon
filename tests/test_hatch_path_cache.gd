@@ -14,6 +14,7 @@ const NO_PATH := "BLOCKED · NO PATH TO HATCH"
 
 func _run() -> void:
 	_run_case("paused salvage-short WARNING frames search at most once", _test_cached_frames)
+	_run_case("forced responder queries share a fresh cached path", _test_forced_responder_cache)
 	_run_case("a dug tunnel is seen on the same call", _test_fresh_dig)
 	_run_case("an undraft is seen on the same call", _test_fresh_undraft)
 	_run_case("a work toggle is seen on the same call", _test_fresh_toggle)
@@ -103,6 +104,65 @@ func _test_cached_frames() -> void:
 	game.player_orders.refresh()
 	game.player_orders.refresh()
 	_assert_true(_searches(game) - before <= 1 and before >= 0, "one tick then two frames: at most one search")
+	_dispose(game)
+
+
+func _assert_forced_response(game: VaultGame, resident: VaultResident, expected_path: bool, message: String) -> void:
+	var response := game.job_system.get_hatch_response()
+	_assert_equal(response.responder, resident, message + " (responder)")
+	_assert_equal(response.state, JobSystem.HatchResponseState.RESPONDING if expected_path else JobSystem.HatchResponseState.NO_PATH, message + " (state)")
+	_assert_equal(game.job_system.has_hatch_worker_path(), expected_path, message + " (public path)")
+	_assert_equal(game.job_system.get_breach_response_status(), "HAUL RESPONSE EN ROUTE" if expected_path else NO_PATH, message + " (DETAILS)")
+	var step: Dictionary = game.player_orders._primary_next_step()
+	_assert_equal(str(step.text), "Next: YOU watch hatch · THEY auto-patch" if expected_path else "Next: YOU mark a tunnel to the hatch [E] · THEY dig it out", message + " (Next)")
+
+
+func _test_forced_responder_cache() -> void:
+	var game := _load_pocket([])
+	for resident: VaultResident in game.residents:
+		game.job_system.release_resident(resident)
+		resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+	_warn(game)
+	game.acknowledge_breach_warning(false)
+	game.user_paused = true
+	var ari: VaultResident = game.residents[0]
+	game.select_resident(ari.resident_id)
+	_assert_true(game.issue_context_order(BreachSystem.HATCH_CELL), "forced hatch supply is accepted with Haul OFF")
+	_assert_true(ari.is_forced_job and ari.current_job_type == SUPPLY, "the forced supply reservation is live")
+	game.residents[1].set_work_priority("haul", VaultResident.DEFAULT_WORK_PRIORITY)
+	_assert_forced_response(game, ari, true, "reachable forced responder")
+	var before := _searches(game)
+	for _frame in 30:
+		game.player_orders.refresh()
+		game.job_system.get_hatch_response()
+		game.job_system.get_breach_response_status()
+		game.player_orders._primary_next_step()
+		game.job_system.has_hatch_worker_path()
+	_assert_equal(_searches(game) - before, 0, "DETAILS, Next and public path reuse the forced responder's cached search")
+	# The automatic bystander stays connected, but only Ari owns this response.
+	ari.clear_path()
+	ari.position = game.map_grid.cell_to_world(POCKET[0])
+	_assert_true(_reference(game, SUPPLY), "an automatic Haul bystander can still reach the hatch")
+	before = _searches(game)
+	_assert_forced_response(game, ari, false, "forced responder moved into the sealed pocket")
+	_assert_equal(_searches(game) - before, 1, "moving the forced responder invalidates on the same call")
+	before = _searches(game)
+	for _frame in 30:
+		game.player_orders.refresh()
+		game.job_system.get_hatch_response()
+		game.job_system.get_breach_response_status()
+		game.player_orders._primary_next_step()
+		game.job_system.has_hatch_worker_path()
+	_assert_equal(_searches(game) - before, 0, "stranded forced responder queries also reuse one cached answer")
+	# Raw writes have no topology signal; the cache must still see them immediately.
+	game.map_grid.cells[TUNNEL.y * MapGrid.WIDTH + TUNNEL.x] = MapGrid.Tile.FLOOR
+	before = _searches(game)
+	_assert_forced_response(game, ari, true, "raw tunnel opening reconnects the forced responder")
+	_assert_equal(_searches(game) - before, 1, "raw opening invalidates on the same call")
+	game.map_grid.cells[TUNNEL.y * MapGrid.WIDTH + TUNNEL.x] = MapGrid.Tile.ROCK
+	before = _searches(game)
+	_assert_forced_response(game, ari, false, "raw tunnel closure strands the forced responder again")
+	_assert_equal(_searches(game) - before, 1, "raw closure invalidates on the same call")
 	_dispose(game)
 
 

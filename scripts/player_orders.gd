@@ -1204,21 +1204,11 @@ func _breach_blocker_step() -> Dictionary:
 	# During WARNING/OPEN, name what stops the automatic patch before any other tip.
 	# A covered response returns {} here; _primary_next_step then shows survival
 	# tips first and watch hatch instead of build-order tips. Sealing ends this branch.
-	var breach := game.breach_system
-	if not breach.is_response_active():
+	var response := game.job_system.get_hatch_response()
+	if response.state in [JobSystem.HatchResponseState.WATCHING, JobSystem.HatchResponseState.SEALED]:
 		return {}
-	var undrafted := false
-	var drafted := false
-	for resident: VaultResident in game.residents:
-		if not resident.alive:
-			continue
-		if resident.drafted:
-			drafted = true
-		else:
-			undrafted = true
-			break
-	if not undrafted:
-		if not drafted:
+	if not response.has_undrafted_crew:
+		if not response.has_living_crew:
 			# Nobody is alive (the loss screen): there is no hatch advice to give.
 			return {}
 		return _hatch_key_step(
@@ -1227,10 +1217,8 @@ func _breach_blocker_step() -> Dictionary:
 			"Drafted crew never answer the hatch. Select a drafted resident and press R to undraft.",
 		)
 	var missing: Array[String] = []
-	if breach.needs_supply() and not _has_eligible_worker("haul"):
-		missing.append("Haul")
-	if not _has_eligible_worker("craft"):
-		missing.append("Craft")
+	for work_type: String in response.missing_work:
+		missing.append(work_type.capitalize())
 	if not missing.is_empty():
 		var names := " + ".join(missing)
 		return _hatch_key_step(
@@ -1238,20 +1226,14 @@ func _breach_blocker_step() -> Dictionary:
 			"patch hatch",
 			"Open PRIORITIES [P] and set %s above OFF for an undrafted resident so crew auto-respond to the hatch." % names,
 		)
-	if not game.job_system.has_hatch_worker_path():
+	if response.state == JobSystem.HatchResponseState.NO_PATH:
 		# Same check as DETAILS "NO PATH TO HATCH". DIG [E] is never locked by the modal.
 		return {
 			"text": "Next: YOU mark a tunnel to the hatch [E] · THEY dig it out",
-			"help": "No undrafted %s crew can walk to the hatch. Mark rock with DIG [E] to connect them to the hatch; crew with Dig above OFF dig it out." % ("Haul" if breach.needs_supply() else "Craft"),
+			"help": "No undrafted %s crew can walk to the hatch. Mark rock with DIG [E] to connect them to the hatch; crew with Dig above OFF dig it out." % ("Haul" if response.job_type == JobSystem.JobType.SUPPLY_BREACH else "Craft"),
 			"tool": "dig",
 		}
-	var shortfall := maxi(
-		0,
-		BreachSystem.PATCH_COST
-			- breach.patch_delivered
-			- game.job_system.get_breach_supply_in_transit()
-			- game.food_system.salvage,
-	)
+	var shortfall: int = response.salvage_shortfall
 	if shortfall > 0:
 		# Salvage already delivered to an unfinished blueprint is the only instant source:
 		# cancelling refunds it at once, while digging rarely beats the 20 s grace. Name the

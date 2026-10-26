@@ -49,7 +49,7 @@ func _run() -> void:
 	_run_case("Dig OFF while short asks for Dig unless rubble covers it", _test_dig_off_short)
 	_run_case("blocker outranks critical food advice", _test_outranks_needs)
 	_run_case("covered WARNING keeps the tired-crew bunk tip", _test_covered_bunk_crisis)
-	_run_case("forced responder is not counted as coverage", _test_forced_not_counted)
+	_run_case("forced supply covers Haul while Craft still needs enabling", _test_forced_supply_coverage)
 	_run_case("DORMANT and SEALED never take the blocker branch", _test_dormant_and_sealed)
 	_run_case("HUD walk shows the blocker from WARNING through OPEN, then clears", _test_hud_walk)
 	_run_case("unacknowledged WARNING asks to acknowledge before R or P", _test_unacknowledged_warning)
@@ -274,7 +274,7 @@ func _test_outranks_needs() -> void:
 	_dispose(game)
 
 
-func _test_forced_not_counted() -> void:
+func _test_forced_supply_coverage() -> void:
 	var game := _healthy()
 	_warn(game)
 	var ari: VaultResident = game.residents[0]
@@ -285,7 +285,7 @@ func _test_forced_not_counted() -> void:
 	game.select_resident(ari.resident_id)
 	_assert_true(game.issue_context_order(BreachSystem.HATCH_CELL), "real forced hatch supply accepted")
 	_assert_true(ari.is_forced_job and ari.current_job_type == JobSystem.JobType.SUPPLY_BREACH, "Ari forced onto hatch supply")
-	_assert_tuple(game, ENABLE_BOTH, "a one-shot force does not replace Haul + Craft")
+	_assert_tuple(game, ENABLE_CRAFT, "forced supply covers Haul but does not replace the Craft stage")
 	_dispose(game)
 
 
