@@ -3041,6 +3041,8 @@ func _show_fixture_upgrade(building: VaultBuilding) -> void:
 	fixture_upgrade_button.tooltip_text = (
 		_upgrade_benefit_text(building)
 		if not fixture_upgrade_button.disabled
+		else "Needs a powered Air Recycler"
+		if not game.is_air_ready()
 		else "Needs %d salvage (have %d)." % [cost, game.food_system.salvage]
 	)
 
@@ -3076,7 +3078,7 @@ func _upgrade_offer_target() -> VaultBuilding:
 
 
 func _air_ready() -> bool:
-	return game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) > 0
+	return game.is_air_ready()
 
 
 func _first_fittable(kind: int) -> VaultBuilding:

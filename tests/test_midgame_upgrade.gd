@@ -35,6 +35,7 @@ func _tray_game(salvage := 40) -> Array:
 	game.begin_shift()
 	var tray := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
 	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(24, 12))
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(26, 14))
 	game.power_grid.recalculate(game.buildings)
 	game.food_system.salvage = salvage
 	return [game, tray]
@@ -104,6 +105,7 @@ func _test_production() -> void:
 	var game: VaultGame = setup[0]
 	var tray: VaultBuilding = setup[1]
 	var plain := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(20, 12))
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(24, 14))
 	game.power_grid.recalculate(game.buildings)
 	var power_before := game.power_grid.get_status_text()
 	_seal(game)
@@ -151,10 +153,6 @@ func _test_ui_flow() -> void:
 	var setup := _tray_game(10)
 	var game: VaultGame = setup[0]
 	var tray: VaultBuilding = setup[1]
-	# Mk II fits wait on a finished, powered Air Recycler (NX37).
-	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(24, 14))
-	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(26, 12))
-	game.power_grid.recalculate(game.buildings)
 	var orders := game.player_orders
 	orders.refresh()
 	_assert_false(orders.upgrade_offer_button.visible, "no offer before the seal")
@@ -375,7 +373,6 @@ func _test_outcome_invested() -> void:
 	var tray: VaultBuilding = setup[1]
 	var orders := game.player_orders
 	var node := _first_kind(game, VaultBuilding.Kind.GENERATOR)
-	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(26, 12))
 	var tray_id := tray.building_id
 	orders.show_outcome(true, 4)
 	_assert_false(orders.outcome_invested.visible, "no Mk II, no line")
