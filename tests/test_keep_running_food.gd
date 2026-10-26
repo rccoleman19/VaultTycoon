@@ -7,6 +7,7 @@ extends "res://tests/test_runner.gd"
 const KR_FOOD_SAVE := "user://test_keep_running_food.json"
 const ENABLE_COOK := "Next: Ari starving · YOU enable Cook · THEY cook"
 const ENABLE_HAUL := "Next: Ari starving · YOU enable Haul · THEY deliver food"
+const ENABLE_TRAY := "Next: Ari starving · YOU enable a Grow Tray · THEY grow"
 const LEAVE_COOK := "Next: Ari starving · YOU leave Cook on · THEY cook"
 const PLACE_TRAY_CALM := "Next: YOU place Grow Tray · THEY haul output"
 
@@ -16,7 +17,10 @@ func _run() -> void:
 	_run_case("Haul OFF with food awaiting delivery shows Enable Haul, before and after the Annex", _test_haul_off)
 	_run_case("an empty larder does not recommend a new Grow Tray, before and after the Annex", _test_no_tray)
 	_run_case("an empty larder does not recommend finishing a Grow Tray, before and after the Annex", _test_unfinished_tray)
-	_run_case("an empty larder does not recommend enabling a Grow Tray, before and after the Annex", _test_disabled_tray)
+	_run_case("a disabled Grow Tray asks to enable it, before and after the Annex", _test_disabled_tray)
+	_run_case("following Enable Grow Tray keeps all four residents alive for 100 sim seconds", _test_disabled_tray_outcome)
+	_run_case("an empty larder keeps the switch that repowers a completed Grow Tray", _test_shed_tray_repower)
+	_run_case("an unfunded Grow blueprint does not hide enabling the completed tray", _test_disabled_tray_with_blueprint)
 	_run_case("a calm kept-running vault without a Grow Tray asks for one", _test_calm_no_tray)
 	_run_case("the food step survives a save and load", _test_save_load)
 	_run_case("once fed, the Next goes back to the Annex", _test_recovery)
@@ -188,8 +192,120 @@ func _test_disabled_tray() -> void:
 		game.status_message_left = 0.0
 		_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY), 0, "every Grow Tray off (%s)" % _label(open))
 		_starve(game)
-		_assert_waiting_raw_next(game, open, "disabled Grow Tray")
+		_assert_food_next(game, ENABLE_TRAY, open, "disabled Grow Tray")
 		_dispose(game)
+
+
+func _test_disabled_tray_outcome() -> void:
+	var game := _vault(false)
+	var ari := game.get_resident_by_id(1)
+	var tray := game.get_building_at(Vector2i(23, 17))
+	_assert_true(ari != null and ari.resident_name == "Ari", "outcome fixture has Ari")
+	_assert_true(tray != null and tray.kind == VaultBuilding.Kind.GROW_TRAY and tray.complete,
+		"outcome fixture has the completed Grow Tray at (23, 17)")
+	if ari == null or tray == null or tray.kind != VaultBuilding.Kind.GROW_TRAY or not tray.complete:
+		_dispose(game)
+		return
+	_starve(game)
+	_set_work(game, "cook", VaultResident.DEFAULT_WORK_PRIORITY)
+	_set_work(game, "haul", VaultResident.DEFAULT_WORK_PRIORITY)
+	_assert_true(game.toggle_building_enabled(tray.building_id), "real player toggle disables the tray")
+	game.status_message_left = 0.0
+	_assert_true(tray.manually_disabled and not tray.powered, "the completed tray starts disabled")
+	_assert_false(game.map_grid.find_path(ari.get_cell(game.map_grid), tray.cell).is_empty(), "the completed tray is reachable")
+	_assert_equal(game.get_alive_count(), 4, "the recovery starts with all four residents alive")
+	_assert_approximately(ari.needs.food, 19.0, 0.0001, "Ari starts at food 19")
+	_assert_approximately(ari.needs.health, 100.0, 0.0001, "Ari starts at 100 HP")
+	_assert_equal(game.food_system.meals, 0, "the recovery starts with no meals")
+	_assert_equal(game.food_system.raw_food, 0, "the recovery starts with no raw food")
+	_assert_equal(game.job_system.get_pending_meals(), 0, "the recovery starts with no pending meals")
+	_assert_equal(game.job_system.get_pending_raw_food(), 0, "the recovery starts with no pending raw food")
+	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.KITCHEN), 1, "the kitchen is already powered")
+	_assert_equal(game.power_grid.supply - game.power_grid.served, 5, "five spare power can cover the disabled tray")
+	_assert_equal(tray.get_base_power_demand(), 3, "enabling the tray needs three power")
+	var expected_seconds := maxf(0.0, tray.get_grow_seconds() - tray.production_progress) \
+		+ game.player_orders._food_delivery_seconds(tray.cell) \
+		+ game.player_orders._food_work_seconds("cook", 4.0) \
+		+ game.player_orders._food_delivery_seconds(MapGrid.CHAMBER.get_center())
+	var disabled_plan: Dictionary = game.player_orders._food_fix_plan()
+	_assert_approximately(float(disabled_plan.get("seconds", INF)), expected_seconds, 0.0001,
+		"the disabled completed tray needs its remaining grow cycle and delivery, with no new build")
+
+	# Read the displayed Next before every real tick. Leaving Cook on requires
+	# no action; only an Enable tip authorizes the same toggle the player uses.
+	var first_next := _next(game)
+	var saw_enable := false
+	var enable_actions := 0
+	var first_meal_seconds := -1.0
+	var ari_alive_at_first_meal := false
+	var start_seconds := game.keep_running_seconds
+	for tick in range(roundi(100.0 / VaultGame.SIMULATION_TICK)):
+		var next := _next(game)
+		if next == ENABLE_TRAY:
+			saw_enable = true
+			if tray.manually_disabled:
+				enable_actions += 1
+				_assert_true(game.toggle_building_enabled(tray.building_id), "follow the displayed Enable tip through the player API")
+				_assert_true(tray.powered and not tray.manually_disabled, "the real Enable action immediately powers the tray")
+				var enabled_plan: Dictionary = game.player_orders._food_fix_plan()
+				_assert_approximately(float(enabled_plan.get("seconds", INF)), expected_seconds, 0.0001,
+					"the estimate follows the immediate Enable path without adding construction")
+		var food_before := ari.needs.food
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		if first_meal_seconds < 0.0 and (game.food_system.meals > 0 or game.job_system.get_pending_meals() > 0 or ari.needs.food > food_before):
+			first_meal_seconds = (tick + 1) * VaultGame.SIMULATION_TICK
+			ari_alive_at_first_meal = ari.alive
+	_assert_true(saw_enable, "the displayed tip said Enable Grow Tray (initial Next: %s)" % first_next)
+	_assert_equal(enable_actions, 1, "following the displayed tip needs one real Enable action")
+	_assert_true(first_meal_seconds > 0.0 and ari_alive_at_first_meal, "a real cooked meal is available or in flight while Ari is alive")
+	_assert_approximately(game.keep_running_seconds - start_seconds, 100.0, VaultGame.SIMULATION_TICK,
+		"the recovery drives 100 real simulation seconds")
+	_assert_true(ari.alive, "Ari survives 100 sim seconds after following the tip")
+	_assert_equal(game.get_alive_count(), 4, "all four residents survive 100 sim seconds after following the tip")
+	print("GROW ENABLE OUTCOME sim=%.1fs first_meal=%.1fs enable_actions=%d Ari_alive=%s alive=%d initial_Next=%s" % [
+		game.keep_running_seconds - start_seconds, first_meal_seconds, enable_actions, ari.alive, game.get_alive_count(), first_next])
+	_dispose(game)
+
+
+func _test_shed_tray_repower() -> void:
+	var game := _vault(false)
+	var tray := game.get_building_at(Vector2i(23, 17))
+	_assert_true(tray != null and tray.kind == VaultBuilding.Kind.GROW_TRAY and tray.complete, "repower fixture has a completed tray")
+	if tray == null or tray.kind != VaultBuilding.Kind.GROW_TRAY or not tray.complete:
+		_dispose(game)
+		return
+	# Four additional high-priority Lumens leave two power for the three-power
+	# tray. Disable Rec so releasing just one Lumen is sufficient.
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.RECREATION_CONSOLE:
+			_assert_true(game.toggle_building_enabled(building.building_id), "disable Rec to isolate the single-switch repower")
+	var lamp: VaultBuilding = null
+	for cell: Vector2i in game._annex_free_cells(4):
+		lamp = _add_completed_building(game, VaultBuilding.Kind.LAMP, cell)
+	game.power_grid.recalculate(game.buildings)
+	_starve(game)
+	game.status_message_left = 0.0
+	_assert_true(not tray.manually_disabled and not tray.powered, "the completed enabled tray starts shed")
+	_assert_true(game.get_powered_building_count(VaultBuilding.Kind.LAMP) >= 2, "repowering can preserve the last light")
+	_assert_equal(game.power_grid.supply - game.power_grid.served, 2, "one Lumen switch frees enough power for the tray")
+	_assert_food_next(game, "Next: Ari starving · YOU disable a Lumen · THEY power the Grow Tray", false, "shed Grow Tray")
+	_assert_true(lamp != null and lamp.powered, "a powered Lumen is available to switch off")
+	if lamp != null:
+		_assert_true(game.toggle_building_enabled(lamp.building_id), "follow the repower tip through the player API")
+		_assert_true(tray.powered, "disabling one Lumen really repowers the completed tray")
+	_dispose(game)
+
+
+func _test_disabled_tray_with_blueprint() -> void:
+	var game := _vault(false)
+	for tray: VaultBuilding in _trays(game):
+		_assert_true(game.toggle_building_enabled(tray.building_id), "disable the completed tray with the player API")
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.GROW_TRAY, game._annex_free_cells(1)[0]), "another Grow Tray has an unsupplied blueprint")
+	game.food_system.salvage = 0
+	_starve(game)
+	game.status_message_left = 0.0
+	_assert_food_next(game, ENABLE_TRAY, false, "disabled completed tray beside an unfunded blueprint")
+	_dispose(game)
 
 
 func _carve(game: VaultGame, count: int) -> void:

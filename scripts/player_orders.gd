@@ -1368,6 +1368,8 @@ func _food_fix_plan() -> Dictionary:
 	for tray: VaultBuilding in game.buildings:
 		if tray.kind != VaultBuilding.Kind.GROW_TRAY:
 			continue
+		# Include disabled trays: ENABLE immediately recalculates power, resuming
+		# paused progress once powered. Completed trays need no supply/build time.
 		var ready := 0.0 if tray.complete else _food_fixture_seconds(VaultBuilding.Kind.GROW_TRAY)
 		if not tray.powered and game.power_grid.supply - game.power_grid.served < tray.get_base_power_demand() and _food_power_release_step(VaultBuilding.Kind.GROW_TRAY).is_empty():
 			ready += _food_fixture_seconds(VaultBuilding.Kind.GENERATOR)
@@ -1385,11 +1387,12 @@ func _food_fix_plan() -> Dictionary:
 		step = _grow_recovery_step()
 	if str(step.get("tool", "")) == "grow":
 		step = _food_prebuild_step(VaultBuilding.Kind.GROW_TRAY, step)
-	if _salvage_shortfall(VaultBuilding.Kind.GROW_TRAY) > 0:
+	var restores_tray := bool(step.get("restores_existing_tray", false))
+	if not restores_tray and _salvage_shortfall(VaultBuilding.Kind.GROW_TRAY) > 0:
 		step = _food_step(_fund_blueprint_step(VaultBuilding.Kind.GROW_TRAY))
-	if grow_seconds > _food_runway_seconds():
-		# A new harvest will miss the larder window. Keep the last available
-		# recovery action visible, without recommending a late Grow/Charge build.
+	if not restores_tray and grow_seconds > _food_runway_seconds():
+		# Avoid a late Grow/Charge build, but retain immediate ENABLE/repower
+		# actions on completed trays even when the larder is already empty.
 		step = _food_step({
 			"text": "Next: YOU enable Cook · THEY cook" if not _has_eligible_worker("cook") else "Next: YOU leave Cook on · THEY cook",
 			"help": "Enable Cook on a living, undrafted resident so the powered Nutrient Station can run." if not _has_eligible_worker("cook") else "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food.",
@@ -1959,9 +1962,11 @@ func _grow_recovery_step() -> Dictionary:
 				"text": "Next: YOU enable a Grow Tray · THEY grow",
 				"tool": "select",
 				"help": "Enable a completed Grow Tray so it can grow raw food. Haul delivers its output for Cook.",
+				"restores_existing_tray": true,
 			})
 		var release := _food_power_release_step(VaultBuilding.Kind.GROW_TRAY)
 		if not release.is_empty():
+			release["restores_existing_tray"] = true
 			return release
 		if _unfinished_charge_count() > 0:
 			return _food_step(_charge_finish_step())
