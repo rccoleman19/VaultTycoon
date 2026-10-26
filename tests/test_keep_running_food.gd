@@ -5,11 +5,11 @@ extends "res://tests/test_runner.gd"
 # Next, before and after the Annex opens and across a save/load. Opening steps still give way.
 
 const KR_FOOD_SAVE := "user://test_keep_running_food.json"
-const ENABLE_COOK := "Next: YOU enable Cook · THEY cook"
-const ENABLE_HAUL := "Next: YOU enable Haul · THEY deliver food"
-const PLACE_TRAY := "Next: YOU place a Grow Tray · THEY grow"
-const FINISH_TRAY := "Next: YOU leave Haul + Craft on · THEY finish the Grow Tray"
-const ENABLE_TRAY := "Next: YOU enable a Grow Tray · THEY grow"
+const ENABLE_COOK := "Next: Ari starving · YOU enable Cook · THEY cook"
+const ENABLE_HAUL := "Next: Ari starving · YOU enable Haul · THEY deliver food"
+const PLACE_TRAY := "Next: Ari starving · YOU place a Grow Tray · THEY grow"
+const FINISH_TRAY := "Next: Ari starving · YOU leave Haul + Craft on · THEY finish the Grow Tray"
+const ENABLE_TRAY := "Next: Ari starving · YOU enable a Grow Tray · THEY grow"
 const PLACE_TRAY_CALM := "Next: YOU place Grow Tray · THEY haul output"
 
 
