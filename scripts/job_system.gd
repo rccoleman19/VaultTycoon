@@ -280,7 +280,7 @@ func rebuild_from_state(saved_data: Dictionary = {}) -> void:
 				var carrier := game.get_resident_by_id(carrier_id) as VaultResident
 				if carrier == null and job.in_transit > 0:
 					carrier = _first_allowed_resident(JobType.SUPPLY_BREACH)
-				if carrier != null and carrier.alive and _resident_allows(carrier, JobType.SUPPLY_BREACH):
+				if _can_restore_breach_assignment(carrier, job):
 					_restore_breach_assignment(carrier, job, JobType.SUPPLY_BREACH, "target" if job.in_transit > 0 else "pickup")
 				elif job.in_transit > 0:
 					food.add_salvage(int(job.in_transit))
@@ -291,9 +291,9 @@ func rebuild_from_state(saved_data: Dictionary = {}) -> void:
 		_add_job(JobType.PATCH_BREACH, BreachSystem.HATCH_CELL)
 		if saved_breach_patch.size() >= 1 and int(saved_breach_patch[0]) > 0:
 			var patch_carrier := game.get_resident_by_id(int(saved_breach_patch[0])) as VaultResident
-			if patch_carrier != null and patch_carrier.alive and _resident_allows(patch_carrier, JobType.PATCH_BREACH):
+			if patch_carrier != null:
 				for job: Dictionary in jobs:
-					if int(job.type) == JobType.PATCH_BREACH:
+					if int(job.type) == JobType.PATCH_BREACH and _can_restore_breach_assignment(patch_carrier, job):
 						_restore_breach_assignment(patch_carrier, job, JobType.PATCH_BREACH, "target")
 						break
 	for cell: Vector2i in map_grid.dig_marks:
@@ -1316,6 +1316,24 @@ func _first_allowed_resident(type: int) -> VaultResident:
 		return priority_a < priority_b if priority_a != priority_b else a.resident_id < b.resident_id
 	)
 	return candidates[0]
+
+
+func _can_restore_breach_assignment(resident: VaultResident, job: Dictionary) -> bool:
+	if resident == null or not resident.alive or resident.drafted:
+		return false
+	if _resident_allows(resident, int(job.type)):
+		return true
+	# Deserialization restores the forced descriptor before rebuilding jobs.
+	# Honor that exact order now, before OFF can refund its in-flight salvage.
+	var order := resident.forced_order
+	var target: Array = order.get("target", [])
+	return (
+		resident.is_forced_job
+		and int(order.get("type", -1)) == int(job.type)
+		and target.size() == 2
+		and Vector2i(int(target[0]), int(target[1])) == job.target
+		and int(order.get("building_id", -1)) == int(job.building_id)
+	)
 
 
 func _restore_breach_assignment(
