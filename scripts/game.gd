@@ -47,8 +47,8 @@ const GROW_NOOK_CELL := Vector2i(26, 17)
 const GROW_NOOK_MEALS_COST := 2
 const GROW_NOOK_BADGES := 2
 # B3 RELAY LUMEN, earned by an Annex badge on a 3-star win (a record with best_stars 3 and annex): one
-# built Lumen on a far corner tile of the start room that lights the dig front, at no cost, at the lowest
-# power priority (it sheds before food and air, like FLOODLIGHT's). Ladder QA vs NONE: built for 10 salvage
+# built Lumen on a far corner tile of the start room that lights the dig front, at no cost or power load.
+# Ladder QA vs NONE: built for 10 salvage
 # it lost 1 game on 05 and 2 on 04; for 5 salvage it lost 2 on 03; as a free unbuilt plan it lost 2 on 05.
 const PERK_RELAY_LUMEN := "relay_lumen"
 const RELAY_LUMEN_CELL := Vector2i(18, 13)
@@ -1362,12 +1362,13 @@ func _apply_perk_start() -> void:
 	_mark_floodlight()
 
 
-# FLOODLIGHT's (and RELAY LUMEN's) extra Lumen sheds first; re-derived from the wing's perk on NEW WING and
-# LOAD. Matched by id and cell, so a Lumen the player later builds on that cell keeps its normal priority.
+# Perk Lumen flags are re-derived on NEW WING and LOAD. Only RELAY LUMEN is self-powered;
+# FLOODLIGHT still sheds first. Match id and cell so a replacement Lumen keeps normal demand/priority.
 func _mark_floodlight() -> void:
 	var cell := FLOODLIGHT_CELL if wing_perk == PERK_FLOODLIGHT else RELAY_LUMEN_CELL
 	for building: VaultBuilding in buildings:
 		building.shed_first = wing_perk in [PERK_FLOODLIGHT, PERK_RELAY_LUMEN] and building.building_id == FLOODLIGHT_BUILDING_ID and building.kind == VaultBuilding.Kind.LAMP and building.cell == cell
+		building.self_powered = wing_perk == PERK_RELAY_LUMEN and building.shed_first
 
 
 # Only {"version": 1, "id": <known perk>} on a seeded wing; NONE is never written.
