@@ -134,6 +134,9 @@ func _test_generic_no_path() -> void:
 func _warned_game() -> VaultGame:
 	var game := _spawn_game()
 	game.begin_shift()
+	# Keep the forced/reserved hatch response as the only deadline under test:
+	# 24 meals cover 240 seconds for this four-person crew even with work OFF.
+	game.food_system.meals = 24
 	for resident: VaultResident in game.residents:
 		resident.needs.food = 100.0
 		resident.needs.rest = 100.0

@@ -12,6 +12,9 @@ var _frame_accumulator := 0.0
 
 func _run() -> void:
 	_run_case("03 engaged RELAY LUMEN names Ari's starvation before optional builds", _test_engaged_relay_lumen)
+	_run_case("food runway warns before full bellies become a projected death", _test_food_runway_trigger)
+	_run_case("05 idle kitchen crisis keeps its action and names Ari's starvation", _test_idle_kitchen_prefix)
+	_run_case("food production blocked by stress breaks keeps a named actionable recovery", _test_food_work_blocker)
 	_run_case("projected starvation ranks every living resident, including current health", _test_most_threatened_food)
 	_run_case("available raw food with Cook OFF names the starving resident and Cook fix", _test_enable_cook)
 	_run_case("cooked meal waiting with Haul OFF names the resident and delivery fix", _test_enable_haul)
@@ -53,10 +56,10 @@ func _test_engaged_relay_lumen() -> void:
 		_engaged_actions(game)
 		_advance_frame(game)
 		var elapsed := game.day_cycle.elapsed_seconds
-		if not checked_healthy and elapsed >= 130.0 - 0.00001:
+		if not checked_healthy and elapsed >= 170.0 - 0.00001:
 			checked_healthy = true
-			_assert_equal(game.player_orders.objective_label.text, REC_NEXT,
-				"healthy replay still offers Rec Console build advice at 130s")
+			_assert_true("starving ·" in game.player_orders.objective_label.text,
+				"runway warns at 170s while death is still beyond the old horizon")
 		if not checked_empty_larder and elapsed >= 217.3 - 0.00001:
 			checked_empty_larder = true
 			_assert_starvation_next(game, 217.3)
@@ -67,7 +70,7 @@ func _test_engaged_relay_lumen() -> void:
 				"230s replay reaches the reported CRITICAL: Ari state")
 			break
 	_assert_true(checked_healthy and checked_empty_larder and checked_critical,
-		"deterministic driver reaches healthy, empty-larder and critical checkpoints (frame %d, sim %.1fs)" % [
+		"deterministic driver reaches early-runway, empty-larder and critical checkpoints (frame %d, sim %.1fs)" % [
 			_frame, game.day_cycle.elapsed_seconds])
 
 	# Recovery guard: with the same buildings, the sealed hatch, full bellies and
@@ -95,13 +98,15 @@ func _assert_starvation_next(game: VaultGame, expected_seconds: float) -> void:
 	_assert_equal(game.food_system.meals, 0, "reported checkpoint has no meals at %.1fs" % expected_seconds)
 	var grow := game.get_building_at(Vector2i(23, 17))
 	_assert_true(grow != null and grow.complete and game.power_grid.is_building_shed(grow.building_id),
-		"repro food source is complete but shed, so its fix is power at %.1fs" % expected_seconds)
+		"repro food source is complete but shed at %.1fs" % expected_seconds)
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.KITCHEN), 1,
 		"repro already has a powered Nutrient Station at %.1fs" % expected_seconds)
 	_assert_true("Ari" in next and "starving" in next.to_lower(),
 		"Next names Ari's starvation ahead of optional builds at %.1fs: %s" % [expected_seconds, next])
-	_assert_true("YOU place a Charge Node" in next,
-		"Next fixes the repro's shed food source with power at %.1fs: %s" % [expected_seconds, next])
+	_assert_true("YOU leave Cook on" in next,
+		"zero runway cannot promise a late Grow Tray cycle at %.1fs: %s" % [expected_seconds, next])
+	_assert_false("Grow Tray" in next or "Charge Node" in next,
+		"powering the shed tray is too slow for the exhausted runway at %.1fs: %s" % [expected_seconds, next])
 	_assert_false("Rec Console" in next or "bunk" in next.to_lower(),
 		"optional Rec/bunk advice cannot displace Ari's starvation at %.1fs" % expected_seconds)
 	print("URGENCY SNAPSHOT sim=%.1fs frame=%d Next=%s food=%.2f HP=%.2f raw=%d pending_raw=%d pending_meals=%d" % [
@@ -125,6 +130,107 @@ func _healthy_urgency_game() -> VaultGame:
 	return game
 
 
+func _test_food_runway_trigger() -> void:
+	var game := _healthy_urgency_game()
+	game.food_system.meals = 1
+	game.food_system.raw_food = 1
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+	# Four living crew drain 60 need/day each, and one meal restores 60 need.
+	# These two meals (one stored, one cookable raw) cover only 20 sim seconds.
+	# Full bellies still defer starvation death for over 90 seconds: the old
+	# 60-second death horizon misses the food intervention while runway is short.
+	_assert_equal(game.get_alive_count(), 4, "runway fixture has four living consumers")
+	_assert_true(game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) == 1,
+		"stored raw is genuinely cookable by the existing kitchen")
+	game.player_orders.refresh()
+	var next := game.player_orders.objective_label.text
+	_assert_true("starving ·" in next and "Cook" in next,
+		"20-second runway below food lead plus margin fires with full bellies: %s" % next)
+	game.food_system.meals = 24
+	game.player_orders.refresh()
+	next = game.player_orders.objective_label.text
+	_assert_false("starving ·" in next,
+		"250-second runway comfortably above food lead plus margin stays quiet: %s" % next)
+	_dispose(game)
+
+
+func _test_idle_kitchen_prefix() -> void:
+	var game := _spawn_game()
+	game.new_game(true, 4242, 5)
+	game.begin_shift()
+	# The idle driver only begins the shift and acknowledges the breach modal.
+	# Its real-time delay holds simulation still; acknowledge immediately here
+	# and reproduce the same 150-second simulation checkpoint synchronously.
+	for _tick in range(1500):
+		if game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged:
+			game.acknowledge_breach_warning(true)
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+	game.player_orders.refresh()
+	_assert_approximately(game.day_cycle.elapsed_seconds, 150.0, VaultGame.SIMULATION_TICK,
+		"idle replay reaches the kitchen-crisis checkpoint")
+	_assert_equal(game.get_alive_count(), 4, "every idle resident is still alive before the reported death")
+	_assert_equal(game.food_system.meals, 0, "idle replay has exhausted starting meals")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.KITCHEN), 0,
+		"idle replay still needs its first Nutrient Station")
+	_assert_equal(game.player_orders.objective_label.text,
+		"Next: Ari starving · YOU place a Nutrient Station · THEY cook",
+		"05 idle kitchen crisis retains its action and gains Ari's danger prefix")
+	_dispose(game)
+
+
+func _test_food_work_blocker() -> void:
+	var game := _healthy_urgency_game()
+	game.food_system.meals = 0
+	game.food_system.raw_food = 1
+	game.residents[0].needs.food = 0.0
+	for resident: VaultResident in game.residents:
+		resident.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+	var kitchen := game.get_building_at(Vector2i(21, 12))
+	_assert_true(kitchen.powered and game.food_system.can_cook(), "stress-break fixture has a powered kitchen and ready ingredients")
+	game.player_orders.refresh()
+	var expected := "Next: Ari starving · YOU place a Rec Console · THEY recover mood"
+	_assert_equal(game.player_orders.objective_label.text, expected, "ready food work blocked by breaks names Ari and the recovery action")
+	var step: Dictionary = game.player_orders._primary_next_step()
+	_assert_equal(str(step.get("kind", "")), "food", "stress-break recovery remains part of the food chain")
+	_assert_equal(str(step.tool), "rec", "stress-break recovery highlights the Rec tool")
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, "Next: Ari starving · YOU enable Cook · THEY cook", "Cook OFF remains the first blocker even while crew risk breaks")
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("cook", VaultResident.DEFAULT_WORK_PRIORITY)
+		resident.needs.mood = 100.0
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, "Next: Ari starving · YOU leave Cook on · THEY cook", "recovered crew return to cooking the still-stored raw")
+	_assert_true(game.job_system.finish_cook(kitchen) > 0, "real recipe moves the available raw into the meal pipeline")
+	_assert_true(game.food_system.raw_food == 0 and game.food_system.meals == 0 and game.job_system.get_pending_meals() > 0, "the cooked meal awaits Haul instead of already feeding Ari")
+	for resident: VaultResident in game.residents:
+		resident.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, expected, "breaks blocking meal delivery keep the named recovery action")
+	_dispose(game)
+
+	# A shed source with no raw or output cannot cook or deliver anything yet.
+	# Mood recovery must not displace the actual missing-food-source diagnosis.
+	game = _healthy_urgency_game()
+	game.food_system.meals = 0
+	game.food_system.raw_food = 0
+	game.residents[0].needs.food = 0.0
+	for resident: VaultResident in game.residents:
+		resident.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(22, 12))
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(23, 12))
+	var grow := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(24, 12))
+	game.power_grid.recalculate(game.buildings)
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	_assert_true(game.power_grid.is_building_shed(grow.building_id), "the completed tray is genuinely shed")
+	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.KITCHEN), 1, "the shed-source guard keeps the kitchen powered")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, "Next: Ari starving · YOU leave Cook on · THEY cook", "a shed source and no produced food cannot spuriously ask for Rec")
+	_dispose(game)
+
+
 func _test_most_threatened_food() -> void:
 	var game := _healthy_urgency_game()
 	game.food_system.meals = 0
@@ -143,7 +249,8 @@ func _test_most_threatened_food() -> void:
 	var next := game.player_orders.objective_label.text
 	_assert_true("Bo" in next and "starving" in next.to_lower() and "Ari" not in next,
 		"shortest projected life beats the lowest food meter: %s" % next)
-	_assert_true("Grow Tray" in next, "no raw-food source asks for a Grow Tray: %s" % next)
+	_assert_true("Cook" in next and "Grow Tray" not in next,
+		"no runway cannot promise a late Grow Tray cycle: %s" % next)
 	# A dead resident can have the lowest need/HP values without taking Next.
 	ari.alive = false
 	ari.needs.health = 0.0
@@ -229,7 +336,7 @@ func _test_shared_ration() -> void:
 	# single ration. Bo still has just 25 seconds of health without food.
 	game.player_orders.refresh()
 	var next := game.player_orders.objective_label.text
-	_assert_true("Bo" in next and "starving" in next.to_lower() and "Grow Tray" in next,
+	_assert_true("Bo" in next and "starving" in next.to_lower() and "Cook" in next,
 		"one shared meal reserves Ari's runway without hiding unfed Bo: %s" % next)
 	game.step_simulation(VaultGame.SIMULATION_TICK)
 	_assert_equal(game.food_system.meals, 0, "one real simulation tick consumes the single ration")

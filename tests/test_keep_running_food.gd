@@ -1,24 +1,22 @@
 extends "res://tests/test_runner.gd"
 
 # Codex P2 on #111 (issuecomment-6268052674): past Day 7 the food chain keeps its recovery steps.
-# A food emergency in a kept-running vault must show Cook / Haul / Grow Tray steps, not the Annex
+# A food emergency in a kept-running vault must show the viable food step, not the Annex
 # Next, before and after the Annex opens and across a save/load. Opening steps still give way.
 
 const KR_FOOD_SAVE := "user://test_keep_running_food.json"
 const ENABLE_COOK := "Next: Ari starving · YOU enable Cook · THEY cook"
 const ENABLE_HAUL := "Next: Ari starving · YOU enable Haul · THEY deliver food"
-const PLACE_TRAY := "Next: Ari starving · YOU place a Grow Tray · THEY grow"
-const FINISH_TRAY := "Next: Ari starving · YOU leave Haul + Craft on · THEY finish the Grow Tray"
-const ENABLE_TRAY := "Next: Ari starving · YOU enable a Grow Tray · THEY grow"
+const LEAVE_COOK := "Next: Ari starving · YOU leave Cook on · THEY cook"
 const PLACE_TRAY_CALM := "Next: YOU place Grow Tray · THEY haul output"
 
 
 func _run() -> void:
 	_run_case("Cook OFF in a food emergency shows Enable Cook, before and after the Annex", _test_cook_off)
 	_run_case("Haul OFF with food awaiting delivery shows Enable Haul, before and after the Annex", _test_haul_off)
-	_run_case("no Grow Tray in a food emergency asks for one, before and after the Annex", _test_no_tray)
-	_run_case("an unfinished Grow Tray asks to finish it, before and after the Annex", _test_unfinished_tray)
-	_run_case("a disabled Grow Tray asks to enable it, before and after the Annex", _test_disabled_tray)
+	_run_case("an empty larder does not recommend a new Grow Tray, before and after the Annex", _test_no_tray)
+	_run_case("an empty larder does not recommend finishing a Grow Tray, before and after the Annex", _test_unfinished_tray)
+	_run_case("an empty larder does not recommend enabling a Grow Tray, before and after the Annex", _test_disabled_tray)
 	_run_case("a calm kept-running vault without a Grow Tray asks for one", _test_calm_no_tray)
 	_run_case("the food step survives a save and load", _test_save_load)
 	_run_case("once fed, the Next goes back to the Annex", _test_recovery)
@@ -135,6 +133,15 @@ func _assert_food_next(game: VaultGame, expected: String, open: bool, what: Stri
 	_assert_equal(str(game.player_orders.keep_running_next_step().tool), str(primary.tool), "%s (%s): suggested tool" % [what, _label(open)])
 
 
+func _assert_waiting_raw_next(game: VaultGame, open: bool, what: String) -> void:
+	# These fixtures have zero runway. Even the real Grow cycle alone cannot
+	# finish within it, so keep Cook available instead of suggesting a late tray.
+	_assert_food_next(game, LEAVE_COOK, open, what)
+	var primary: Dictionary = game.player_orders._primary_next_step()
+	_assert_equal(str(primary.tool), "select", "%s (%s): waiting needs no Grow tool" % [what, _label(open)])
+	_assert_true(str(primary.help).contains("waiting on raw food"), "%s (%s): help explains the raw-food blocker" % [what, _label(open)])
+
+
 func _test_cook_off() -> void:
 	for open: bool in [false, true]:
 		var game := _vault(open)
@@ -159,7 +166,7 @@ func _test_no_tray() -> void:
 		var game := _vault(open, false)
 		_assert_equal(_trays(game).size(), 0, "no Grow Tray (%s)" % _label(open))
 		_starve(game)
-		_assert_food_next(game, PLACE_TRAY, open, "no Grow Tray")
+		_assert_waiting_raw_next(game, open, "no Grow Tray")
 		_dispose(game)
 
 
@@ -169,7 +176,7 @@ func _test_unfinished_tray() -> void:
 		_assert_true(game.place_blueprint(VaultBuilding.Kind.GROW_TRAY, game._annex_free_cells(1)[0]), "Grow Tray blueprint (%s)" % _label(open))
 		game.status_message_left = 0.0
 		_starve(game)
-		_assert_food_next(game, FINISH_TRAY, open, "unfinished Grow Tray")
+		_assert_waiting_raw_next(game, open, "unfinished Grow Tray")
 		_dispose(game)
 
 
@@ -181,7 +188,7 @@ func _test_disabled_tray() -> void:
 		game.status_message_left = 0.0
 		_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY), 0, "every Grow Tray off (%s)" % _label(open))
 		_starve(game)
-		_assert_food_next(game, ENABLE_TRAY, open, "disabled Grow Tray")
+		_assert_waiting_raw_next(game, open, "disabled Grow Tray")
 		_dispose(game)
 
 
@@ -219,7 +226,6 @@ func _test_save_load() -> void:
 			_starve(game)
 			if with_tray:
 				_set_work(game, "cook", VaultResident.PRIORITY_DISABLED)
-			var expected := ENABLE_COOK if with_tray else PLACE_TRAY
 			var what := "reloaded %s" % ("Cook OFF" if with_tray else "no Grow Tray")
 			_remove_test_save(KR_FOOD_SAVE)
 			_assert_true(game.save_game(false, KR_FOOD_SAVE), "%s (%s): saved" % [what, _label(open)])
@@ -228,7 +234,10 @@ func _test_save_load() -> void:
 			_assert_true(game.load_game(KR_FOOD_SAVE), "%s (%s): loaded" % [what, _label(open)])
 			game.status_message_left = 0.0
 			_assert_equal(game.residents.size(), 5 if open else 4, "%s (%s): crew restored" % [what, _label(open)])
-			_assert_food_next(game, expected, open, what)
+			if with_tray:
+				_assert_food_next(game, ENABLE_COOK, open, what)
+			else:
+				_assert_waiting_raw_next(game, open, what)
 			_remove_test_save(KR_FOOD_SAVE)
 			_dispose(game)
 

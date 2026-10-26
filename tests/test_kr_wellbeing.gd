@@ -106,7 +106,7 @@ func _test_comfort_next() -> void:
 	game.residents[0].needs.food = 10.0
 	game.player_orders.refresh()
 	var food: String = game.player_orders.objective_label.text
-	_assert_equal(food, "Next: YOU place a Nutrient Station · THEY cook", "a food-chain step still leads")
+	_assert_equal(food, "Next: Ari starving · YOU place a Nutrient Station · THEY cook", "a food-chain step still leads")
 	game.apply_comfort()
 	_assert_false(game.comfort_pending(), "card used")
 	_dispose(game)

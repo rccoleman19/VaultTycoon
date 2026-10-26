@@ -410,7 +410,7 @@ func _test_fallback_precedence() -> void:
 	game.food_system.meals = 0
 	game.get_building_at(Vector2i(24, 12)).manually_disabled = true
 	game.power_grid.recalculate(game.buildings)
-	_assert_step(game, POWER_NEXT, "select", "Power the Nutrient Station so Cook can run.")
+	_assert_step(game, _starving_next(POWER_NEXT), "select", "Power the Nutrient Station so Cook can run.")
 	game.food_system.meals = 100
 	game.residents[0].needs.food = 100.0
 	game.get_building_at(Vector2i(24, 12)).manually_disabled = false
@@ -420,6 +420,8 @@ func _test_fallback_precedence() -> void:
 	_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
 	_dispose(game)
 	game = _healthy_game()
+	# Isolate the opening/funding precedence from the food fixtures' dig lead.
+	game.food_system.meals = 24
 	game.food_system.salvage = 0
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, Vector2i(25, 12)), "opening fixture includes unfunded blueprint")
 	_assert_step(game, DIG_NEXT, "dig", "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional.")
