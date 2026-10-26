@@ -1621,7 +1621,18 @@ func _resident_urgency_step() -> Dictionary:
 		"mood":
 			condition = "in despair"
 			if not threatened.drafted:
-				step = _offline_rec_step()
+				var console := game.get_building_by_id(threatened.recreation_id) as VaultBuilding
+				if threatened.recreating and console != null and console.reserved_by == threatened.resident_id and game.job_system._can_use_recreation_console(threatened, console):
+					# The reserved console already fixes mood, including the walk to it.
+					condition = "recovering at the Rec Console"
+					step = {
+						"text": "Next: THEY recover mood",
+						"help": "%s already has a powered, reachable Rec Console reserved. Let them recover mood." % threatened.resident_name,
+						"tool": "select",
+						"recovering": true,
+					}
+				else:
+					step = _offline_rec_step()
 			if step.is_empty():
 				step = {
 					"text": "Next: YOU undraft %s [R] · THEY recover mood" % threatened.resident_name if threatened.drafted else "Next: YOU place a Rec Console · THEY recover mood",
@@ -1653,7 +1664,7 @@ func _urgency_interrupts_care(step: Dictionary) -> bool:
 		"rest":
 			return resident.needs.rest <= 0.0
 		"mood":
-			return resident.needs.mood <= ResidentNeeds.SEVERE_MOOD_THRESHOLD
+			return resident.needs.mood <= ResidentNeeds.SEVERE_MOOD_THRESHOLD and not bool(step.get("recovering", false))
 	return false
 
 
@@ -2146,6 +2157,8 @@ func _primary_next_step() -> Dictionary:
 		# Covered WARNING/OPEN (the blocker step found nothing missing): survival
 		# tips above still win, but no build-order tip until the hatch seals.
 		return _watch_hatch_step()
+	if bool(urgent_step.get("recovering", false)):
+		return urgent_step
 	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
 	var floor_count := game.map_grid.get_floor_cells().size() - game.map_grid.layout_pocket_count
 	var dig_marks := game.map_grid.dig_marks.size()

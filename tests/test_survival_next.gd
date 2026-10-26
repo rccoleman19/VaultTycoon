@@ -89,6 +89,7 @@ func _run() -> void:
 	_run_case("powered kitchen", _test_powered_kitchen)
 	_run_case("cook ready", _test_cook_ready)
 	_run_case("drafted cooks", _test_drafted_cooks)
+	_run_case("reserved recreation avoids duplicate build advice", _test_reserved_recreation_next)
 	_run_case("disabled cooks", _test_disabled_cooks)
 	_run_case("cook waiting for raw food", _test_cook_waiting_for_raw_food)
 	_run_case("grow tray supply diagnosis", _test_grow_tray_supply_diagnosis)
@@ -676,6 +677,43 @@ func _test_drafted_cooks() -> void:
 		if resident.alive:
 			resident.drafted = true
 	_assert_step(game, _starving_next("Next: YOU undraft Ari [R] · THEY eat/work"), "select", "Drafted crew cannot eat. Select Ari and press R to undraft; keep food work enabled.")
+	_dispose(game)
+
+
+func _test_reserved_recreation_next() -> void:
+	var game := _healthy_game()
+	game.food_system.meals = NONFOOD_TEST_MEALS
+	var console := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(27, 15))
+	game.power_grid.recalculate(game.buildings)
+	var ari: VaultResident = game.residents[0]
+	ari.needs.mood = 1.0
+	ari.needs.health = 5.0
+	_assert_true(console.powered, "despair fixture has an actually powered Rec Console")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.MEDICAL_BED), 0, "injured Ari has no Med Bed")
+	_assert_equal(console.reserved_by, -1, "Rec starts unreserved")
+	# Let the real job system claim the console, including the walk to it.
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	_assert_true(ari.recreating, "one simulation tick starts Ari's recreation")
+	_assert_equal(ari.recreation_id, console.building_id, "Ari claims the existing Rec Console")
+	_assert_equal(console.reserved_by, ari.resident_id, "real recreation reserves the console for Ari")
+	_assert_equal(ari.state, "Seeking recreation", "Ari is still walking to the reserved console")
+	_assert_false(game.job_system.is_actively_recreating(ari), "reservation guard covers walking before active use")
+	_assert_step(game, MED_NEXT, "medical", "Place a Med Bed so the injured can be treated.")
+	var duplicate_advice := ""
+	var active_use_seen := false
+	for _tick in range(100):
+		var next := str(game.player_orders._primary_next_step()["text"])
+		if "YOU place a Rec Console" in next:
+			duplicate_advice = next
+		active_use_seen = active_use_seen or game.job_system.is_actively_recreating(ari)
+		if ari.needs.mood >= 78.0:
+			break
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+	_assert_equal(duplicate_advice, "", "walking/using Ari's powered reservation never asks for another Rec Console")
+	_assert_true(active_use_seen, "real simulation takes Ari from seeking to using the console")
+	_assert_true(ari.needs.mood >= 78.0, "existing Rec restores Ari's mood without player action")
+	_assert_true(ari.alive and ari.needs.health > 4.0, "Ari survives recreation with over four HP")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 1, "recovery uses only the original Rec Console")
 	_dispose(game)
 
 
