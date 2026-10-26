@@ -1,8 +1,8 @@
 extends "res://tests/test_runner.gd"
 
 # Annex blueprints C1/B3: RELAY LUMEN is earned by an Annex badge on a 3-star win and takes the single
-# perk slot: one built Lumen on a far corner tile at the start, at the lowest power priority (it sheds
-# before food and air), paid with salvage. Meals, crew, the starter Lumen and the hatch clock are untouched.
+# perk slot: one built Lumen on a far corner tile at the start, at no cost, at the lowest power priority
+# (it sheds before food and air). Stores, crew, the starter Lumen and the hatch clock are untouched.
 
 var _path := ""
 
@@ -10,8 +10,8 @@ var _path := ""
 func _run() -> void:
 	_path = "user://test_annex_b3_%d.json" % OS.get_process_id()
 	_run_case("an Annex badge on a 3-star win unlocks RELAY LUMEN; 2 stars or no badge do not", _test_unlock)
-	_run_case("RELAY LUMEN adds one built, shed-first Lumen and costs salvage, nothing else", _test_effect)
-	_run_case("RELAY LUMEN survives save and load without a second Lumen or charge", _test_save_load)
+	_run_case("RELAY LUMEN adds one built, shed-first Lumen for free and nothing else", _test_effect)
+	_run_case("RELAY LUMEN survives save and load without a second Lumen", _test_save_load)
 	print("")
 	if _failure_count == 0:
 		print("ANNEX B3 TESTS PASSED: %d cases, %d assertions" % [_case_count, _assertion_count])
@@ -68,8 +68,12 @@ func _test_unlock() -> void:
 	game = _game([[7, 3, true]])
 	game.new_game(false, 4242)
 	_assert_equal(game.unlocked_perks(), ["provisioning", "bunkroom", "relay_lumen"], "one Annex badge on a 3-star win: RELAY LUMEN after BUNKROOM")
+	_dispose(game)
+	game = _game([[7, 3, true], [5, 2, true]])
+	game.new_game(false, 4242)
+	_assert_equal(game.unlocked_perks(), ["provisioning", "floodlight", "bunkroom", "grow_nook", "relay_lumen"], "with GROW NOOK unlocked too: RELAY LUMEN comes last")
 	_assert_equal(VaultGame.perk_name("relay_lumen"), "RELAY LUMEN", "named")
-	_assert_equal(str(VaultGame.PERKS.relay_lumen.detail), "blueprint: +1 low Lumen, -10 salvage", "short blueprint detail")
+	_assert_equal(str(VaultGame.PERKS.relay_lumen.detail), "blueprint: +1 low Lumen, free", "short blueprint detail")
 	game.records_path = ""
 	game.equipped_perk = "relay_lumen"
 	game.new_game(false, 4242)
@@ -96,13 +100,13 @@ func _test_effect() -> void:
 			game.equipped_perk = "relay_lumen"
 			game.new_game(false, seed_value, level)
 			_assert_equal(game.wing_perk, "relay_lumen", label + ": RELAY LUMEN equipped")
-			_assert_equal(_shape(game), [base[0], maxi(0, base[1] - VaultGame.RELAY_LUMEN_SALVAGE_COST), base[2], base[3] + 1, base[4], base[5] + 1, base[6]], label + ": one built Lumen for its salvage; same meals, crew, starter Lumen and hatch")
+			_assert_equal(_shape(game), [base[0], base[1], base[2], base[3] + 1, base[4], base[5] + 1, base[6]], label + ": one built Lumen at no cost; same meals, salvage, crew, starter Lumen and hatch")
 			var lamp: VaultBuilding = game.get_building_at(VaultGame.RELAY_LUMEN_CELL)
 			_assert_true(lamp != null and lamp.kind == VaultBuilding.Kind.LAMP and lamp.complete and lamp.building_id == VaultGame.FLOODLIGHT_BUILDING_ID, label + ": a built Lumen with the perk id on the relay cell")
 			_assert_equal(lamp.get_power_priority() if lamp != null else -1, VaultBuilding.PowerPriority.OPTIONAL, label + ": sheds before food and air")
+			_assert_true(lamp != null and not lamp.is_emergency_core, label + ": not an emergency core")
 			var starter: VaultBuilding = game.get_building_at(Vector2i(22, 14))
 			_assert_equal(starter.get_power_priority() if starter != null else -1, VaultBuilding.PowerPriority.HIGH, label + ": the starter Lumen keeps HIGH")
-	_assert_true(VaultGame.RELAY_LUMEN_SALVAGE_COST > 0, "a trade-off, not a gift")
 	_dispose(game)
 	_clean()
 
@@ -120,7 +124,7 @@ func _test_save_load() -> void:
 	game.equipped_perk = ""
 	game.new_game(false, 4242)
 	_assert_true(game.apply_snapshot(saved), "loads")
-	_assert_equal([game.wing_perk, _shape(game)], ["relay_lumen", shape], "restored once, no second Lumen or charge")
+	_assert_equal([game.wing_perk, _shape(game)], ["relay_lumen", shape], "restored once, no second Lumen")
 	var lamp: VaultBuilding = game.get_building_at(VaultGame.RELAY_LUMEN_CELL)
 	_assert_true(lamp != null and lamp.shed_first, "still sheds first after load")
 	_dispose(game)
