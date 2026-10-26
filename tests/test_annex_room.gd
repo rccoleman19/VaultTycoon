@@ -294,6 +294,13 @@ func _test_spend_waits() -> void:
 	var zoned: Vector2i = game.map_grid.stockpile_cells.keys()[0]
 	game.map_grid.stockpile_cells.erase(zoned)
 	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, zoned)
+	# Mk II fits wait on a finished, powered Air Recycler (NX37); it and its Charge Node sit on zoned cells.
+	for kind: int in [VaultBuilding.Kind.GENERATOR, VaultBuilding.Kind.AIR_RECYCLER]:
+		var cell: Vector2i = game.map_grid.stockpile_cells.keys()[0]
+		game.map_grid.stockpile_cells.erase(cell)
+		_add_completed_building(game, kind, cell)
+	game.power_grid.recalculate(game.buildings)
+	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER), 1, "the Air Recycler is powered")
 	_finish(game)
 	game.food_system.salvage = 40
 	_assert_true(game.annex_waiting_for_room(), "the paid Annex waits on room")

@@ -151,6 +151,10 @@ func _test_ui_flow() -> void:
 	var setup := _tray_game(10)
 	var game: VaultGame = setup[0]
 	var tray: VaultBuilding = setup[1]
+	# Mk II fits wait on a finished, powered Air Recycler (NX37).
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(24, 14))
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(26, 12))
+	game.power_grid.recalculate(game.buildings)
 	var orders := game.player_orders
 	orders.refresh()
 	_assert_false(orders.upgrade_offer_button.visible, "no offer before the seal")

@@ -3060,6 +3060,10 @@ func _upgrade_benefit_text(building: VaultBuilding) -> String:
 func _upgrade_offer_target() -> VaultBuilding:
 	if game.ended or not game.breach_system.is_sealed():
 		return null
+	# Air first (NX37): no Mk II fit before an Air Recycler is finished and powered, or the salvage
+	# the Air Recycler needs goes on trays and the crew suffocates (05/4242 GROW NOOK, t=229).
+	if not _air_ready():
+		return null
 	if _unpowered_tray() != null:
 		var charge := _first_fittable(VaultBuilding.Kind.GENERATOR)
 		if charge != null:
@@ -3069,6 +3073,10 @@ func _upgrade_offer_target() -> VaultBuilding:
 		if target != null:
 			return target
 	return null
+
+
+func _air_ready() -> bool:
+	return game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) > 0
 
 
 func _first_fittable(kind: int) -> VaultBuilding:
@@ -3112,7 +3120,7 @@ func salvage_nudge_kind() -> int:
 		want = VaultBuilding.Kind.KITCHEN
 	elif _count_kind(VaultBuilding.Kind.RECREATION_CONSOLE) == 0:
 		want = VaultBuilding.Kind.RECREATION_CONSOLE
-	elif _count_kind(VaultBuilding.Kind.GROW_TRAY) < 2:
+	elif _count_kind(VaultBuilding.Kind.GROW_TRAY) < 2 and _air_ready():
 		want = VaultBuilding.Kind.GROW_TRAY
 	if want < 0:
 		return -1
