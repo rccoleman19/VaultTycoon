@@ -269,8 +269,17 @@ func _is_safe_hold_step(game: VaultGame, step: Dictionary) -> bool:
 		return false
 	if step.get("text", "") == "Next: %s starving · YOU leave Cook on · THEY cook" % resident.resident_name:
 		return step.get("tool", "") == "select" and step.get("help", "") in PASSIVE_FOOD_HELP
+	# Until a resident is inside their own 60 s runway the same passive food
+	# step is shown unnamed: same YOU/THEY action, flagged food_unnamed.
+	if step.get("text", "") == "Next: food runway short · YOU leave Cook on · THEY cook":
+		return bool(step.get("food_unnamed", false)) and step.get("tool", "") == "select" and step.get("help", "") in PASSIVE_FOOD_HELP
+	# Rec steps never take the unnamed prefix; while no resident is inside their
+	# own 60 s runway the same Rec step is shown without a name (food_unnamed).
+	var rec_text := "Next: %s starving · YOU place a Rec Console · THEY recover mood" % resident.resident_name
+	if bool(step.get("food_unnamed", false)):
+		rec_text = "Next: YOU place a Rec Console · THEY recover mood"
 	if [step.get("text"), step.get("tool"), step.get("help")] != [
-		"Next: %s starving · YOU place a Rec Console · THEY recover mood" % resident.resident_name,
+		rec_text,
 		"rec", "Place a Rec Console so crew can recover mood.",
 	]:
 		return false
