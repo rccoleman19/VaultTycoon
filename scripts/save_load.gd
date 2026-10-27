@@ -13,7 +13,8 @@ func save_snapshot(snapshot: Dictionary, path := DEFAULT_PATH) -> Dictionary:
 	var file := FileAccess.open(temporary_path, FileAccess.WRITE)
 	if file == null:
 		return {"ok": false, "message": "Could not prepare the local save slot."}
-	file.store_string(JSON.stringify(wrapped))
+	# Preserve clocks across JSON so a load cannot shift hatch HUD rounding.
+	file.store_string(JSON.stringify(wrapped, "", true, true))
 	file.flush()
 	var write_error := file.get_error()
 	file.close()

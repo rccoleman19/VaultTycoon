@@ -1259,6 +1259,8 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	job_system.rebuild_from_state(snapshot.get("jobs", {}))
 	job_system.restore_manual_orders()
 	job_system.reconcile_recreation_state()
+	for resident in residents:
+		resident.restore_hatch_continuation()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	# short_of_air is derived, not saved: rebuild it so a paused load shows the right work speed.
 	var thin_air := oxygen_system.is_low()
