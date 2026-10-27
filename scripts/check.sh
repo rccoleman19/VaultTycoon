@@ -140,6 +140,9 @@ run_godot_check perks-p3 --script res://tests/test_perks_p3.gd
 run_godot_check crew-size --script res://tests/test_crew_size.gd
 run_godot_check annex-b1 --script res://tests/test_annex_b1.gd
 run_godot_check annex-b2 --script res://tests/test_annex_b2.gd
+run_godot_check annex-b3 --script res://tests/test_annex_b3.gd
+run_godot_check relay-lumen-power --script res://tests/test_relay_lumen_power.gd
+run_godot_check relay-lumen-old-save --script res://tests/test_relay_lumen_old_save.gd
 run_godot_check briefing-stepper-focus --script res://tests/test_briefing_stepper_focus.gd
 run_godot_check records-finish --script res://tests/test_records_finish.gd
 run_godot_check sublevel --script res://tests/test_sublevel.gd
