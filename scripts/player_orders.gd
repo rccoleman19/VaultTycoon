@@ -15,6 +15,9 @@ var _next_hold_since := -1.0
 var _next_hold_step: Dictionary = {}
 var _next_reclamation_kind := -1
 
+# Guidance reads retain the starvation name until fed or a nearer deadline.
+var _starving_resident_id := -1
+
 var game: VaultGame
 var root: Control
 var clock_label: Label
@@ -1245,8 +1248,10 @@ func _dig_tiles_after_rubble(shortfall: int, rubble: int) -> int:
 const FOOD_LEAD_DAYS := 2.5
 const FOOD_PER_DAY := 60.0
 const FOOD_PER_MEAL := 60.0
-# Non-food threats still use projected damage. Food uses the production runway below.
+# Food also compares production runway, but naming requires this own deadline.
 const NEXT_DEATH_WARNING_SECONDS := 60.0
+const STARVING_RUNWAY_S := NEXT_DEATH_WARNING_SECONDS
+const STARVING_SWITCH_S := 10.0
 
 # 03/4242 RELAY LUMEN: waiting for NO MEALS at 217.3 s left only 51 s
 # before Ari died at 268.3 s (CRITICAL at 230 s). Even an immediately placed
@@ -1702,8 +1707,8 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 	var air_forecast := game.oxygen_system.net_rate < 0.0 and game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) == 0 and not care_window
 	var soonest := maxf(NEXT_DEATH_WARNING_SECONDS, air_lead + AIR_RECOVERY_MARGIN_SECONDS) if air_forecast else NEXT_DEATH_WARNING_SECONDS
 	var food_times := _food_depletion_times()
-	# Food's trigger is runway versus the fastest available recovery lead time.
-	# Projected food damage is used ONLY to choose which living name to show.
+	# A food forecast names someone only inside their own starvation window.
+	# Keep that name until fed unless another resident is at least 10 s closer.
 	var plan := _food_fix_plan()
 	var food_lead := float(plan.seconds) + _food_chain_work_lead(float(plan.seconds))
 	if not food_blocker.is_empty() and game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) == 0:
@@ -1718,17 +1723,26 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 	# air fix lead while its supply/build/haul window is still open.
 	var food_resident: VaultResident = null
 	var food_death := INF
+	var sticky_resident: VaultResident = null
+	var sticky_food_death := INF
 	for resident: VaultResident in game.residents:
 		if not resident.alive:
 			continue
 		var food_seconds := float(food_times[resident.resident_id]) + resident.needs.health / (160.0 / DayCycle.SECONDS_PER_DAY)
-		if food_seconds < food_death:
+		if food_seconds < STARVING_RUNWAY_S and food_seconds < food_death:
 			food_resident = resident
 			food_death = food_seconds
+		if resident.resident_id == _starving_resident_id and food_seconds < STARVING_RUNWAY_S:
+			sticky_resident = resident
+			sticky_food_death = food_seconds
 		var seconds := _projected_death_seconds(resident, INF)
 		if seconds < soonest:
 			threatened = resident
 			soonest = seconds
+	if sticky_resident != null and food_death > sticky_food_death - STARVING_SWITCH_S:
+		food_resident = sticky_resident
+		food_death = sticky_food_death
+	_starving_resident_id = food_resident.resident_id if food_resident != null else -1
 	# Pantry runway governs the crop cutoff. A produced-food rescue must also
 	# reach the named resident before their own starvation health runs out,
 	# including recovery if breaks currently block delivery or cooking.
@@ -1740,7 +1754,7 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 			plan = _food_fix_plan(rescue_budget)
 	var food_waiting := ("YOU leave Cook on" in str(plan.step.text) and food_blocker.is_empty()) or bool(plan.step.get("too_late", false))
 	var cause := ""
-	if food_danger and food_resident != null and (threatened == null or (food_death <= soonest and not food_waiting)):
+	if food_danger and food_resident != null and food_death < STARVING_RUNWAY_S and (threatened == null or (food_death <= soonest and not food_waiting)):
 		threatened = food_resident
 		soonest = food_death
 		cause = "food"
@@ -3734,6 +3748,7 @@ func clear_survival_tips() -> void:
 	_next_hold_since = -1.0
 	_next_hold_step.clear()
 	_next_reclamation_kind = -1
+	_starving_resident_id = -1
 	_survival_tips.clear()
 	_survival_tip_details.clear()
 	_survival_tip_sample_left = 0.0

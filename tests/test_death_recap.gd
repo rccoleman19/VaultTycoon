@@ -525,8 +525,13 @@ func _test_saving_tip_per_cause() -> void:
 
 
 func _test_real_first_tip() -> void:
-	# The unmodified a03 player replay: no needs, clock, health or damage edits.
+	# Keep a03's scheduled player actions and real clock/damage. Start Ari
+	# with a genuine 51.7-second food deadline and no edible reserve, so the
+	# first kitchen warning is actionable before the later crop misses it.
 	var game := _game(3, true, true, true)
+	game.residents[0].needs.food = 40.0
+	game.food_system.meals = 0
+	game.food_system.raw_food = 0
 	var observer := game.player_orders as SamplingOrders
 	for frame in range(1, FRAME_CAP + 1):
 		_frame = frame

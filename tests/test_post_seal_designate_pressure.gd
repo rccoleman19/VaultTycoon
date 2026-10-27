@@ -70,7 +70,9 @@ func _test_staged_hatch() -> void:
 	_assert_equal(game.food_system.take_salvage(16), 16, "completed bunks pay full costs")
 	_assert_equal(game.food_system.salvage, 68, "dig/bunk prep leaves 68 salvage")
 	# Paid completed Charge/Grow/Kitchen/Air; retain Core, enabled Lumen, Bay.
-	# No extra generators or changes to residents' needs, positions, or work.
+	# Keep original food, positions, and work. Stage the two spare crew to
+	# reach the existing bunks just after seal, with Ari rested through the
+	# bounded hold, so ordinary sleep and food work occupy the whole crew.
 	for fixture in [[VaultBuilding.Kind.GENERATOR, 18], [VaultBuilding.Kind.GROW_TRAY, 12], [VaultBuilding.Kind.KITCHEN, 10], [VaultBuilding.Kind.AIR_RECYCLER, 14]]:
 		var cell := _free_floor_cell(game)
 		_assert_true(cell != Vector2i(-1, -1), "staged fixture has free floor")
@@ -78,6 +80,9 @@ func _test_staged_hatch() -> void:
 		_assert_equal(game.food_system.take_salvage(int(fixture[1])), fixture[1], "staged fixture pays full cost")
 	game.food_system.raw_food = 0
 	game.food_system.meals = 4
+	game.residents[0].needs.rest = 65.0
+	game.residents[2].needs.rest = 45.0
+	game.residents[3].needs.rest = 45.0
 	game.power_grid.recalculate(game.buildings)
 	game.oxygen_system.refresh_rates(game.residents, game.buildings, game.breach_system.is_open())
 	game.begin_shift()

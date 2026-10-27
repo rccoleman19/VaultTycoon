@@ -1,6 +1,6 @@
 extends "res://tests/test_runner.gd"
 
-# Presentation regression controls: all called helpers already exist on 171901b8.
+# Presentation regressions: T1-T5 use helpers already present on 171901b8.
 # Time is advanced on the game's simulation clock; refresh is the observation
 # path, and repeated Next getters must not start or age an idle interval.
 const AIR_CELL := Vector2i(25, 12)
@@ -16,6 +16,10 @@ func _run() -> void:
 	_run_case("T3 affordable named fixtures never receive funding or reclamation advice", _test_affordability)
 	_run_case("T4 engaged late shifts spend on live survival needs", _test_engaged)
 	_run_case("T5 short between-job idles do not flicker across 25 sim seconds", _test_flicker_count)
+	_run_case("D1 starving labels require the named resident's real runway", _test_starving_runway)
+	_run_case("D2 starving names stay stable through sub-ten-second rank changes", _test_starving_sticky_name)
+	_run_case("D3 starving names switch at ten seconds and clear after feeding", _test_starving_switch)
+	_run_case("D4 healthy 03/05 openings never name a forecast starvation", _test_starving_opening_jitter)
 	print("NEXT FLICKER TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -317,6 +321,14 @@ func _engaged_wing(level: int) -> VaultGame:
 	game.food_system.salvage = 11 if level == 5 else 29
 	game.food_system.raw_food = 1
 	game.food_system.meals = 8 if level == 5 else 7
+	# Keep the probe's pantry runway, power deficit, and recovery work, but move
+	# its stored meals to real pending Haul output so projected stored rations
+	# do not hide hunger. The raw pile stays below the second-kitchen threshold.
+	game.job_system.queue_meals(Vector2i(24, 12), game.food_system.meals)
+	_assert_equal(game.job_system.get_pending_meals(), game.food_system.meals, "T4 the original meal reserve now waits in the real Haul pipeline")
+	game.food_system.meals = 0
+	_set_food_death(game.residents[0 if level == 5 else 3], 45.0)
+	_assert_approximately(_food_death(game, game.residents[0 if level == 5 else 3]), 45.0, 0.00001, "T4 the original named resident has a real 45-second starvation runway")
 	game.day_cycle.elapsed_seconds = 149.1 if level == 5 else 137.1
 	game.power_grid.recalculate(game.buildings)
 	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
@@ -419,3 +431,209 @@ func _test_flicker_count() -> void:
 	_assert_true("begin reclamation" not in last, "T5 funded Bunks/Air do not request reclamation")
 	print("Next flicker count: %d changes / 250 frames / 25.0 sim seconds" % changes)
 	_dispose(game)
+
+
+# Spec D uses the same carved/powered fixture as T1-T5, with the opening's
+# missing food producers and its real stored meals. No forecast is mocked.
+func _starving_opening(level := 5) -> VaultGame:
+	var game := _wing(level)
+	for building: VaultBuilding in game.buildings.duplicate():
+		if building.kind in [VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GROW_TRAY]:
+			game.buildings.erase(building)
+			building.free()
+	var food := [65.0, 72.0, 79.0, 86.0, 72.0]
+	for i in range(game.residents.size()):
+		game.residents[i].needs.food = food[i]
+	game.food_system.meals = 12
+	game.food_system.raw_food = 0
+	game.food_system.salvage = 30
+	game.power_grid.recalculate(game.buildings)
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	return game
+
+
+func _food_death(game: VaultGame, resident: VaultResident) -> float:
+	return float(game.player_orders._food_depletion_times()[resident.resident_id]) + resident.needs.health / (160.0 / DayCycle.SECONDS_PER_DAY)
+
+
+# Call with no stored meals, or a drafted resident who cannot eat them. Set
+# actual needs rather than injecting projected times into the urgency selector.
+func _set_food_death(resident: VaultResident, seconds: float) -> void:
+	var rate := 60.0 * resident.needs.food_drain_scale / DayCycle.SECONDS_PER_DAY
+	resident.needs.food = (seconds - resident.needs.health / (160.0 / DayCycle.SECONDS_PER_DAY)) * rate
+	_assert_true(resident.needs.food >= 0.0 and resident.needs.food <= 100.0, "D fixture expresses %.1f seconds through valid food needs" % seconds)
+
+
+func _assert_no_starving(game: VaultGame, message: String) -> void:
+	game.player_orders.refresh()
+	var urgent: Dictionary = game.player_orders._resident_urgency_step()
+	var next := _next(game)
+	_assert_false("starving" in str(urgent.get("text", "")).to_lower(), message + " has no starving urgency")
+	_assert_true(str(urgent.get("cause", "")) != "food", message + " has no forecast food cause")
+	_assert_false("starving" in str(next.get("text", "")).to_lower(), message + " has no starving Next")
+	_assert_true(str(next.get("cause", "")) != "food", message + " leaves Next without food danger metadata")
+
+
+func _assert_starving_name(game: VaultGame, resident: VaultResident, message: String) -> Dictionary:
+	var urgent: Dictionary = game.player_orders._resident_urgency_step()
+	_assert_true("Next: %s starving ·" % resident.resident_name in str(urgent.get("text", "")), message + " names " + resident.resident_name)
+	_assert_equal(str(urgent.get("cause", "")), "food", message + " keeps the food cause")
+	_assert_true(bool(urgent.get("urgent", false)), message + " is urgent")
+	_assert_equal(int(urgent.get("resident_id", -1)), resident.resident_id, message + " exposes the named resident id")
+	_assert_equal(game.player_orders._starving_resident_id, resident.resident_id, message + " remembers the selected resident")
+	_assert_true(_food_death(game, resident) < 60.0, message + " names a resident below the real 60-second threshold")
+	_assert_approximately(float(urgent.get("death_seconds", INF)), _food_death(game, resident), 0.00001, message + " reports the selected resident's own runway")
+	_assert_equal(int(_next(game).get("resident_id", -1)), resident.resident_id, message + " reaches the public Next selector")
+	return urgent
+
+
+func _test_starving_runway() -> void:
+	var game := _starving_opening()
+	_assert_equal(game.residents.size(), 4, "D1 05 opening has the real four-resident crew")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.KITCHEN), 0, "D1 opening has no Nutrient Station")
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY), 0, "D1 opening has no Grow Tray")
+	_assert_equal(game.player_orders.STARVING_RUNWAY_S, 60.0, "D1 starving uses the named 60-second runway constant")
+	_assert_equal(game.player_orders.STARVING_SWITCH_S, 10.0, "D1 sticky selection uses the named ten-second switch constant")
+	var checkpoints := [[2.4, 30], [4.7, 17], [9.4, 8]]
+	for checkpoint: Array in checkpoints:
+		game.day_cycle.elapsed_seconds = float(checkpoint[0])
+		game.food_system.salvage = int(checkpoint[1])
+		_assert_equal(game.food_system.meals, 12, "D1 lead jitter keeps all twelve stored meals")
+		for resident: VaultResident in game.residents:
+			_assert_true(resident.needs.food >= 65.0 and resident.needs.food <= 86.0 and _food_death(game, resident) >= 60.0, "D1 %.1fs keeps %s fed and above the runway threshold" % [checkpoint[0], resident.resident_name])
+		_assert_no_starving(game, "D1 %.1fs salvage %d lead jitter" % [checkpoint[0], checkpoint[1]])
+	game.food_system.meals = 3
+	var ari: VaultResident = game.residents[0]
+	ari.drafted = true
+	for seconds: float in [61.0, 60.0, 59.0]:
+		_set_food_death(ari, seconds)
+		_assert_approximately(_food_death(game, ari), seconds, 0.00001, "D1 boundary fixture has exactly %.1f seconds of real runway" % seconds)
+		var plan: Dictionary = game.player_orders._food_fix_plan()
+		var lead: float = float(plan.seconds) + game.player_orders._food_chain_work_lead(float(plan.seconds))
+		_assert_true(game.player_orders._food_runway_seconds() < lead + game.player_orders.FOOD_RUNWAY_MARGIN_SECONDS, "D1 %.1f-second boundary retains forecast food danger" % seconds)
+		if seconds >= 60.0:
+			_assert_no_starving(game, "D1 %.1f-second boundary" % seconds)
+		else:
+			_assert_starving_name(game, ari, "D1 59-second boundary")
+	game.food_system.meals = 100
+	var calm_plan: Dictionary = game.player_orders._food_fix_plan()
+	var calm_lead: float = float(calm_plan.seconds) + game.player_orders._food_chain_work_lead(float(calm_plan.seconds))
+	_assert_true(_food_death(game, ari) < 60.0 and ari.needs.food > 20.0, "D1 stocked-pantry conjunction fixture retains a short personal runway without real-hunger relabeling")
+	_assert_false(game.player_orders._food_runway_seconds() < calm_lead + game.player_orders.FOOD_RUNWAY_MARGIN_SECONDS, "D1 stocked pantry removes forecast food danger")
+	_assert_no_starving(game, "D1 personal runway below sixty without forecast danger")
+	# A food forecast without anyone below sixty must still yield to a real
+	# non-food emergency through the existing threatened-resident branch.
+	ari.drafted = false
+	ari.needs.food = 65.0
+	game.food_system.meals = 3
+	var bo: VaultResident = game.residents[1]
+	bo.drafted = true
+	bo.needs.food = 100.0
+	bo.needs.health = 20.0
+	bo.needs.rest = 0.0
+	var danger_plan: Dictionary = game.player_orders._food_fix_plan()
+	var danger_lead: float = float(danger_plan.seconds) + game.player_orders._food_chain_work_lead(float(danger_plan.seconds))
+	_assert_true(game.player_orders._food_runway_seconds() < danger_lead + game.player_orders.FOOD_RUNWAY_MARGIN_SECONDS, "D1 exhausted-resident fallthrough keeps forecast food danger true")
+	for resident: VaultResident in game.residents:
+		_assert_true(_food_death(game, resident) >= 60.0, "D1 exhausted-resident fallthrough keeps %s above the food threshold" % resident.resident_name)
+	_assert_no_starving(game, "D1 food forecast falls through to genuine exhaustion")
+	var exhausted: Dictionary = game.player_orders._resident_urgency_step()
+	_assert_equal(str(exhausted.get("cause", "")), "rest", "D1 forecast food danger preserves the rest cause")
+	_assert_equal(int(exhausted.get("resident_id", -1)), bo.resident_id, "D1 fallthrough retains exhausted Bo's id")
+	_assert_true(bool(exhausted.get("urgent", false)), "D1 fallthrough retains the existing urgent flag")
+	_assert_equal(str(exhausted.get("text", "")), "Next: Bo exhausted · YOU undraft Bo [R] · THEY rest", "D1 fallthrough preserves the existing exhaustion action and label")
+	_dispose(game)
+
+
+func _test_starving_sticky_name() -> void:
+	var game := _starving_opening()
+	_assert_no_starving(game, "D2 every resident starts above the threshold")
+	_assert_equal(game.player_orders._starving_resident_id, -1, "D2 healthy crew names nobody")
+	game.food_system.meals = 0
+	var ari: VaultResident = game.residents[0]
+	var bo: VaultResident = game.residents[1]
+	_set_food_death(ari, 50.0)
+	_set_food_death(bo, 54.0)
+	_assert_starving_name(game, ari, "D2 initial shortest runway")
+	for gap: float in [0.5, 4.0, 9.9]:
+		var before := game.day_cycle.elapsed_seconds
+		game.step_simulation(1.0)
+		_assert_approximately(game.day_cycle.elapsed_seconds, before + 1.0, 0.00001, "D2 advances one real simulation second")
+		_set_food_death(bo, _food_death(game, ari) - gap)
+		_assert_true(_food_death(game, bo) < _food_death(game, ari), "D2 Bo becomes the shorter runway by %.1f seconds" % gap)
+		var first := _assert_starving_name(game, ari, "D2 %.1f-second rank jitter" % gap)
+		for _repeat in range(6):
+			_assert_equal(game.player_orders._resident_urgency_step(), first, "D2 repeated unchanged-state urgency calls are deterministic at gap %.1f" % gap)
+			_assert_equal(int(_next(game).get("resident_id", -1)), ari.resident_id, "D2 repeated public getters keep Ari at gap %.1f" % gap)
+	_dispose(game)
+
+
+func _test_starving_switch() -> void:
+	for gap: float in [10.0, 10.1]:
+		var game := _starving_opening()
+		game.food_system.meals = 0
+		var ari: VaultResident = game.residents[0]
+		var bo: VaultResident = game.residents[1]
+		_set_food_death(ari, 50.0)
+		_set_food_death(bo, 54.0)
+		_assert_starving_name(game, ari, "D3 initial sticky name")
+		_set_food_death(bo, 50.0 - gap)
+		_assert_starving_name(game, bo, "D3 %.1f-second shorter runway switches immediately" % gap)
+		_set_food_death(ari, _food_death(game, bo) - 9.9)
+		_assert_starving_name(game, bo, "D3 old name cannot return with only a 9.9-second lead")
+		_set_food_death(ari, _food_death(game, bo) - 10.1)
+		_assert_starving_name(game, ari, "D3 old name returns after becoming over ten seconds shorter")
+		ari.needs.eat()
+		_assert_true(_food_death(game, ari) >= 60.0, "D3 eating takes the sticky resident beyond the threshold")
+		_assert_starving_name(game, bo, "D3 feeding the sticky resident moves the name to the remaining hungry crew")
+		bo.needs.eat()
+		_assert_no_starving(game, "D3 everybody is above the threshold after eating")
+		_assert_equal(game.player_orders._starving_resident_id, -1, "D3 no residents under the threshold clears the sticky id")
+		_set_food_death(ari, 50.0)
+		_set_food_death(bo, 54.0)
+		_assert_starving_name(game, ari, "D3 a new hungry span selects the shortest runway again")
+		ari.alive = false
+		_assert_starving_name(game, bo, "D3 a dead sticky resident yields to living crew")
+		_dispose(game)
+	_test_starving_game_reset()
+
+
+func _test_starving_game_reset() -> void:
+	var game := _starving_opening()
+	# Save a healthy state using the real seal transition required by snapshot
+	# validation, then establish a sticky name without changing simulation time.
+	game.breach_system.reset()
+	game.day_cycle.elapsed_seconds = game.breach_system.warning_at
+	game.breach_system.advance(0.0, game.day_cycle.elapsed_seconds)
+	var delivered := game.breach_system.add_delivery(BreachSystem.PATCH_COST)
+	var sealed := game.breach_system.apply_patch_work(BreachSystem.PATCH_WORK_SECONDS)
+	_assert_true(delivered == BreachSystem.PATCH_COST and sealed, "D3 reset fixture seals through the real hatch API")
+	game.player_orders.show_breach_warning(false)
+	game.job_system.rebuild_from_state()
+	game.day_cycle.current_day = floori(game.day_cycle.elapsed_seconds / DayCycle.SECONDS_PER_DAY) + 1
+	var snapshot := game.create_snapshot()
+	game.food_system.meals = 0
+	_set_food_death(game.residents[0], 50.0)
+	_assert_starving_name(game, game.residents[0], "D3 load fixture has a live sticky name")
+	_assert_true(game.apply_snapshot(snapshot), "D3 real loader accepts the healthy same-clock snapshot")
+	_assert_equal(game.player_orders._starving_resident_id, -1, "D3 loading clears the previous crew's sticky id before another getter")
+	_assert_no_starving(game, "D3 restored healthy snapshot")
+	game.food_system.meals = 0
+	_set_food_death(game.residents[0], 50.0)
+	_assert_starving_name(game, game.residents[0], "D3 new-game fixture has a live sticky name")
+	game.new_game(false, 4242, 5)
+	_assert_equal(game.player_orders._starving_resident_id, -1, "D3 new game clears the previous crew's sticky id")
+	_dispose(game)
+
+
+func _test_starving_opening_jitter() -> void:
+	for level: int in [3, 5]:
+		var game := _starving_opening(level)
+		_assert_equal(game.residents.size(), 5 if level == 3 else 4, "D4 %02d opening uses its real crew count" % level)
+		for salvage: int in [30, 17, 8, 20, 30, 8, 17, 20]:
+			game.food_system.salvage = salvage
+			_advance_clock(game, 0.7)
+			_assert_equal(game.food_system.meals, 12, "D4 %02d lead jitter leaves pantry stock constant" % level)
+			_assert_no_starving(game, "D4 %02d opening salvage %d" % [level, salvage])
+			_assert_equal(game.player_orders._starving_resident_id, -1, "D4 %02d opening never retains a forecast resident name" % level)
+		_dispose(game)

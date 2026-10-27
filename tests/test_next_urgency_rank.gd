@@ -14,7 +14,7 @@ var _frame_accumulator := 0.0
 func _run() -> void:
 	_run_case("03 engaged RELAY LUMEN names Ari's starvation before optional builds", _test_engaged_relay_lumen)
 	_run_case("03 no-shed RELAY LUMEN rejects late tray steps and uses timely food", _test_no_shed_relay_lumen)
-	_run_case("food runway warns before full bellies become a projected death", _test_food_runway_trigger)
+	_run_case("short food runway names a resident with a real imminent food deadline", _test_food_runway_trigger)
 	_run_case("05 idle kitchen crisis names Ari and places the affordable kitchen", _test_idle_kitchen_prefix)
 	_run_case("food production blocked by stress breaks keeps a named actionable recovery", _test_food_work_blocker)
 	_run_case("projected starvation ranks every living resident, including current health", _test_most_threatened_food)
@@ -225,26 +225,27 @@ func _healthy_urgency_game() -> VaultGame:
 
 func _test_food_runway_trigger() -> void:
 	var game := _healthy_urgency_game()
-	game.food_system.meals = 1
-	game.food_system.raw_food = 1
+	game.food_system.meals = 0
+	game.food_system.raw_food = 2
+	game.residents[0].needs.food = 40.0
 	for resident: VaultResident in game.residents:
 		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
 	# Four living crew drain 60 need/day each, and one meal restores 60 need.
-	# These two meals (one stored, one cookable raw) cover only 20 sim seconds.
-	# Full bellies still defer starvation death for over 90 seconds: the old
-	# 60-second death horizon misses the food intervention while runway is short.
+	# These two cookable raw units cover only 20 sim seconds. With no stored
+	# ration and 40 food, Ari's own starvation deadline is 51.7 seconds, so the
+	# warning names a real imminent threat before her food meter is critical.
 	_assert_equal(game.get_alive_count(), 4, "runway fixture has four living consumers")
 	_assert_true(game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) == 1,
 		"stored raw is genuinely cookable by the existing kitchen")
 	game.player_orders.refresh()
 	var next := game.player_orders.objective_label.text
 	_assert_true("starving ·" in next and "Cook" in next,
-		"20-second runway below food lead plus margin fires with full bellies: %s" % next)
+		"20-second runway below food lead plus margin fires for a real imminent food deadline: %s" % next)
 	game.food_system.meals = 24
 	game.player_orders.refresh()
 	next = game.player_orders.objective_label.text
 	_assert_false("starving ·" in next,
-		"250-second runway comfortably above food lead plus margin stays quiet: %s" % next)
+		"260-second runway comfortably above food lead plus margin stays quiet: %s" % next)
 	_dispose(game)
 
 
