@@ -198,7 +198,7 @@ func _test_stranded() -> void:
 	_assert_equal(bed.reserved_by, -1, "enabled bed remains free")
 	_assert_equal(resident.needs.health, 97.0, "97 HP does not heal passively")
 	game.player_orders.refresh()
-	_assert_equal(game.player_orders.alert_label.text.contains("INJURED 1"), true, "HUD still counts damage above seek threshold")
+	_assert_equal("  ·  ".join(game.player_orders.all_alerts).contains("INJURED 1"), true, "HUD still counts damage above seek threshold")
 	game.free()
 
 

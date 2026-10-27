@@ -104,7 +104,7 @@ func _test_next_alerts() -> void:
 	_assert_false(next.contains("VICTORY"), "no VICTORY PENDING in Next")
 	_assert_false(next.contains("check blockers"), "no 'check blockers' text")
 	_assert_equal(next, str(game.player_orders.keep_running_default_step().text), "a calm vault shows the keep-running Next")
-	_assert_false(game.player_orders.alert_label.text.contains("VICTORY PENDING"), "no VICTORY PENDING alert")
+	_assert_false("  ·  ".join(game.player_orders.all_alerts).contains("VICTORY PENDING"), "no VICTORY PENDING alert")
 	game.status_message_left = 0.0
 	game.player_orders.refresh()
 	var help: String = game.player_orders.tool_status.text
@@ -113,7 +113,7 @@ func _test_next_alerts() -> void:
 	game.oxygen_system.oxygen = 10.0
 	game.player_orders.refresh()
 	_assert_false(game.player_orders.objective_label.text.begins_with("VICTORY PENDING"), "low O2 does not bring back VICTORY PENDING")
-	_assert_true(game.player_orders.alert_label.text.contains("OXYGEN"), "oxygen alerts still work")
+	_assert_true("  ·  ".join(game.player_orders.all_alerts).contains("OXYGEN"), "oxygen alerts still work")
 	_dispose(game)
 
 

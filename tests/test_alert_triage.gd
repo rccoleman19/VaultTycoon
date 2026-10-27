@@ -14,6 +14,10 @@ func _run() -> void:
 	_run_case("Next falls back to queued construction when the chain is otherwise covered", _test_next_queued_only_fallback)
 	_run_case("Next keeps saving-tip actions clean and does not remember suppressed urgency", _test_next_urgency_recap)
 	_run_case("Next skips a queued extra Air Recycler during a short suffocation runway", _test_next_queued_extra_air)
+	_run_case("the alert bar caps visible alerts at one and counts the rest", _test_alerts_cap_one_visible)
+	_run_case("alerts rank by death runway and name the most urgent critical resident", _test_alerts_rank_by_urgency)
+	_run_case("alerts already stated by the displayed Next tip are removed everywhere", _test_alerts_no_duplicate_with_next)
+	_run_case("DETAILS expands the ranked alerts hidden by the alert cap", _test_alerts_details_expands_more)
 	print("ALERT TRIAGE TESTS: %s — %d cases, %d assertions, %d failures" % [
 		"FAIL" if _failure_count else "PASS", _case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
@@ -249,4 +253,394 @@ func _test_next_queued_extra_air() -> void:
 	_assert_equal(game.player_orders.objective_label.text,
 		"Next: YOU place 2 bunks · THEY craft from Craft · Air Recyclers in progress",
 		"the replacement tip keeps the next normal link and queued Air context")
+	_dispose(game)
+
+
+# These helpers deliberately use Object.get for slice-2 members. The same new
+# cases run on the original project as a control: absent members are assertions,
+# never invalid property accesses or attempts to index a null value.
+func _triage_alerts(orders: Node, member: String) -> Array:
+	var value: Variant = orders.get(member)
+	_assert_true(value is Array, "%s exposes its ranked alerts" % member)
+	return value if value is Array else []
+
+
+func _triage_hidden(orders: Node) -> int:
+	var value: Variant = orders.get("alert_hidden_count")
+	_assert_true(value is int, "alert_hidden_count exposes the number beyond the cap")
+	return int(value) if value is int else -1
+
+
+func _triage_more(orders: Node) -> Label:
+	var value: Variant = orders.get("alert_more_label")
+	_assert_true(value is Label, "DETAILS owns a label for the remaining alerts")
+	return value as Label
+
+
+func _triage_game() -> VaultGame:
+	var game := _spawn_game()
+	game.new_game(false, 4242, 5)
+	game.begin_shift()
+	_triage_healthy_crew(game)
+	game.food_system.meals = 24
+	# Advance the real fixed-step simulation, rather than setting elapsed time.
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	return game
+
+
+func _triage_healthy_crew(game: VaultGame) -> void:
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.mood = 100.0
+		resident.needs.health = 100.0
+		resident.drafted = false
+		resident.sleeping = false
+		resident.bed_id = -1
+		resident.medical_bed_id = -1
+
+
+func _triage_many_alerts_game() -> VaultGame:
+	var game := _triage_game()
+	game.food_system.meals = 1
+	game.residents[0].needs.rest = 25.0
+	game.residents[1].needs.health = 75.0
+	game.residents[2].needs.mood = 30.0
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	game.player_orders.refresh()
+	return game
+
+
+func _triage_expected_key(game: VaultGame, alert: String) -> float:
+	# Compute the contract from the existing survival helpers, independently of
+	# the new alert sorter. CRITICAL's current-food threshold is a warning rule;
+	# its death projection deliberately uses INF, exactly as Next does.
+	if alert.begins_with("CRITICAL: "):
+		var earliest := INF
+		for resident: VaultResident in game.residents:
+			if resident.alive and (resident.needs.food < 20.0 or resident.needs.rest < 15.0):
+				earliest = minf(earliest, game.player_orders._projected_death_seconds(resident, INF))
+		return earliest
+	if alert.begins_with("OXYGEN "):
+		if game.oxygen_system.is_critical():
+			return 0.0
+		var crossing := game.oxygen_system.get_seconds_to_critical_crossing()
+		return crossing if crossing >= 0.0 else INF
+	if alert.begins_with("BREACH OPEN"):
+		return 0.0
+	if alert.begins_with("SEAL WARNING"):
+		return game.breach_system.get_time_to_open()
+	if alert in ["NO MEALS", "LOW MEALS"]:
+		return game.player_orders._food_runway_seconds()
+	return INF
+
+
+func _assert_triage_sorted(game: VaultGame, alerts: Array, message: String) -> void:
+	_assert_true(alerts.size() >= 2, "%s has multiple independently ranked threats" % message)
+	var previous := -INF
+	for alert: Variant in alerts:
+		var key := _triage_expected_key(game, str(alert))
+		_assert_true(key >= previous, "%s: %s has key %s after %s" % [message, str(alert), str(key), str(previous)])
+		previous = key
+	# The old severity grouping remains the stable tie-breaker, including INF.
+	var typed_alerts: Array[String] = []
+	for alert: Variant in alerts:
+		typed_alerts.append(str(alert))
+	var severity: Array[String] = game.player_orders._order_alerts_by_severity(typed_alerts)
+	for index in range(1, alerts.size()):
+		if _triage_expected_key(game, str(alerts[index - 1])) == _triage_expected_key(game, str(alerts[index])):
+			_assert_true(severity.find(str(alerts[index - 1])) < severity.find(str(alerts[index])),
+				"%s preserves severity order when death keys tie" % message)
+
+
+func _assert_triage_count_and_bar(game: VaultGame, visible: Array, hidden: int) -> void:
+	_assert_equal(hidden, maxi(0, visible.size() - 1), "the +N count only includes remaining alerts beyond the first")
+	if visible.is_empty():
+		return
+	var expected := str(visible[0])
+	if hidden > 0:
+		expected += "  ·  +%d more" % hidden
+	_assert_equal(game.player_orders.alert_label.text, expected, "the bar renders exactly the first alert plus its hidden count")
+
+
+func _test_alerts_cap_one_visible() -> void:
+	var game := _triage_many_alerts_game()
+	var orders := game.player_orders
+	var generated := _triage_alerts(orders, "all_alerts")
+	var visible := _triage_alerts(orders, "alert_list")
+	var hidden := _triage_hidden(orders)
+	_assert_true("LOW MEALS" in generated and "BED SHORTAGE · crew rotate" in generated
+		and "INJURED 1 · NO MED BED" in generated and "MOOD STRESSED · Cyra" in generated,
+		"real low meals, tired crew, injury and stress generate the multi-alert fixture: %s" % str(generated))
+	_assert_true(game.day_cycle.elapsed_seconds >= 2.0 * VaultGame.SIMULATION_TICK,
+		"the multi-alert state includes real needs and fixed-tick progress")
+	_assert_true(hidden >= 1, "several alerts leave at least one alert behind the cap")
+	_assert_equal(orders.alert_label.text.split("  ·  ").size(), 2,
+		"the bar has exactly one alert segment and one +N segment")
+	_assert_triage_count_and_bar(game, visible, hidden)
+	_assert_true("DETAILS" in orders.alert_label.tooltip_text,
+		"the alert tooltip explains where +N more expands")
+	_assert_equal(orders.alert_label.get_theme_color("font_color"), Color("ef6860"), "live alerts keep the existing red colour")
+	_dispose(game)
+
+	game = _triage_game()
+	orders = game.player_orders
+	orders.refresh()
+	_assert_equal(_triage_alerts(orders, "all_alerts"), [], "healthy real crew generate no alerts")
+	_assert_equal(orders.alert_label.text, "STATUS NOMINAL", "no generated alerts retain the exact nominal text")
+	_assert_equal(orders.alert_label.get_theme_color("font_color"), Color("75d4b4"), "nominal status retains its green colour")
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+	orders.refresh()
+	_assert_equal(_triage_alerts(orders, "alert_list"), ["NO COOK ENABLED"], "ample pantry stock leaves just the independent Cook alert")
+	_assert_equal(orders.alert_label.text, "NO COOK ENABLED", "a single alert keeps its exact wording without +N more")
+	_assert_equal(_triage_hidden(orders), 0, "one alert has no hidden alerts")
+	var more := _triage_more(orders)
+	if more != null:
+		_assert_false(more.visible, "no remaining alert list is shown for a single alert")
+	orders._toggle_details_rail()
+	_assert_true(orders.details_box.visible, "DETAILS can still expand with only one alert")
+	if more != null:
+		_assert_false(more.visible, "the remaining-alert list stays hidden at N=0 even with DETAILS expanded")
+	_dispose(game)
+
+
+func _test_alerts_rank_by_urgency() -> void:
+	var game := _triage_game()
+	# Reach WARNING through ordinary ticks, preserving the seeded warning time.
+	for _tick in range(1000):
+		if game.breach_system.phase != BreachSystem.Phase.DORMANT:
+			break
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+	_assert_equal(game.breach_system.phase, BreachSystem.Phase.WARNING, "real simulation reaches the seeded seal warning")
+	_assert_true(game.day_cycle.elapsed_seconds >= game.breach_system.warning_at,
+		"warning ranking uses real elapsed simulation time")
+	_triage_healthy_crew(game)
+	game.food_system.meals = 24
+	game.breach_system.add_delivery(BreachSystem.PATCH_COST)
+	# Ari's one-second exhaustion selects bunks, leaving both oxygen and hatch
+	# threats to compete in the bar instead of being covered by Next.
+	var ari: VaultResident = game.residents[0]
+	ari.needs.rest = 0.0
+	ari.needs.health = 0.75
+	game.residents[2].needs.mood = 30.0
+	game.oxygen_system.oxygen = 20.0
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	var orders := game.player_orders
+	orders.refresh()
+	_assert_true("Ari exhausted" in orders.objective_label.text and "bunks" in orders.objective_label.text,
+		"the displayed Next covers exhaustion while the air and seal alerts remain independent")
+	var generated := _triage_alerts(orders, "all_alerts")
+	var visible := _triage_alerts(orders, "alert_list")
+	_assert_triage_sorted(game, generated, "short oxygen runway")
+	_assert_triage_sorted(game, visible, "short oxygen runway after dedupe")
+	var seal_alert := "SEAL WARNING · %s" % orders._format_seconds(game.breach_system.get_time_to_open())
+	_assert_true(generated.find("OXYGEN LOW") >= 0 and generated.find(seal_alert) >= 0
+		and generated.find("OXYGEN LOW") < generated.find(seal_alert),
+		"oxygen's critical crossing comes before the real hatch-opening deadline")
+	_assert_true(orders.alert_label.text.begins_with("OXYGEN LOW  ·  +"),
+		"the shorter uncovered oxygen runway is the single visible alert")
+	_assert_triage_count_and_bar(game, visible, _triage_hidden(orders))
+
+	# Raising oxygen keeps the very same alerts active but reverses their keys.
+	game.oxygen_system.oxygen = 30.0
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	orders.refresh()
+	generated = _triage_alerts(orders, "all_alerts")
+	visible = _triage_alerts(orders, "alert_list")
+	_assert_triage_sorted(game, generated, "longer oxygen runway")
+	_assert_triage_sorted(game, visible, "longer oxygen runway after dedupe")
+	_assert_true(generated.find(seal_alert) >= 0 and generated.find("OXYGEN LOW") >= 0
+		and generated.find(seal_alert) < generated.find("OXYGEN LOW"),
+		"the alert ordering flips when oxygen outlasts the hatch grace")
+	_assert_true(orders.alert_label.text.begins_with(seal_alert + "  ·  +"),
+		"the earlier hatch-opening deadline becomes the visible alert after the flip")
+	_assert_triage_count_and_bar(game, visible, _triage_hidden(orders))
+
+	game.oxygen_system.oxygen = 10.0
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	orders.refresh()
+	generated = _triage_alerts(orders, "all_alerts")
+	_assert_triage_sorted(game, generated, "oxygen already critical")
+	_assert_true(not generated.is_empty() and str(generated[0]) == "OXYGEN CRITICAL",
+		"oxygen already at the lethal threshold ranks at zero seconds, ahead of CRITICAL and the seal")
+	game.oxygen_system.oxygen = 30.0
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(20, 12))
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(21, 12))
+	game.power_grid.recalculate(game.buildings)
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	orders.refresh()
+	generated = _triage_alerts(orders, "all_alerts")
+	_assert_true(game.oxygen_system.net_rate > 0.0 and game.oxygen_system.get_seconds_to_critical_crossing() < 0.0,
+		"a genuinely powered recycler recovers low oxygen without a future critical crossing")
+	_assert_triage_sorted(game, generated, "recovering low oxygen")
+	_assert_true(generated.find(seal_alert) >= 0 and generated.find("OXYGEN LOW") > generated.find(seal_alert),
+		"recovering low oxygen has an infinite threat key and follows the finite hatch deadline")
+	_dispose(game)
+
+	game = _triage_game()
+	ari = game.residents[0]
+	var bo: VaultResident = game.residents[1]
+	ari.needs.rest = 0.0
+	ari.needs.health = 30.0
+	bo.needs.rest = 0.0
+	bo.needs.health = 15.0
+	orders = game.player_orders
+	orders.refresh()
+	generated = _triage_alerts(orders, "all_alerts")
+	_assert_true(orders._projected_death_seconds(bo, INF) < orders._projected_death_seconds(ari, INF),
+		"both residents meet the critical rule and Bo's real death projection is sooner")
+	_assert_true("CRITICAL: Bo" in generated and "CRITICAL: Ari" not in generated,
+		"CRITICAL names the most urgent resident rather than the first roster entry")
+	_assert_triage_sorted(game, generated, "two critical residents")
+	bo.needs.health = 60.0
+	orders.refresh()
+	generated = _triage_alerts(orders, "all_alerts")
+	_assert_true("CRITICAL: Ari" in generated and "CRITICAL: Bo" not in generated,
+		"CRITICAL switches names when the other resident's death runway becomes shortest")
+	_dispose(game)
+
+
+func _assert_next_alert_omitted(game: VaultGame, alert: String, message: String) -> void:
+	var orders := game.player_orders
+	_assert_true(alert in _triage_alerts(orders, "all_alerts"), "%s: the simulation still generates %s" % [message, alert])
+	_assert_false(alert in _triage_alerts(orders, "alert_list"), "%s: Next removes %s from the showable list" % [message, alert])
+	_assert_false(alert in orders.alert_label.text, "%s: the bar does not repeat %s" % [message, alert])
+	var more := _triage_more(orders)
+	if more != null:
+		_assert_false(alert in more.text, "%s: DETAILS does not repeat %s" % [message, alert])
+	_assert_triage_count_and_bar(game, _triage_alerts(orders, "alert_list"), _triage_hidden(orders))
+
+
+func _test_alerts_no_duplicate_with_next() -> void:
+	var game := _triage_game()
+	game.food_system.meals = 0
+	game.residents[0].needs.food = 0.0
+	game.residents[1].needs.health = 75.0
+	game.residents[2].needs.mood = 30.0
+	var orders := game.player_orders
+	orders.refresh()
+	_assert_equal(orders.objective_label.text, "Next: Ari starving · YOU place a Nutrient Station · THEY cook",
+		"the real food crisis displays the starvation and Nutrient action used for dedupe")
+	_assert_next_alert_omitted(game, "CRITICAL: Ari", "named starvation")
+	_assert_next_alert_omitted(game, "NO MEALS", "food recovery action")
+	_assert_true("INJURED 1 · NO MED BED" in _triage_alerts(orders, "alert_list"),
+		"Next's food advice preserves Bo's unrelated injury alert")
+	_assert_true(orders.alert_label.text.begins_with("INJURED 1 · NO MED BED  ·  +"),
+		"the uncovered injury remains visible with the count excluding deduped food alerts")
+	_dispose(game)
+
+	game = _triage_game()
+	orders = game.player_orders
+	game.residents[0].needs.rest = 25.0
+	orders.refresh()
+	_assert_equal(orders.objective_label.text, "Next: YOU place bunks · THEY craft", "a tired resident selects the real bunk shortage action")
+	_assert_next_alert_omitted(game, "BED SHORTAGE · crew rotate", "bunk placement")
+	_assert_equal(orders.alert_label.text, "SEE NEXT", "alerts fully covered by Next keep a visible exact SEE NEXT state")
+	_assert_equal(orders.alert_label.get_theme_color("font_color"), Color("ef6860"), "SEE NEXT retains the alert red colour")
+	_assert_equal(_triage_hidden(orders), 0, "a deduped shortage is not counted as hidden")
+	_dispose(game)
+
+	# Slice 1 decorates a different selected action with queued-build context.
+	# That matching alert remains covered even after the build tool changes.
+	game = _next_chain_game()
+	orders = game.player_orders
+	game.residents[0].needs.rest = 0.0
+	game.residents[0].needs.health = 40.0
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(18, 12)), "queue a real unfinished bunk blueprint")
+	orders.refresh()
+	_assert_equal(orders.objective_label.text, PLACE_CHARGE + " · bunks in progress", "the exact displayed replacement reports queued bunks")
+	_assert_next_alert_omitted(game, "BED SHORTAGE", "bunks in progress")
+	_assert_alert_dedupe_rules(orders)
+	_dispose(game)
+
+
+func _assert_alert_dedupe_rules(orders: Node) -> void:
+	_assert_true(orders.has_method("_alert_stated_by_next"), "one dedupe function exposes the explicit alert/Next content rules")
+	if not orders.has_method("_alert_stated_by_next"):
+		return
+	# Exercise every requested mapping plus near misses. These examples supplement
+	# the real displayed-Next scenarios above; an absent method fails on the base
+	# without calling it, and no synthetic example replaces a simulation assertion.
+	var rules := [
+		["CRITICAL: Ari", {"text": "Next: Ari starving · YOU place a Nutrient Station · THEY cook"}, true],
+		["CRITICAL: Ari", {"text": "Next: YOU undraft Ari [R] · THEY rest", "urgent": true, "resident_id": 1}, true],
+		["CRITICAL: Ari", {"text": "Next: Bo exhausted · YOU place bunks · THEY craft", "urgent": true, "resident_id": 2}, false],
+		["CRITICAL: Ari", {"text": "Next: YOU select Ari", "resident_id": 1}, false],
+		["BED SHORTAGE", {"text": "Next: YOU place bunks · THEY craft", "tool": "bed"}, true],
+		["BED SHORTAGE · crew rotate", {"text": PLACE_CHARGE, "in_progress": ["bunks"]}, true],
+		["BED SHORTAGE", {"text": "Next: YOU place a Med Bed · THEY treat", "tool": "medical"}, false],
+		["NO REC CONSOLE", {"text": "Next: YOU place a Rec Console · THEY recover mood"}, true],
+		["REC CONSOLE OFFLINE", {"text": "Next: YOU enable a Rec Console · THEY recover mood"}, true],
+		["MOOD STRESSED · Ari", {"text": "Next: Ari starving · YOU enable Cook · THEY cook"}, true],
+		["MOOD BREAK RISK · Ari", {"text": "Next: YOU undraft crew · THEY recover mood"}, true],
+		["MOOD STRESSED · Ari", {"text": "Next: Bo starving · YOU enable Cook · THEY cook"}, false],
+		["NO REC CONSOLE", {"text": PLACE_CHARGE, "in_progress": ["Rec Consoles"]}, true],
+		["NO COOK ENABLED", {"text": "Next: YOU enable Cook · THEY cook"}, true],
+		["NO COOK ENABLED", {"text": "Next: YOU leave Cook on · THEY cook"}, false],
+		["FOOD WAITING · ENABLE HAUL", {"text": "Next: YOU enable Haul · THEY deliver food"}, true],
+		["FOOD WAITING · ENABLE HAUL", {"text": "Next: YOU leave Haul on · THEY deliver food"}, false],
+		["NO MEALS", {"text": "Next: YOU place a Nutrient Station · THEY cook"}, true],
+		["LOW MEALS", {"text": "Next: YOU place a Grow Tray · THEY grow"}, true],
+		["LOW MEALS", {"text": "Next: YOU enable Cook · THEY cook"}, true],
+		["NO MEALS", {"text": "Next: YOU leave Haul on · THEY deliver meals"}, true],
+		["NO MEALS", {"text": "Next: YOU place a Med Bed · THEY treat"}, false],
+		["OXYGEN CRITICAL", {"text": "Next: Bo suffocating · YOU place Air Recycler · THEY recycle more air"}, true],
+		["OXYGEN LOW", {"text": PLACE_CHARGE, "in_progress": ["Air Recyclers"]}, true],
+		["OXYGEN LOW", {"text": "Next: YOU place a Charge Node · THEY supply/build"}, false],
+		["SEAL WARNING · 00:19", {"text": "Next: YOU watch hatch · THEY patch"}, true],
+		["SEAL WARNING · 00:19", {"text": "Next: YOU acknowledge warning · then enable Craft [P]"}, true],
+		["BREACH OPEN · O2 VENTING", {"text": "Next: YOU enable Haul + Craft [P] · THEY patch hatch"}, true],
+		["SEAL WARNING · 00:19", {"text": "Next: YOU place Air Recycler · THEY recycle air"}, false],
+		["POWER BROWNOUT · SHED Grow Tray", {"text": "Next: YOU place a Charge Node · THEY add power"}, true],
+		["POWER BROWNOUT · SHED Grow Tray", {"text": "Next: YOU enable a Rec Console · THEY recover mood"}, false],
+		["INJURED 1 · NO MED BED", {"text": "Next: YOU place a Med Bed · THEY treat"}, true],
+		["INJURED 1 · MED BEDS FREE 1", {"text": "Next: YOU place a Med Bed · THEY treat"}, false],
+		["DARKNESS · 2 CREW UNLIT", {"text": "Next: YOU place a Lumen · THEY light the wing"}, true],
+		["DARKNESS · 2 CREW UNLIT", {"text": "Next: YOU place bunks · THEY craft"}, false],
+		["DRAFTED CREW 1 · AUTO WORK PAUSED", {"text": "Next: YOU place bunks · THEY craft"}, false],
+		["NO MEALS", {}, false],
+	]
+	for rule: Array in rules:
+		_assert_equal(orders.call("_alert_stated_by_next", str(rule[0]), rule[1]), rule[2],
+			"dedupe %s for %s stays %s" % [str(rule[0]), str(rule[1]), str(rule[2])])
+
+
+func _test_alerts_details_expands_more() -> void:
+	var game := _triage_many_alerts_game()
+	var orders := game.player_orders
+	var visible := _triage_alerts(orders, "alert_list")
+	var hidden := _triage_hidden(orders)
+	var more := _triage_more(orders)
+	_assert_true(hidden >= 2, "the fixture has at least two remaining alerts for DETAILS")
+	if orders.details_box.visible:
+		orders._toggle_details_rail()
+	_assert_false(orders.details_box.visible, "DETAILS begins collapsed for this interaction")
+	if more != null:
+		_assert_false(more.visible, "the remaining-alert label is hidden while DETAILS is collapsed")
+	orders._toggle_details_rail()
+	_assert_true(orders.details_box.visible, "pressing DETAILS expands the rail")
+	if more != null:
+		_assert_true(more.visible and more.is_visible_in_tree(), "expanded DETAILS makes the remaining-alert label visible")
+		_assert_equal(more.text, "\n".join(visible.slice(1)), "DETAILS lists exactly the hidden alerts, one per line in rank order")
+		_assert_equal(more.text.split("\n").size(), hidden, "DETAILS has exactly N alert lines")
+		_assert_true(more.get_parent() == orders.details_box, "the remaining-alert label belongs to details_box")
+	var header: Variant = orders.get("alert_more_header")
+	_assert_true(header is Label and str(header.get("text")) == "ALERTS", "the expanded list sits under its ALERTS header")
+	_assert_triage_count_and_bar(game, visible, hidden)
+	orders._toggle_details_rail()
+	if more != null:
+		_assert_false(more.visible, "collapsing DETAILS hides the remaining-alert label again")
+	# A newly gained real urgency opens the same list through the auto-expand.
+	game.oxygen_system.oxygen = 30.0
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	orders.refresh()
+	_assert_true(orders.details_box.visible, "a new low-oxygen urgency auto-expands DETAILS")
+	visible = _triage_alerts(orders, "alert_list")
+	hidden = _triage_hidden(orders)
+	_assert_true(hidden >= 2, "the automatic expansion still has multiple remaining alerts")
+	if more != null:
+		_assert_true(more.visible and more.is_visible_in_tree(), "automatic DETAILS expansion also reveals the remaining alerts")
+		_assert_equal(more.text, "\n".join(visible.slice(1)), "automatic expansion keeps the current ranked hidden-alert lines")
+	_assert_triage_count_and_bar(game, visible, hidden)
 	_dispose(game)

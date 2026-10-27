@@ -2,6 +2,7 @@ class_name PlayerOrders
 extends CanvasLayer
 
 const DIG_SALVAGE_YIELD := 3
+const MAX_VISIBLE_ALERTS := 1
 
 var game: VaultGame
 var root: Control
@@ -12,6 +13,11 @@ var pause_button: Button
 var objective_label: Label
 var also_label: Label
 var alert_label: Label
+var all_alerts: Array[String] = []
+var alert_list: Array[String] = []
+var alert_hidden_count: int = 0
+var alert_more_label: Label
+var alert_more_header: Label
 var crew_mood_label: Label
 var crew_mood_bar: ProgressBar
 var lighting_label: Label
@@ -211,6 +217,7 @@ func _build_interface() -> void:
 	also_label.add_theme_font_size_override("font_size", 13)
 	summary.add_child(also_label)
 	alert_label = Label.new()
+	alert_label.tooltip_text = "Open DETAILS to see the remaining alerts listed by urgency."
 	alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	alert_label.custom_minimum_size.y = 34
 	summary.add_child(alert_label)
@@ -251,7 +258,7 @@ func _build_interface() -> void:
 		wing_orders_box.add_child(row)
 	details_toggle = Button.new()
 	details_toggle.text = "DETAILS ▸"
-	details_toggle.tooltip_text = "Show or hide mood, power, air, hatch, and light readouts."
+	details_toggle.tooltip_text = "Show or hide remaining alerts, mood, power, air, hatch, and light readouts."
 	details_toggle.custom_minimum_size.y = 26
 	details_toggle.pressed.connect(_toggle_details_rail)
 	summary.add_child(details_toggle)
@@ -260,6 +267,15 @@ func _build_interface() -> void:
 	details_box = VBoxContainer.new()
 	details_box.add_theme_constant_override("separation", 4)
 	details_box.visible = false
+	alert_more_header = Label.new()
+	alert_more_header.text = "ALERTS"
+	alert_more_header.add_theme_color_override("font_color", Color("8faeb7"))
+	details_box.add_child(alert_more_header)
+	alert_more_label = Label.new()
+	alert_more_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	alert_more_label.add_theme_color_override("font_color", Color("ef6860"))
+	details_box.add_child(alert_more_label)
+	_refresh_alert_details()
 	var mood_header := Label.new()
 	mood_header.text = "CREW MOOD"
 	mood_header.add_theme_color_override("font_color", Color("8faeb7"))
@@ -1058,7 +1074,8 @@ func refresh() -> void:
 	resource_label.tooltip_text = "Stored inventory; values in parentheses are produced food still awaiting Haul delivery. DAYS = stored + pending meals per living resident (each eats one meal a day)."
 	command_buttons.zone.text = "ZONE %d" % game.map_grid.stockpile_cells.size()
 	command_buttons.zone.tooltip_text = "Stockpile: %d cells. Salvage, raw food, and meals prefer reachable zones; otherwise Salvage Bay / chamber center. Click/drag to paint; CANCEL [X] clears." % game.map_grid.stockpile_cells.size()
-	var step: Dictionary = _refresh_objective()
+	var objective_step: Dictionary = _refresh_objective()
+	var step: Dictionary = objective_step
 	power_label.text = game.power_grid.get_status_text()
 	power_label.add_theme_color_override("font_color", Color("ef6860") if game.power_grid.brownout_active else Color("75d4b4"))
 	_refresh_power_detail()
@@ -1126,7 +1143,7 @@ func refresh() -> void:
 	_refresh_oxygen()
 	_refresh_breach()
 	_refresh_inspector()
-	_refresh_alerts()
+	_refresh_alerts(objective_step)
 	_refresh_checklist()
 
 
@@ -1157,6 +1174,7 @@ func _toggle_details_rail() -> void:
 		summary_separator.visible = not _details_expanded
 	if _details_expanded and right_scroll != null:
 		right_scroll.scroll_vertical = 0
+	_refresh_alert_details()
 
 
 func _unfinished_charge_count() -> int:
@@ -2586,6 +2604,7 @@ func _expand_details_on_urgency() -> void:
 			summary_separator.visible = false
 		if right_scroll != null:
 			right_scroll.scroll_vertical = 0
+		_refresh_alert_details()
 
 
 func _refresh_roster() -> void:
@@ -2793,7 +2812,11 @@ func _refresh_inspector() -> void:
 	_hide_fixture_controls()
 
 
-func _refresh_alerts() -> void:
+func _refresh_alerts(step: Dictionary) -> void:
+	all_alerts.clear()
+	alert_list.clear()
+	alert_hidden_count = 0
+	_refresh_alert_details()
 	if game.ended:
 		# The outcome panel is up and the shift is over: one outcome line, no live advice.
 		var won := game.outcome == "win"
@@ -2895,14 +2918,114 @@ func _refresh_alerts() -> void:
 	var cook_enabled := _has_eligible_worker("cook")
 	if not cook_enabled:
 		alerts.append("NO COOK ENABLED")
-	for resident in game.residents:
+	var critical_resident: VaultResident = null
+	var critical_seconds := INF
+	for resident: VaultResident in game.residents:
 		if resident.alive and (resident.needs.food < 20.0 or resident.needs.rest < 15.0):
-			alerts.append("CRITICAL: %s" % resident.resident_name)
-			break
-	alerts = _order_alerts_by_severity(alerts)
-	alert_label.text = "STATUS NOMINAL" if alerts.is_empty() else "  ·  ".join(alerts)
-	var only_welcome := alerts.size() == 1 and game.keep_running and game.annex_welcome_left > 0.0 and alerts[0].begins_with("NEW CREW")
-	alert_label.add_theme_color_override("font_color", Color("75d4b4") if alerts.is_empty() or only_welcome else Color("ef6860"))
+			var seconds := _projected_death_seconds(resident, INF)
+			if critical_resident == null or seconds < critical_seconds:
+				critical_resident = resident
+				critical_seconds = seconds
+	if critical_resident != null:
+		alerts.append("CRITICAL: %s" % critical_resident.resident_name)
+	all_alerts = _order_alerts_by_urgency(alerts)
+	for alert: String in all_alerts:
+		if not _alert_stated_by_next(alert, step):
+			alert_list.append(alert)
+	alert_hidden_count = maxi(0, alert_list.size() - MAX_VISIBLE_ALERTS)
+	if all_alerts.is_empty():
+		alert_label.text = "STATUS NOMINAL"
+	elif alert_list.is_empty():
+		alert_label.text = "SEE NEXT"
+	else:
+		alert_label.text = alert_list[0]
+		if alert_hidden_count > 0:
+			alert_label.text += "  ·  +%d more" % alert_hidden_count
+	var only_welcome := all_alerts.size() == 1 and game.keep_running and game.annex_welcome_left > 0.0 and all_alerts[0].begins_with("NEW CREW")
+	alert_label.add_theme_color_override("font_color", Color("75d4b4") if all_alerts.is_empty() or only_welcome else Color("ef6860"))
+	_refresh_alert_details()
+
+
+func _refresh_alert_details() -> void:
+	if alert_more_label == null:
+		return
+	alert_more_label.text = "\n".join(alert_list.slice(MAX_VISIBLE_ALERTS))
+	alert_more_label.visible = _details_expanded and alert_hidden_count > 0
+	alert_more_header.visible = alert_more_label.visible
+
+
+func _alert_urgency_seconds(alert: String) -> float:
+	if alert.begins_with("CRITICAL: "):
+		var soonest := INF
+		for resident: VaultResident in game.residents:
+			if resident.alive and (resident.needs.food < 20.0 or resident.needs.rest < 15.0):
+				soonest = minf(soonest, _projected_death_seconds(resident, INF))
+		return soonest
+	if alert.begins_with("OXYGEN "):
+		if game.oxygen_system.is_critical():
+			return 0.0
+		var crossing := game.oxygen_system.get_seconds_to_critical_crossing()
+		return crossing if crossing >= 0.0 else INF
+	if alert.begins_with("BREACH OPEN") or alert.begins_with("SEAL WARNING"):
+		return game.breach_system.get_time_to_open()
+	if alert == "NO MEALS" or alert == "LOW MEALS":
+		return _food_runway_seconds()
+	return INF
+
+
+func _order_alerts_by_urgency(alerts: Array[String]) -> Array[String]:
+	# Insertion keeps the old severity order for equal deadlines (including INF).
+	var ordered: Array[String] = []
+	for alert: String in _order_alerts_by_severity(alerts):
+		var seconds := _alert_urgency_seconds(alert)
+		var index := ordered.size()
+		while index > 0 and seconds < _alert_urgency_seconds(ordered[index - 1]):
+			index -= 1
+		ordered.insert(index, alert)
+	return ordered
+
+
+func _alert_stated_by_next(alert: String, step: Dictionary) -> bool:
+	if step.is_empty():
+		return false
+	var text := str(step.get("text", "")).to_lower()
+	# Queued builds are explicitly stated even when another action now leads Next.
+	for building_name: String in step.get("in_progress", []):
+		text += " · " + building_name.to_lower() + " in progress"
+	if alert.begins_with("CRITICAL: "):
+		var resident_name := alert.trim_prefix("CRITICAL: ")
+		for resident: VaultResident in game.residents:
+			if resident.resident_name == resident_name and bool(step.get("urgent", false)) and int(step.get("resident_id", -1)) == resident.resident_id:
+				return true
+		for condition: String in ["starving", "exhausted", "critical", "suffocating", "in despair"]:
+			if (" " + resident_name.to_lower() + " " + condition) in (" " + text):
+				return true
+		return false
+	if alert.begins_with("BED SHORTAGE"):
+		return str(step.get("tool", "")) == "bed" or "bunk" in text
+	if alert == "NO REC CONSOLE" or alert == "REC CONSOLE OFFLINE" or alert.begins_with("MOOD "):
+		if "rec console" in text or "recover mood" in text:
+			return true
+		if alert.begins_with("MOOD "):
+			var resident_name := alert.get_slice(" · ", 1).to_lower()
+			return not resident_name.is_empty() and (" " + resident_name + " ") in (" " + text.replace(" · ", " ") + " ")
+	if alert == "NO COOK ENABLED":
+		return "enable cook" in text
+	if alert == "FOOD WAITING · ENABLE HAUL":
+		return "enable haul" in text
+	if alert == "NO MEALS" or alert == "LOW MEALS":
+		return str(step.get("kind", "")) == STEP_KIND_FOOD or "nutrient station" in text or "grow tray" in text or "cook" in text or "meals" in text or "starving" in text
+	if alert.begins_with("OXYGEN "):
+		return "air recycler" in text or "suffocating" in text
+	if alert.begins_with("SEAL WARNING") or alert.begins_with("BREACH OPEN"):
+		return "hatch" in text or (alert.begins_with("SEAL WARNING") and "acknowledge warning" in text)
+	if alert.begins_with("POWER BROWNOUT"):
+		return "charge node" in text
+	if alert.begins_with("INJURED ") and "NO MED BED" in alert:
+		return "med bed" in text
+	if alert.begins_with("DARKNESS"):
+		return "lumen" in text
+	return false
 
 
 # Starvation is not an injury a Med Bed can treat (QA 2026-10-18c #4): JobSystem._handle_medical

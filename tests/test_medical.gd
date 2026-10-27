@@ -3,10 +3,12 @@ var failures := 0
 func _init() -> void:
 	call_deferred("_run")
 func check(ok: bool, message: String) -> void:
+	_assertion_count += 1
 	if not ok:
 		failures += 1
-		printerr(message)
+		printerr("[FAIL] medical :: %s" % message)
 func _run() -> void:
+	_case_count += 1
 	var game := MAIN_SCENE.instantiate() as VaultGame
 	root.add_child(game)
 	game.begin_shift()
@@ -20,8 +22,8 @@ func _run() -> void:
 	check(bed.get_cost() == 8 and bed.get_build_time() == 8.0, "Medical construction contract")
 	check(not bed.complete, "Blueprint starts unfinished")
 	game.player_orders.refresh()
-	check("INJURED 1 · NO MED BED" in game.player_orders.alert_label.text, "Unbuilt Med Bed reads as none built")
-	check(not "MED BEDS FREE" in game.player_orders.alert_label.text, "No free-bed count without a Med Bed")
+	check("INJURED 1 · NO MED BED" in "  ·  ".join(game.player_orders.all_alerts), "Unbuilt Med Bed reads as none built")
+	check(not "MED BEDS FREE" in "  ·  ".join(game.player_orders.all_alerts), "No free-bed count without a Med Bed")
 	game.job_system.advance(1.0)
 	check(resident.needs.health == 60.0, "Unfinished bed must not heal")
 	bed.add_delivery(8)
@@ -42,8 +44,8 @@ func _run() -> void:
 	game.select_building(bed.building_id)
 	game.player_orders.refresh()
 	check("Recovery: +2 HP/s" in game.player_orders.inspector_state.text, "Inspector explains recovery")
-	check("INJURED 2" in game.player_orders.alert_label.text, "HUD counts injuries")
-	check("INJURED 2 · MED BEDS FREE 0" in game.player_orders.alert_label.text, "Built Med Bed keeps the free-bed count")
+	check("INJURED 2" in "  ·  ".join(game.player_orders.all_alerts), "HUD counts injuries")
+	check("INJURED 2 · MED BEDS FREE 0" in "  ·  ".join(game.player_orders.all_alerts), "Built Med Bed keeps the free-bed count")
 	var snapshot := game.create_snapshot()
 	check(game.apply_snapshot(snapshot), "Medical fixture and health snapshot loads")
 	resident = game.residents[0]
@@ -71,7 +73,8 @@ func _run() -> void:
 	resident.kill()
 	check(bed.reserved_by == -1, "Death releases medical reservation")
 	game.free()
+	_case_count += 1
 	_test_managed_day_seven_win(true)
 	failures += _failure_count
-	print("Medical tests: %d failures" % failures)
+	print("Medical tests: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, failures])
 	quit(1 if failures else 0)

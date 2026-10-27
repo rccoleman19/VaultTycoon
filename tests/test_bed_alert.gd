@@ -16,7 +16,7 @@ func _run() -> void:
 
 func _alert(game: VaultGame) -> String:
 	game.player_orders.refresh()
-	return game.player_orders.alert_label.text
+	return "  ·  ".join(game.player_orders.all_alerts)
 
 
 func _test_suffix() -> void:
