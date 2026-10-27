@@ -25,6 +25,8 @@ func _run() -> void:
 	_case("e", _test_last_actionable_tip)
 	_case("f", _test_loss_and_death_save_load)
 	_case("g", _test_keep_running_day_checkpoints)
+	_case("h", _test_real_death_clock)
+	_case("i", _test_mid_tick_death_clock)
 	for path: String in _paths:
 		_remove_test_save(path)
 	print("DEATH RECAP TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
@@ -338,6 +340,7 @@ func _test_loss_and_death_save_load() -> void:
 	_assert_true(game.ended and game.outcome == "loss", "the final death still uses the real loss path")
 	_assert_recap(game)
 	_assert_equal(game.player_orders.outcome_title.text, "WING LOST", "a wipe keeps the loss title")
+	_assert_true(_recap(game).has("elapsed_seconds"), "a wipe's recap keeps the simulated time of the final death, not the WING LOST label")
 	# No death keys are emitted for this ordinary live snapshot. Loading it is
 	# the same path an old save takes and must restore its serialized state.
 	var legacy_path := _path("legacy")
@@ -389,6 +392,7 @@ func _test_keep_running_day_checkpoints() -> void:
 	_assert_equal(game.outcome, "death", "keep-running death remains resumable with survivors")
 	var clock := str(_recap(game).get("time", ""))
 	_assert_true("DAY 9" in clock and ":" in clock and not "/7" in clock, "keep-running recap shows its actual day and clock")
+	_assert_equal(_recap(game).get("elapsed_seconds", -1.0), game.keep_running_seconds, "keep-running recap records its own simulated clock rather than the completed shift's clock")
 	_assert_true(game.has_method("retry_day_checkpoint"), "keep-running recap can Retry its current day")
 	if game.has_method("retry_day_checkpoint"):
 		_assert_true(bool(game.call("retry_day_checkpoint")), "keep-running Retry loads the day-nine checkpoint")
@@ -397,6 +401,102 @@ func _test_keep_running_day_checkpoints() -> void:
 		_assert_equal(game.get_alive_count(), game.residents.size(), "day-nine Retry undoes the death")
 		_assert_true(game.outcome == "" and not game.player_orders.outcome_panel.visible, "day-nine Retry clears the outcome and hides the recap")
 	_dispose(game)
+
+
+func _test_real_death_clock() -> void:
+	# Replay a05's actual player inputs: no needs, health, clock or damage edits.
+	var game := _game(5, false, true)
+	var at_death := {}
+	for resident: VaultResident in game.residents:
+		resident.died.connect(_capture_death_clock.bind(game, at_death))
+	for frame in range(1, FRAME_CAP + 1):
+		_frame = frame
+		_idle(game)
+		_advance_frame(game)
+		if game.outcome != "":
+			break
+	_assert_equal(game.outcome, "death", "real play reaches a resumable death")
+	_assert_true(game.get_alive_count() > 0, "real death leaves a resident who can Resume")
+	_assert_true(not at_death.is_empty(), "the resident's real died signal records the instant of death")
+	_assert_equal(int(at_death.get("day", 0)), 5, "seed 4242 level 05 dies on day five, beyond a fresh day one")
+	_assert_death_clock(game, at_death)
+	print("[CLOCK REAL] frame=%d instant=%s" % [_frame, JSON.stringify(at_death)])
+	var recap := _recap(game).duplicate(true)
+	_assert_true(game.save_game(false, _player_path), "real death saves through the atomic player snapshot path")
+	game.new_game(false, 4242, 5)
+	_assert_true(game.load_game(_player_path), "real death snapshot loads")
+	game.player_orders.refresh()
+	_assert_equal(str(_recap(game).get("time", "")), str(recap.get("time", "")), "Load retains the real death's exact time")
+	_assert_true(_recap(game).has("elapsed_seconds"), "Load retains the additive death elapsed_seconds field")
+	_assert_equal(_recap(game).get("elapsed_seconds", -1.0), recap.get("elapsed_seconds", -2.0), "Load retains the real death's exact simulated seconds")
+	_assert_equal(game.player_orders.clock_label.text, str(recap.get("time", "")), "loaded HUD agrees with the retained death clock")
+	_assert_true(str(recap.get("time", "")) in game.player_orders.outcome_text.text, "loaded recap panel contains the retained time")
+	# Version 1 remains compatible with death recaps saved before this field.
+	var legacy := game.create_snapshot()
+	legacy[VaultGame.DEATH_RECAP_KEY].erase("elapsed_seconds")
+	_assert_true(game.apply_snapshot(legacy), "a version-one death recap without elapsed_seconds still loads")
+	_assert_equal(str(_recap(game).get("time", "")), str(recap.get("time", "")), "legacy death recap retains its time")
+	# Exercise the field's real load validation, including finite numeric checks.
+	for bad: Variant in ["188.2", true, null, NAN, INF]:
+		var invalid := legacy.duplicate(true)
+		invalid[VaultGame.DEATH_RECAP_KEY]["elapsed_seconds"] = bad
+		_assert_false(game.apply_snapshot(invalid), "death recap rejects elapsed_seconds=%s" % str(bad))
+	_dispose(game)
+
+
+func _test_mid_tick_death_clock() -> void:
+	var game := _game()
+	game.begin_shift()
+	# If the rest of this tick ran, the HUD would cross into day two. The death
+	# callback happens inside advance_needs, before day_cycle.advance.
+	game.day_cycle.advance(DayCycle.SECONDS_PER_DAY - VaultGame.SIMULATION_TICK * 0.5)
+	var before := game.day_cycle.elapsed_seconds
+	var at_death := {}
+	var target := game.residents[0]
+	target.died.connect(_capture_death_clock.bind(game, at_death))
+	game.job_system.release_resident(target)
+	target.drafted = true
+	target.needs.food = 0.0
+	target.needs.rest = 100.0
+	target.needs.mood = 100.0
+	target.needs.health = 0.1
+	game._simulation_step(VaultGame.SIMULATION_TICK)
+	_assert_equal(game.outcome, "death", "starvation death fires inside the fixed tick")
+	_assert_approximately(game.day_cycle.elapsed_seconds, before, 0.000001, "a death aborts the tick before the clock can advance")
+	_assert_equal(game.day_cycle.current_day, 1, "the aborted tick does not cross the day boundary")
+	_assert_death_clock(game, at_death)
+	print("[CLOCK MID TICK] before=%.6f attempted_delta=%.6f instant=%s" % [before, VaultGame.SIMULATION_TICK, JSON.stringify(at_death)])
+	_dispose(game)
+
+
+func _capture_death_clock(_resident: VaultResident, game: VaultGame, evidence: Dictionary) -> void:
+	# Connected after VaultGame's handler, so the recap exists while the died
+	# signal is still being delivered, before control returns to the tick loop.
+	game.player_orders.refresh()
+	evidence.assign({
+		"elapsed_seconds": game.day_cycle.elapsed_seconds,
+		"day": game.day_cycle.current_day,
+		"hud": game.player_orders.clock_label.text,
+		"recap": _recap(game).duplicate(true),
+	})
+
+
+func _assert_death_clock(game: VaultGame, at_death: Dictionary) -> void:
+	var recap := _recap(game)
+	game.player_orders.refresh()
+	_assert_equal(str(recap.get("time", "")), str(at_death.get("hud", "missing")), "recap time equals the HUD refreshed inside the death signal")
+	_assert_equal(str(recap.get("time", "")), game.player_orders.clock_label.text, "recap time still equals the refreshed HUD after the tick returns")
+	_assert_true(recap.has("elapsed_seconds"), "recap records the death's simulated elapsed_seconds")
+	_assert_equal(typeof(recap.get("elapsed_seconds")), TYPE_FLOAT, "death elapsed_seconds is a float")
+	var elapsed := float(recap.get("elapsed_seconds", -1.0))
+	_assert_approximately(elapsed, float(at_death.get("elapsed_seconds", -2.0)), 0.000001, "recap elapsed_seconds equals the clock inside the death signal")
+	_assert_approximately(game.day_cycle.elapsed_seconds, float(at_death.get("elapsed_seconds", -2.0)), 0.000001, "the HUD clock remains frozen at the instant of death")
+	var derived := DayCycle.new()
+	derived.deserialize({"elapsed_seconds": maxf(0.0, elapsed), "current_day": mini(DayCycle.DAYS_TO_SURVIVE, floori(maxf(0.0, elapsed) / DayCycle.SECONDS_PER_DAY) + 1)})
+	_assert_equal(derived.current_day, int(at_death.get("day", 0)), "recap elapsed_seconds derives the death's actual day")
+	_assert_equal(derived.get_clock_text(), str(recap.get("time", "")), "recap elapsed_seconds derives exactly the recorded day and time")
+	derived.free()
+	_assert_true(str(recap.get("time", "")) in game.player_orders.outcome_text.text, "the recap panel includes the recorded clock text")
 
 
 # Canonical JSON: keys sorted, every number normalized to a float (JSON loads ints as floats), so

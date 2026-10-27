@@ -1275,6 +1275,8 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 		# as the resident/building deserializers restore their integer fields.
 		death_recap["version"] = int(death_recap.version)
 		death_recap["resident_id"] = int(death_recap.resident_id)
+		if death_recap.has("elapsed_seconds"):
+			death_recap["elapsed_seconds"] = float(death_recap.elapsed_seconds)
 	player_orders.clear_survival_tips()
 	finish_record = {}
 	var camera_data: Array = snapshot.get("camera", [])
@@ -1689,6 +1691,9 @@ func _is_snapshot_schema_valid(snapshot: Dictionary) -> bool:
 		for key: String in ["name", "cause", "time", "tip"]:
 			if not recap.has(key) or typeof(recap[key]) != TYPE_STRING:
 				return false
+		# Additive in v1: older death recaps have no simulated timestamp.
+		if not _snapshot_fields_valid(recap, {"elapsed_seconds": _SNAPSHOT_NUMBER}):
+			return false
 	if snapshot.has("camera"):
 		if not snapshot.camera is Array:
 			return false

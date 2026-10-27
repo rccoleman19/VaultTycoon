@@ -3302,17 +3302,19 @@ func _remember_survival_tip(step: Dictionary) -> void:
 
 
 func death_recap_for(resident: VaultResident) -> Dictionary:
-	var fraction := game.day_cycle.get_day_fraction()
+	# Use the HUD's clock source at the death signal, before the tick aborts.
+	var clock := game.day_cycle.get_clock_text()
 	if game.keep_running:
-		fraction = fmod(game.keep_running_seconds, DayCycle.SECONDS_PER_DAY) / DayCycle.SECONDS_PER_DAY
-	var hours := floori(fraction * 24.0)
-	var minutes := floori(fmod(fraction * 24.0, 1.0) * 60.0)
-	var day := game.keep_running_day() if game.keep_running else game.day_cycle.current_day
+		var fraction := fmod(game.keep_running_seconds, DayCycle.SECONDS_PER_DAY) / DayCycle.SECONDS_PER_DAY
+		var hours := floori(fraction * 24.0)
+		var minutes := floori(fmod(fraction * 24.0, 1.0) * 60.0)
+		clock = "DAY %d  ·  %02d:%02d" % [game.keep_running_day(), hours, minutes]
 	return {
 		"resident_id": resident.resident_id,
 		"name": resident.resident_name,
 		"cause": ["starvation", "exhaustion", "despair", "suffocation", "unknown causes"][_resident_loss_cause(resident)],
-		"time": ("DAY %d  ·  %02d:%02d" if game.keep_running else "DAY %d/7  ·  %02d:%02d") % [day, hours, minutes],
+		"time": clock,
+		"elapsed_seconds": game.keep_running_seconds if game.keep_running else game.day_cycle.elapsed_seconds,
 		"tip": str(_survival_tips.get(resident.resident_id, "")),
 	}
 
