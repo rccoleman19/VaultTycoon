@@ -3,6 +3,7 @@ extends Node
 
 const SAVE_VERSION := 1
 const DEFAULT_PATH := "user://vault_wing_save.json"
+const CHECKPOINT_PATH := "user://vault_wing_checkpoint.json"
 const _TEMP_SUFFIX := ".tmp"
 const _BACKUP_SUFFIX := ".bak"
 
@@ -50,14 +51,84 @@ func _read_snapshot(path: String) -> Dictionary:
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		return {"ok": false, "message": "Could not open the local save slot."}
-	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	var source := file.get_as_text()
+	var parsed: Variant = JSON.parse_string(source)
 	file.close()
 	if not parsed is Dictionary:
 		return {"ok": false, "message": "The local save is damaged."}
 	var version: Variant = parsed.get("version", -1)
 	if typeof(version) not in [TYPE_INT, TYPE_FLOAT] or float(version) != SAVE_VERSION or not parsed.get("game", null) is Dictionary:
 		return {"ok": false, "message": "The local save uses an unsupported version."}
+	parsed = _preserve_json_integer_types(source, parsed)
 	return {"ok": true, "message": "Wing loaded.", "snapshot": parsed["game"]}
+
+
+# JSON parses every number as float. Preserve the writer's integer lexemes so
+# checkpoint snapshots round-trip byte-for-byte through JSON.stringify().
+func _preserve_json_integer_types(source: String, parsed: Dictionary) -> Dictionary:
+	var lexemes: Array[String] = []
+	var quoted := false
+	var escaped := false
+	var cursor := 0
+	while cursor < source.length():
+		var character := source[cursor]
+		cursor += 1
+		if quoted:
+			if escaped:
+				escaped = false
+			elif character == "\\":
+				escaped = true
+			elif character == "\"":
+				quoted = false
+		elif character == "\"":
+			quoted = true
+		elif character in "-0123456789":
+			var start := cursor - 1
+			while cursor < source.length() and source[cursor] in "0123456789.eE+-":
+				cursor += 1
+			lexemes.append(source.substr(start, cursor - start))
+	var numbers: Array = []
+	_walk_json_numbers(parsed, numbers, [])
+	if numbers.size() != lexemes.size():
+		return parsed
+	for index in numbers.size():
+		var token := lexemes[index]
+		var number := float(numbers[index])
+		# Noncanonical objects (including overwritten duplicate keys) may no
+		# longer traverse in lexical order. Verify everything before changing it.
+		if number != token.to_float():
+			return parsed
+		var digits := token.trim_prefix("-")
+		var limit := "9223372036854775808" if token.begins_with("-") else "9223372036854775807"
+		var fits_int64 := digits.length() < 19 or (digits.length() == 19 and digits <= limit)
+		if token.is_valid_int() and fits_int64 and number >= -9223372036854775808.0 and number < 9223372036854775808.0:
+			var integer := token.to_int()
+			if int(number) == integer:
+				numbers[index] = integer
+	_walk_json_numbers(parsed, numbers, [0])
+	return parsed
+
+
+# Empty cursor collects values without mutation; a one-item cursor restores them.
+func _walk_json_numbers(value: Variant, numbers: Array, cursor: Array) -> Variant:
+	if value is Dictionary:
+		for key: Variant in value:
+			var mapped: Variant = _walk_json_numbers(value[key], numbers, cursor)
+			if not cursor.is_empty():
+				value[key] = mapped
+	elif value is Array:
+		for index in value.size():
+			var mapped: Variant = _walk_json_numbers(value[index], numbers, cursor)
+			if not cursor.is_empty():
+				value[index] = mapped
+	elif typeof(value) in [TYPE_INT, TYPE_FLOAT]:
+		if cursor.is_empty():
+			numbers.append(value)
+		else:
+			var replacement: Variant = numbers[int(cursor[0])]
+			cursor[0] += 1
+			return replacement
+	return value
 
 
 func _promote_temporary_save(temporary_path: String, target_path: String) -> bool:

@@ -633,6 +633,9 @@ func _test_hud_contract() -> void:
 	deceased_resident.kill()
 	orders.refresh()
 	_assert_true("LOW ARI 72% · STEADY" in orders.crew_mood_label.text and "AVERAGE 72%" in orders.crew_mood_label.text, "crew summary excludes deceased residents from low and average mood")
+	_assert_equal(game.outcome, "death", "the deceased resident also opens the death recap")
+	_assert_true(game.user_paused and orders.outcome_panel.visible, "death recap pauses before further recreation orders")
+	_assert_true(game.resume_after_death(), "Resume permits the recreation-order checks to continue")
 
 	game.begin_shift()
 	orders.refresh()

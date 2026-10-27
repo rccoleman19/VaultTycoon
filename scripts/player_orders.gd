@@ -98,6 +98,13 @@ var outcome_title: Label
 var outcome_text: Label
 var outcome_grade: Label
 var outcome_record: Label
+var outcome_resume_button: Button
+var outcome_retry_button: Button
+var _outcome_backdrop: ColorRect
+var _outcome_legacy_row: HBoxContainer
+var _outcome_recap_row: HBoxContainer
+var _survival_tips := {}
+var _survival_tip_sample_left := 0.0
 var work_priorities_overlay: Control
 var work_priorities_panel: PanelContainer
 var work_priorities_button: Button
@@ -853,6 +860,12 @@ func _build_briefing() -> void:
 
 
 func _build_outcome() -> void:
+	_outcome_backdrop = ColorRect.new()
+	_outcome_backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_outcome_backdrop.color = Color(0.02, 0.04, 0.05, 0.76)
+	_outcome_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	_outcome_backdrop.visible = false
+	root.add_child(_outcome_backdrop)
 	outcome_panel = PanelContainer.new()
 	outcome_panel.set_anchors_preset(Control.PRESET_CENTER)
 	outcome_panel.position = Vector2(-260, -145)
@@ -866,7 +879,7 @@ func _build_outcome() -> void:
 		margin.add_theme_constant_override(side, 24)
 	outcome_panel.add_child(margin)
 	var content := VBoxContainer.new()
-	content.add_theme_constant_override("separation", 16)
+	content.add_theme_constant_override("separation", 12)
 	margin.add_child(content)
 	outcome_title = Label.new()
 	outcome_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -895,6 +908,7 @@ func _build_outcome() -> void:
 	outcome_invested.visible = false
 	content.add_child(outcome_invested)
 	var row := HBoxContainer.new()
+	_outcome_legacy_row = row
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	content.add_child(row)
 	var load_button := Button.new()
@@ -911,6 +925,19 @@ func _build_outcome() -> void:
 	outcome_replay_button.visible = false
 	outcome_replay_button.pressed.connect(replay_wing)
 	row.add_child(outcome_replay_button)
+	var recap_row := HBoxContainer.new()
+	_outcome_recap_row = recap_row
+	recap_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	recap_row.add_theme_constant_override("separation", 12)
+	content.add_child(recap_row)
+	outcome_resume_button = Button.new()
+	outcome_resume_button.text = "Resume"
+	outcome_resume_button.pressed.connect(func() -> void: game.resume_after_death())
+	recap_row.add_child(outcome_resume_button)
+	outcome_retry_button = Button.new()
+	outcome_retry_button.text = "Retry from day checkpoint"
+	outcome_retry_button.pressed.connect(func() -> void: game.retry_day_checkpoint())
+	recap_row.add_child(outcome_retry_button)
 	outcome_panel.visible = false
 
 
@@ -2347,6 +2374,10 @@ func _primary_next_step() -> Dictionary:
 
 # Returns the Next step it showed ({} for an outcome line) so refresh() reuses it.
 func _refresh_objective() -> Dictionary:
+	if game.outcome == "death":
+		objective_label.text = "RESIDENT LOST // review recap to resume"
+		objective_label.add_theme_color_override("font_color", Color("ef6860"))
+		return {}
 	if game.ended and game.outcome == "win":
 		# The SEAL STABILIZED panel is up: report the result, not a Next tip.
 		# Short like #90's "WING LOST // no residents remain" so it fits one line.
@@ -2357,6 +2388,7 @@ func _refresh_objective() -> Dictionary:
 		return {}
 	if game.keep_running and not game.ended:
 		var kr_step := keep_running_next_step()
+		_remember_survival_tip(kr_step)
 		objective_label.text = str(kr_step.text)
 		objective_label.add_theme_color_override("font_color", Color("efc56b"))
 		_expand_details_on_urgency()
@@ -2378,6 +2410,7 @@ func _refresh_objective() -> Dictionary:
 		_expand_details_on_urgency()
 		return {}
 	var step: Dictionary = _primary_next_step()
+	_remember_survival_tip(step)
 	objective_label.text = str(step.get("text", "NEXT // Survive"))
 	objective_label.add_theme_color_override("font_color", Color("efc56b"))
 	_expand_details_on_urgency()
@@ -3165,6 +3198,7 @@ func open_help() -> void:
 		game == null
 		or game.tutorial_open
 		or game.ended
+		or game.outcome == "death"
 		or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
 	):
 		return
@@ -3204,6 +3238,7 @@ func show_work_priorities(visible: bool) -> void:
 		or game.tutorial_open
 		or is_help_open()
 		or game.ended
+		or game.outcome == "death"
 		or (game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged)
 	):
 		return
@@ -3240,12 +3275,62 @@ func _reveal_fixture_controls() -> void:
 		right_scroll.scroll_vertical = roundi(inspector_title.position.y)
 
 
+func clear_survival_tips() -> void:
+	_survival_tips.clear()
+	_survival_tip_sample_left = 0.0
+
+
+# Sample the very same selection used by the Next label, even without a HUD
+# refresh (headless simulation). UI refreshes also retain the exact shown step.
+func record_survival_tip(delta_seconds := 0.5) -> void:
+	if game.outcome != "" or game.ended:
+		return
+	_survival_tip_sample_left -= maxf(0.0, delta_seconds)
+	if _survival_tip_sample_left > 0.0:
+		return
+	_survival_tip_sample_left = 0.5
+	_remember_survival_tip(keep_running_next_step() if game.keep_running else _primary_next_step())
+
+
+func _remember_survival_tip(step: Dictionary) -> void:
+	if bool(step.get("too_late", false)) or bool(step.get("recovering", false)):
+		return
+	var resident := game.get_resident_by_id(int(step.get("resident_id", -1)))
+	var tip := str(step.get("text", ""))
+	if resident != null and resident.alive and tip.begins_with("Next: ") and resident.resident_name in tip:
+		_survival_tips[resident.resident_id] = tip
+
+
+func death_recap_for(resident: VaultResident) -> Dictionary:
+	var fraction := game.day_cycle.get_day_fraction()
+	if game.keep_running:
+		fraction = fmod(game.keep_running_seconds, DayCycle.SECONDS_PER_DAY) / DayCycle.SECONDS_PER_DAY
+	var hours := floori(fraction * 24.0)
+	var minutes := floori(fmod(fraction * 24.0, 1.0) * 60.0)
+	var day := game.keep_running_day() if game.keep_running else game.day_cycle.current_day
+	return {
+		"resident_id": resident.resident_id,
+		"name": resident.resident_name,
+		"cause": ["starvation", "exhaustion", "despair", "suffocation", "unknown causes"][_resident_loss_cause(resident)],
+		"time": ("DAY %d  ·  %02d:%02d" if game.keep_running else "DAY %d/7  ·  %02d:%02d") % [day, hours, minutes],
+		"tip": str(_survival_tips.get(resident.resident_id, "")),
+	}
+
+
 func show_outcome(won: bool, survivors: int) -> void:
 	outcome_replay_button.visible = game.wing_seed != 0
 	show_briefing(false)
 	show_work_priorities(false)
 	show_breach_warning(false)
 	outcome_panel.visible = true
+	_outcome_backdrop.visible = not won
+	var resumable := not won and game.outcome == "death" and game.get_alive_count() > 0
+	outcome_resume_button.visible = resumable
+	outcome_resume_button.disabled = not resumable
+	outcome_retry_button.visible = not won
+	outcome_retry_button.disabled = not game.can_retry_day_checkpoint()
+	_outcome_recap_row.visible = not won
+	_outcome_legacy_row.visible = not resumable
 	var invested := mk2_salvage_invested()
 	outcome_invested.text = "Salvage invested: %d in Mk II upgrades" % invested
 	outcome_invested.visible = invested > 0
@@ -3258,15 +3343,42 @@ func show_outcome(won: bool, survivors: int) -> void:
 		outcome_grade.add_theme_color_override("font_color", CREW_GRADE_COLORS[int(grade["stars"]) - 1])
 		outcome_grade.visible = true
 	else:
-		outcome_grade.text = format_loss_cause(loss_cause())
+		# Keep the frozen-corpse cause summary, with the single recorded Next tip
+		# below instead of a second generic advice engine on this screen.
+		outcome_grade.text = "" if resumable else format_loss_cause(loss_cause()).get_slice("\n", 0)
 		outcome_grade.add_theme_color_override("font_color", Color("ef6860"))
 		outcome_grade.visible = not outcome_grade.text.is_empty()
-		outcome_title.text = "WING LOST"
+		outcome_title.text = "RESIDENT LOST" if resumable else "WING LOST"
 		outcome_title.add_theme_color_override("font_color", Color("ef6860"))
-		outcome_text.text = "No residents remain alive. Reopen the last daily checkpoint or initialize a new wing and stabilize supplies, powered air recycling, and the pressure hatch sooner."
+		var recap := game.death_recap
+		if recap.is_empty():
+			# Legacy loss saves have frozen need facts, but no recorded live tip.
+			for resident: VaultResident in game.residents:
+				if not resident.alive:
+					recap = death_recap_for(resident)
+		var prefix := "No residents remain alive.\n\n" if survivors <= 0 else ""
+		var tip := str(recap.get("tip", ""))
+		outcome_text.text = "%s%s died of %s.\n%s\n\n%s" % [
+			prefix, recap.get("name", "A resident"), recap.get("cause", "unknown causes"),
+			recap.get("time", game.day_cycle.get_clock_text()),
+			tip if not tip.is_empty() else "No tip could have saved them.",
+		]
 	outcome_record.text = record_line(won)
-	outcome_record.visible = not outcome_record.text.is_empty()
+	outcome_record.visible = not resumable and not outcome_record.text.is_empty()
 	_show_keep_running_button(won)
+	if resumable:
+		for button: Button in [outcome_resume_button, outcome_retry_button]:
+			var other := outcome_retry_button if button == outcome_resume_button and not outcome_retry_button.disabled else outcome_resume_button
+			var target := button.get_path_to(other)
+			button.focus_next = target
+			button.focus_previous = target
+			button.focus_neighbor_left = target
+			button.focus_neighbor_right = target
+			button.focus_neighbor_top = target
+			button.focus_neighbor_bottom = target
+		outcome_resume_button.grab_focus()
+	elif not won and not outcome_retry_button.disabled:
+		outcome_retry_button.grab_focus()
 
 
 # Records + ladder C3: the wing's record under the crew rating. A win shows the best grade, a loss
@@ -3359,23 +3471,25 @@ const LOSS_CAUSE_HINTS: Array[String] = [
 
 func loss_cause() -> Array[int]:
 	var counts: Array[int] = [0, 0, 0, 0, 0]
-	var air_lost := game.oxygen_system.oxygen <= OxygenSystem.CRITICAL_OXYGEN_THRESHOLD
 	for resident: VaultResident in game.residents:
 		if resident.alive:
 			continue
-		if resident.needs.health > 0.0:
-			counts[4] += 1
-		elif resident.needs.food <= 0.0:
-			counts[0] += 1
-		elif resident.needs.rest <= 0.0:
-			counts[1] += 1
-		elif resident.needs.mood <= ResidentNeeds.SEVERE_MOOD_THRESHOLD:
-			counts[2] += 1
-		elif air_lost:
-			counts[3] += 1
-		else:
-			counts[4] += 1
+		counts[_resident_loss_cause(resident)] += 1
 	return counts
+
+
+func _resident_loss_cause(resident: VaultResident) -> int:
+	if resident.needs.health > 0.0:
+		return 4
+	if resident.needs.food <= 0.0:
+		return 0
+	if resident.needs.rest <= 0.0:
+		return 1
+	if resident.needs.mood <= ResidentNeeds.SEVERE_MOOD_THRESHOLD:
+		return 2
+	if game.oxygen_system.oxygen <= OxygenSystem.CRITICAL_OXYGEN_THRESHOLD:
+		return 3
+	return 4
 
 
 func format_loss_cause(counts: Array[int]) -> String:
@@ -3395,6 +3509,7 @@ func format_loss_cause(counts: Array[int]) -> String:
 func hide_outcome() -> void:
 	if outcome_panel != null:
 		outcome_panel.visible = false
+		_outcome_backdrop.visible = false
 
 
 func _set_need(key: String, label_text: String, value: float) -> void:
