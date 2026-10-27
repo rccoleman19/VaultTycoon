@@ -53,6 +53,7 @@ func _day_seven_pending_game() -> VaultGame:
 func _suffocate(game: VaultGame) -> void:
 	var ticks := 0
 	while not game.ended and ticks < int(round(SUFFOCATION_BOUND / VaultGame.SIMULATION_TICK)):
+		_resume_death_recap(game, "suffocation clock")
 		game.oxygen_system.oxygen = 0.0
 		game._simulation_step(VaultGame.SIMULATION_TICK)
 		ticks += 1

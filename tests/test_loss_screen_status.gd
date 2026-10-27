@@ -117,6 +117,7 @@ func _test_real_wipe_open() -> void:
 	var guard := 0
 	var saw_live_blocker := false
 	while not game.ended and guard < 4000:
+		_resume_death_recap(game, "real OPEN wipe")
 		game.user_paused = false
 		game.step_simulation(TICK)
 		guard += 1
@@ -192,6 +193,8 @@ func _test_single_survivor() -> void:
 	for index: int in range(1, game.residents.size()):
 		game.residents[index].kill()
 	_assert_equal(game.get_alive_count(), 1, "one resident left alive")
+	_assert_equal(game.outcome, "death", "crew deaths show a resumable outcome before the win")
+	_resume_death_recap(game, "lone survivor")
 	game.step_simulation(2.0)
 	_assert_true(game.ended and game.outcome == "win", "a lone survivor still wins")
 	game.player_orders.refresh()

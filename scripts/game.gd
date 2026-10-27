@@ -88,6 +88,9 @@ const SUBLEVEL_MODIFIERS := {
 # whenever the main loop runs a script (tests, QA drivers) unless records_path is injected, so no
 # test or tool ever touches the player's user://wing_records.json.
 var records_path := ""
+var save_path := SaveLoad.DEFAULT_PATH
+# Day recovery uses its own atomic slot, never the player's manual/autosave slot.
+var checkpoint_path := SaveLoad.CHECKPOINT_PATH
 var _wing_records: WingRecords = null
 # Records + ladder C3: this run's record as written at the finish transition, for the outcome
 # panel's NEW RECORD mark. Transient: never saved, cleared by NEW WING and LOAD.
@@ -163,6 +166,9 @@ var outcome := "":
 		outcome = value
 		if day_cycle != null:
 			day_cycle.wing_lost = value == "loss"
+const DEATH_RECAP_KEY := "death_recap"
+const DEATH_RECAP_VERSION := 1
+var death_recap := {}
 var status_message := "Select DIG and mark rock beside the chamber."
 var status_message_left := 0.0
 
@@ -340,6 +346,8 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 	player_orders.show_wing_id(wing_seed)
 	ended = false
 	outcome = ""
+	death_recap = {}
+	player_orders.clear_survival_tips()
 	finish_record = {}
 	active_tool = "select"
 	map_grid.preview_tool = active_tool
@@ -403,20 +411,27 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 
 
 func begin_shift() -> void:
+	if ended or outcome == "death":
+		return
 	tutorial_open = false
 	user_paused = false
 	player_orders.show_briefing(false)
 	status_message = "YOU designate dig/build. THEY auto-claim Dig/Haul/Craft/Cook from defaults (P optional)."
 	status_message_left = 10.0
+	if day_cycle.elapsed_seconds == 0.0:
+		_save_day_checkpoint()
 
 
 
 
 func _simulation_step(delta_seconds: float) -> void:
-	if ended:
+	if ended or outcome == "death":
 		return
 	power_grid.recalculate(buildings)
 	job_system.reconcile_recreation_state()
+	# Sample the actual live Next selector before damage can kill its named resident.
+	# This runs for manual/headless steps too, independently of UI refreshes.
+	player_orders.record_survival_tip(delta_seconds)
 	for resident in residents:
 		if not resident.alive:
 			continue
@@ -432,6 +447,8 @@ func _simulation_step(delta_seconds: float) -> void:
 			job_system.is_actively_recreating(resident) or (resident.stress_break_left > 0.0 and not resident.drafted),
 			oxygen_system.is_low(),
 		)
+		if outcome in ["death", "loss"]:
+			return
 	_update_dark_alert(delta_seconds)
 	var next_elapsed := minf(
 		day_cycle.elapsed_seconds + delta_seconds,
@@ -456,6 +473,8 @@ func _simulation_step(delta_seconds: float) -> void:
 		buildings,
 		phase_before_step == BreachSystem.Phase.OPEN,
 	)
+	if outcome in ["death", "loss"]:
+		return
 	if get_alive_count() <= 0:
 		_finish_loss()
 		return
@@ -494,12 +513,13 @@ func is_simulation_paused() -> bool:
 		user_paused
 		or tutorial_open
 		or ended
+		or outcome == "death"
 		or (player_orders != null and player_orders.is_briefing_open())
 	)
 
 
 func toggle_pause() -> void:
-	if tutorial_open or ended or player_orders.is_help_open():
+	if tutorial_open or ended or outcome == "death" or player_orders.is_help_open():
 		return
 	if user_paused and breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged:
 		acknowledge_breach_warning(true)
@@ -508,7 +528,7 @@ func toggle_pause() -> void:
 
 
 func set_speed(speed: int) -> void:
-	if player_orders.is_briefing_open():
+	if player_orders.is_briefing_open() or outcome == "death":
 		return
 	simulation_speed = clampi(speed, 1, 3)
 	if not tutorial_open and not ended:
@@ -527,7 +547,7 @@ func set_tool(tool: String) -> void:
 
 
 func issue_order(cell: Vector2i) -> bool:
-	if ended or tutorial_open or player_orders.is_help_open() or not map_grid.is_inside(cell):
+	if ended or outcome == "death" or tutorial_open or player_orders.is_help_open() or not map_grid.is_inside(cell):
 		return false
 	if active_tool == "select":
 		return _select_at(cell)
@@ -956,7 +976,7 @@ func get_resident_by_id(resident_id: int) -> VaultResident:
 
 
 func toggle_resident_draft(resident_id: int) -> bool:
-	if tutorial_open or ended or player_orders.is_help_open() or player_orders.is_work_priorities_open():
+	if tutorial_open or ended or outcome == "death" or player_orders.is_help_open() or player_orders.is_work_priorities_open():
 		return false
 	if breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged:
 		return false
@@ -985,7 +1005,7 @@ func toggle_resident_draft(resident_id: int) -> bool:
 
 
 func issue_selected_resident_context_order(cell: Vector2i) -> bool:
-	if ended or tutorial_open or player_orders.is_help_open() or player_orders.is_work_priorities_open() or not map_grid.is_inside(cell):
+	if ended or outcome == "death" or tutorial_open or player_orders.is_help_open() or player_orders.is_work_priorities_open() or not map_grid.is_inside(cell):
 		return false
 	var resident := get_resident_by_id(selected_resident_id)
 	if resident == null or not resident.alive:
@@ -1093,16 +1113,16 @@ func get_completed_building_count(kind: int, exclude_core := false) -> int:
 	return count
 
 
-func save_game(show_message := true, path := SaveLoad.DEFAULT_PATH) -> bool:
-	var result := save_load.save_snapshot(create_snapshot(), path)
+func save_game(show_message := true, path := "") -> bool:
+	var result := save_load.save_snapshot(create_snapshot(), save_path if path == "" else path)
 	if show_message:
 		status_message = str(result.message)
 		status_message_left = 4.0
 	return bool(result.ok)
 
 
-func load_game(path := SaveLoad.DEFAULT_PATH) -> bool:
-	var result := save_load.load_snapshot(path)
+func load_game(path := "") -> bool:
+	var result := save_load.load_snapshot(save_path if path == "" else path)
 	status_message = str(result.message)
 	status_message_left = 5.0
 	if not bool(result.ok):
@@ -1114,7 +1134,7 @@ func load_game(path := SaveLoad.DEFAULT_PATH) -> bool:
 	tutorial_open = false
 	user_paused = true
 	player_orders.show_briefing(false)
-	if ended:
+	if ended or outcome == "death":
 		player_orders.show_outcome(outcome == "win", get_alive_count())
 	else:
 		player_orders.hide_outcome()
@@ -1124,6 +1144,8 @@ func load_game(path := SaveLoad.DEFAULT_PATH) -> bool:
 # Post-seal reclamation: an additive, versioned key, written only once the player started it.
 func create_snapshot() -> Dictionary:
 	var snapshot := _create_base_snapshot()
+	if not death_recap.is_empty():
+		snapshot[DEATH_RECAP_KEY] = death_recap.duplicate(true)
 	if reclaim_active:
 		snapshot[RECLAIM_KEY] = {"version": RECLAIM_VERSION, "elapsed": reclaim_elapsed, "paid": reclaim_paid}
 	if idle_start_stage == 1:
@@ -1247,6 +1269,15 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	_idle_start_floor_count = -1
 	ended = bool(snapshot.get("ended", false))
 	outcome = str(snapshot.get("outcome", ""))
+	death_recap = snapshot.get(DEATH_RECAP_KEY, {}).duplicate(true)
+	if not death_recap.is_empty():
+		# JSON parses numbers as floats; restore the recap's integer schema just
+		# as the resident/building deserializers restore their integer fields.
+		death_recap["version"] = int(death_recap.version)
+		death_recap["resident_id"] = int(death_recap.resident_id)
+		if death_recap.has("elapsed_seconds"):
+			death_recap["elapsed_seconds"] = float(death_recap.elapsed_seconds)
+	player_orders.clear_survival_tips()
 	finish_record = {}
 	var camera_data: Array = snapshot.get("camera", [])
 	if camera_data.size() >= 3:
@@ -1276,11 +1307,14 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	player_orders.show_breach_warning(
 		breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged
 	)
-	if ended:
+	if ended or outcome == "death":
+		user_paused = true
 		if outcome == "win":
 			player_orders.show_outcome(true, get_alive_count())
 		else:
-			player_orders.show_outcome(false, 0)
+			player_orders.show_outcome(false, get_alive_count())
+	else:
+		player_orders.hide_outcome()
 	return true
 
 
@@ -1600,6 +1634,19 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	var saved_outcome := str(snapshot.get("outcome", ""))
 	if saved_ended != (saved_outcome in ["win", "loss"]):
 		return false
+	if saved_outcome == "death" and (living_residents <= 0 or not snapshot.has(DEATH_RECAP_KEY)):
+		return false
+	if snapshot.has(DEATH_RECAP_KEY):
+		if saved_outcome not in ["death", "loss"]:
+			return false
+		var recap: Dictionary = snapshot[DEATH_RECAP_KEY]
+		var named_dead_resident := false
+		for entry: Dictionary in resident_data:
+			if int(entry.get("id", -1)) == int(recap.resident_id) and not bool(entry.get("alive", true)) and str(entry.get("name", "")) == str(recap.name):
+				named_dead_resident = true
+				break
+		if not named_dead_resident:
+			return false
 	if saved_outcome == "loss" and living_residents > 0:
 		return false
 	if saved_outcome == "win":
@@ -1635,6 +1682,18 @@ func _is_snapshot_schema_valid(snapshot: Dictionary) -> bool:
 			return false
 	if not _snapshot_fields_valid(snapshot, {"next_building_id": _SNAPSHOT_INT, "ended": _SNAPSHOT_BOOL, "outcome": _SNAPSHOT_STRING}):
 		return false
+	if snapshot.has(DEATH_RECAP_KEY):
+		var recap: Variant = snapshot[DEATH_RECAP_KEY]
+		if not recap is Dictionary or not _is_integer_in_range(recap.get("version"), DEATH_RECAP_VERSION, DEATH_RECAP_VERSION):
+			return false
+		if not _is_integer_in_range(recap.get("resident_id"), 1, 2_147_483_647):
+			return false
+		for key: String in ["name", "cause", "time", "tip"]:
+			if not recap.has(key) or typeof(recap[key]) != TYPE_STRING:
+				return false
+		# Additive in v1: older death recaps have no simulated timestamp.
+		if not _snapshot_fields_valid(recap, {"elapsed_seconds": _SNAPSHOT_NUMBER}):
+			return false
 	if snapshot.has("camera"):
 		if not snapshot.camera is Array:
 			return false
@@ -1890,6 +1949,13 @@ func _issue_drafted_move(resident: VaultResident, cell: Vector2i) -> bool:
 
 
 func _input(event: InputEvent) -> void:
+	if outcome == "death" and (
+		event.is_action_pressed("pause_game")
+		or event.is_action_pressed("cancel_order")
+		or event.is_action_pressed("work_priorities")
+	):
+		get_viewport().set_input_as_handled()
+		return
 	if player_orders != null and player_orders.is_briefing_open():
 		if player_orders.is_help_open() and event.is_action_pressed("cancel_order"):
 			player_orders.show_briefing(false)
@@ -1909,6 +1975,9 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if outcome == "death":
+		get_viewport().set_input_as_handled()
+		return
 	if player_orders.is_briefing_open():
 		if player_orders.is_help_open() and event.is_action_pressed("cancel_order"):
 			player_orders.show_briefing(false)
@@ -2019,9 +2088,9 @@ func acknowledge_breach_warning(resume_response: bool) -> void:
 
 
 func _update_camera(delta: float) -> void:
-	if player_orders != null and (
+	if outcome == "death" or (player_orders != null and (
 		player_orders.is_work_priorities_open() or player_orders.is_briefing_open()
-	):
+	)):
 		_dragging_camera = false
 		return
 	var direction := Input.get_vector("camera_left", "camera_right", "camera_up", "camera_down")
@@ -2137,16 +2206,122 @@ func _is_reserved_cell(cell: Vector2i) -> bool:
 
 
 func _on_resident_died(resident: VaultResident) -> void:
+	if ended:
+		return
 	job_system.release_resident(resident)
-	user_paused = true
-	status_message = "%s has died. The shift has been paused." % resident.resident_name
+	death_recap = player_orders.death_recap_for(resident)
+	death_recap["version"] = DEATH_RECAP_VERSION
+	status_message = "%s has died. Review the death recap." % resident.resident_name
 	status_message_left = 8.0
 	if get_alive_count() <= 0:
 		_finish_loss()
+	else:
+		_finish_death()
+
+
+func _finish_death() -> void:
+	if ended:
+		return
+	# This recap is a recoverable interruption, not a finished or won wing.
+	ended = false
+	outcome = "death"
+	user_paused = true
+	status_message = "%s has died. Review the death recap." % str(death_recap.get("name", "A resident"))
+	status_message_left = 8.0
+	player_orders.show_outcome(false, get_alive_count())
+
+
+# Possibility, not a forecast: victory needs day 7 complete, a sealed breach and
+# breathable oxygen. Optional wing orders never gate it. With no living crew it
+# is impossible; endless keep-running crew can always continue. Otherwise only
+# a proven food wipe before day 7 rules victory out. Air, work, power and hatch
+# forecasts can change with player fixes / fewer mouths, so uncertainty is true.
+func can_still_win_shift() -> bool:
+	if get_alive_count() <= 0:
+		return false
+	if keep_running:
+		return true
+	var seconds_left := maxf(0.0, DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE - day_cycle.elapsed_seconds)
+	return not player_orders._food_wipe_before(seconds_left)
+
+
+func resume_after_death() -> bool:
+	# Enforce the same decision for callers that bypass the recap button.
+	if outcome != "death" or not can_still_win_shift():
+		return false
+	outcome = ""
+	ended = false
+	death_recap = {}
+	user_paused = false
+	player_orders.hide_outcome()
+	status_message = "Shift resumed. Protect the surviving residents."
+	status_message_left = 5.0
+	return true
+
+
+func _save_day_checkpoint() -> bool:
+	return bool(save_load.save_snapshot(create_snapshot(), checkpoint_path).ok)
+
+
+# Read-only: inspect the same snapshot Retry will apply, including backup recovery.
+func day_checkpoint_retry_status() -> Dictionary:
+	var result := save_load.load_snapshot(checkpoint_path)
+	result["reason"] = "No day checkpoint available"
+	if not bool(result.ok):
+		return result
+	var snapshot: Dictionary = result.snapshot
+	result.ok = false
+	if not _is_snapshot_shape_valid(snapshot):
+		return result
+	if _snapshot_wing_seed(snapshot) != wing_seed:
+		result.reason = "No checkpoint for this wing"
+		return result
+	if _snapshot_sublevel(snapshot) != sublevel:
+		result.reason = "No checkpoint for this wing"
+		return result
+	if snapshot.has(KEEP_RUNNING_KEY) != keep_running:
+		result.reason = "Checkpoint is from another time"
+		return result
+	var checkpoint_elapsed := float(snapshot[KEEP_RUNNING_KEY].seconds) if keep_running else float(snapshot.get("day", {}).get("elapsed_seconds", 0.0))
+	var current_elapsed := keep_running_seconds if keep_running else day_cycle.elapsed_seconds
+	if checkpoint_elapsed > current_elapsed:
+		result.reason = "Checkpoint is from a later time"
+		return result
+	result.ok = true
+	result.reason = ""
+	return result
+
+
+func can_retry_day_checkpoint() -> bool:
+	return bool(day_checkpoint_retry_status().ok)
+
+
+func retry_day_checkpoint() -> bool:
+	var result := day_checkpoint_retry_status()
+	# Callers can bypass the disabled recap button. Refuse before changing any state.
+	if not bool(result.ok):
+		return false
+	if not apply_snapshot(result.snapshot):
+		status_message = "Could not restore the day checkpoint."
+		status_message_left = 5.0
+		return false
+	# Pause is not serialized: all serialized fields remain exactly as checkpointed.
+	tutorial_open = false
+	user_paused = true
+	outcome = ""
+	ended = false
+	death_recap = {}
+	player_orders.show_briefing(false)
+	player_orders.show_work_priorities(false)
+	player_orders.hide_outcome()
+	status_message = "Day checkpoint restored. Resume when ready."
+	status_message_left = 5.0
+	return true
 
 
 func _on_day_started(_day: int) -> void:
-	if not ended:
+	if not ended and outcome != "death":
+		_save_day_checkpoint()
 		save_game(false)
 		if breach_system.is_response_active() or (breach_system.is_sealed() and status_message_left > 0.0):
 			return
@@ -2198,7 +2373,7 @@ func _on_breach_sealed() -> void:
 
 
 func _finish_win() -> void:
-	if ended or keep_running:
+	if ended or keep_running or outcome == "death":
 		return
 	ended = true
 	outcome = "win"
@@ -2285,6 +2460,7 @@ func start_keep_running() -> bool:
 	player_orders.hide_outcome()
 	status_message = "Keep running: the seal win is recorded. The vault carries on."
 	status_message_left = 5.0
+	_save_day_checkpoint()
 	save_game(false)
 	return true
 
@@ -2302,6 +2478,7 @@ func _advance_keep_running(delta_seconds: float) -> void:
 	if keep_running_day() != day_before:
 		_maybe_feast()
 		_record_progress()
+		_save_day_checkpoint()
 		save_game(false)
 
 

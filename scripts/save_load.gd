@@ -3,6 +3,7 @@ extends Node
 
 const SAVE_VERSION := 1
 const DEFAULT_PATH := "user://vault_wing_save.json"
+const CHECKPOINT_PATH := "user://vault_wing_checkpoint.json"
 const _TEMP_SUFFIX := ".tmp"
 const _BACKUP_SUFFIX := ".bak"
 

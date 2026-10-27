@@ -2569,7 +2569,12 @@ func _test_atomic_save_recovery() -> void:
 func _test_unmanaged_loss() -> void:
 	var game := _spawn_game()
 	game.begin_shift()
-	game.step_simulation(DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE)
+	var step_limit := int(round(DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE / VaultGame.SIMULATION_TICK))
+	for _tick: int in step_limit:
+		_resume_death_recap(game, "unmanaged final loss")
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		if game.ended:
+			break
 
 	_assert_true(game.ended, "untouched starting wing reaches an outcome")
 	_assert_equal(game.outcome, "loss", "starting supplies and finite oxygen cannot sustain an unmanaged wing")
@@ -2739,6 +2744,18 @@ func _spawn_game() -> VaultGame:
 	if game != null:
 		root.add_child(game)
 	return game
+
+
+# Wipe fixtures deliberately continue past each resumable resident-death recap.
+# A plain simulation step must no longer dismiss that player decision implicitly.
+func _resume_death_recap(game: VaultGame, label: String) -> void:
+	if game.outcome != "death":
+		return
+	_assert_true(not game.ended and game.get_alive_count() > 0, "%s: death leaves a continuing wing" % label)
+	_assert_true(game.user_paused and game.player_orders.outcome_panel.visible, "%s: resident death pauses with a visible recap" % label)
+	game.resume_after_death()
+	_assert_equal(game.outcome, "", "%s: Resume clears the death outcome" % label)
+	_assert_false(game.user_paused or game.player_orders.outcome_panel.visible, "%s: Resume unpauses and hides the recap" % label)
 
 
 func _add_completed_building(game: VaultGame, kind: int, cell: Vector2i) -> VaultBuilding:

@@ -3,11 +3,8 @@ extends "res://tests/test_runner.gd"
 # Wing-seed slice 4: REPLAY WING on the outcome panel restarts the same seeded wing.
 # Seed 0 never shows it.
 
-const LEGACY_LOSS := "No residents remain alive. Reopen the last daily checkpoint or initialize a new wing and stabilize supplies, powered air recycling, and the pressure hatch sooner."
-
-
 func _run() -> void:
-	_run_case("legacy outcome panels keep two buttons and their text", _test_legacy)
+	_run_case("legacy outcomes keep their actions and loss shows the recap", _test_legacy)
 	_run_case("seeded win and loss panels offer REPLAY WING", _test_seeded)
 	_run_case("REPLAY WING starts a fresh run of the same seed", _test_replay)
 	_run_case("the replay briefing hides LOAD of the ended run's checkpoint", _test_replay_hides_load)
@@ -39,8 +36,12 @@ func _test_legacy() -> void:
 	game._finish_loss()
 	var orders := game.player_orders
 	_assert_true(orders.outcome_panel.visible, "loss panel shows")
-	_assert_equal(_visible_buttons(orders), ["LOAD LAST CHECKPOINT", "NEW WING"] as Array[String], "legacy loss keeps two buttons")
-	_assert_equal(orders.outcome_text.text, LEGACY_LOSS, "legacy loss text unchanged")
+	_assert_equal(_visible_buttons(orders), ["LOAD LAST CHECKPOINT", "NEW WING"] as Array[String], "legacy loss keeps both legacy actions")
+	_assert_true(orders.outcome_retry_button.visible, "loss also offers Retry from day checkpoint")
+	_assert_false(orders.outcome_resume_button.visible, "loss cannot Resume")
+	_assert_true(orders.outcome_text.text.begins_with("No residents remain alive.\n\n"), "loss recap keeps the final-loss explanation")
+	_assert_true("died of" in orders.outcome_text.text and "DAY " in orders.outcome_text.text, "loss recap identifies cause and sim time")
+	_assert_true("No tip could have saved them." in orders.outcome_text.text, "a loss without live tip history says no tip was available")
 	_dispose(game)
 	game = _spawn_game()
 	game.new_game(false, 0)
@@ -60,6 +61,7 @@ func _test_seeded() -> void:
 		else:
 			game._finish_loss()
 		_assert_equal(_visible_buttons(game.player_orders), ["LOAD LAST CHECKPOINT", "NEW WING", "REPLAY WING"] as Array[String], "seeded %s offers REPLAY WING last" % ("win" if won else "loss"))
+		_assert_equal(game.player_orders.outcome_retry_button.visible, not won, "Retry is offered on loss while win actions stay unchanged")
 		_dispose(game)
 
 

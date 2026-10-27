@@ -77,6 +77,8 @@ func _test_worse_win() -> void:
 	game.residents[0].needs.health = 0.0
 	game.residents[0].kill()
 	_assert_equal(int(game.player_orders.crew_grade()["stars"]), 2, "one crew lost: two stars")
+	_assert_equal(game.outcome, "death", "one crew loss opens the resumable recap without recording a win")
+	_resume_death_recap(game, "worse later win")
 	_win(game)
 	_assert_equal(int(game.wing_records().get_record(4242).best_stars), 3, "the best grade is kept")
 	_assert_equal(game.player_orders.outcome_record.text, "BEST ★★★", "no NEW RECORD for a worse win")
@@ -85,6 +87,8 @@ func _test_worse_win() -> void:
 	game = _game(0x0BAD)
 	game.residents[0].needs.health = 0.0
 	game.residents[0].kill()
+	_assert_equal(game.outcome, "death", "the first crew loss also requires Resume before a later win")
+	_resume_death_recap(game, "first two-star win")
 	_win(game)
 	_assert_equal(game.player_orders.outcome_record.text, "BEST ★★☆ · NEW RECORD", "a first 2-star win on another wing is a new record")
 	_dispose(game)

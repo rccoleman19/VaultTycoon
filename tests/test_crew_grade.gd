@@ -175,7 +175,8 @@ func _test_loss_unchanged() -> void:
 	_assert_equal(orders.outcome_text.text, loss_text, "loss text identical after a win was shown")
 	_assert_true(not orders.outcome_grade.visible and orders.outcome_grade.text == "", "loss hides and clears the grade")
 	_assert_equal(orders.outcome_title.text, "WING LOST", "loss title")
-	_assert_true(orders.outcome_text.text.begins_with("No residents remain alive."), "loss body unchanged")
+	_assert_true(orders.outcome_text.text.begins_with("No residents remain alive."), "loss recap keeps the final-loss explanation")
+	_assert_true("No tip could have saved them." in orders.outcome_text.text, "loss without an actionable history explains that no tip was available")
 	_assert_equal(orders.outcome_panel.position, loss_pos, "panel position never moved")
 	_assert_equal(orders.outcome_panel.size, loss_size, "panel size never changed")
 	_dispose(game)
@@ -266,9 +267,10 @@ func _test_loss_causes() -> void:
 	_dispose(healthy_kill)
 	var orders := game.player_orders
 	orders.show_outcome(false, 0)
-	_assert_true(orders.outcome_grade.visible and orders.outcome_grade.text == _cause(game), "loss panel shows the cause")
+	_assert_true(orders.outcome_grade.visible and orders.outcome_grade.text == _cause(game).get_slice("\n", 0), "loss panel shows the cause summary without a second tip")
 	_assert_equal(orders.outcome_grade.get_theme_color("font_color"), Color("ef6860"), "cause reads red")
-	_assert_true(orders.outcome_text.text.begins_with("No residents remain alive."), "loss body unchanged")
+	_assert_true(orders.outcome_text.text.begins_with("No residents remain alive."), "loss recap keeps the final-loss explanation")
+	_assert_true("died of" in orders.outcome_text.text and "DAY " in orders.outcome_text.text, "loss recap identifies the death and its sim time")
 	_assert_equal(orders.outcome_title.text, "WING LOST", "loss title unchanged")
 	var before := JSON.stringify(game.create_snapshot())
 	orders.show_outcome(false, 0)
@@ -285,16 +287,17 @@ func _test_real_idle_loss() -> void:
 	while not game.ended and t < 400.0:
 		if game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged:
 			game.acknowledge_breach_warning(true)
+		_resume_death_recap(game, "real idle loss")
 		game.user_paused = false
 		game.step_simulation(1.0)
 		t += 1.0
 	_assert_true(game.ended and game.outcome == "loss", "an untouched wing is lost")
 	var orders := game.player_orders
 	print("REAL IDLE LOSS at %.0fs: %s" % [game.day_cycle.elapsed_seconds, orders.outcome_grade.text.replace("\n", " | ")])
-	_assert_equal(orders.outcome_grade.text, "LIKELY CAUSE · 4 starved\n" + STARVED_HINT, "idle loss reads starved")
+	_assert_equal(orders.outcome_grade.text, "LIKELY CAUSE · 4 starved", "idle loss reads starved without a second tip")
 	var snap := JSON.stringify(game.create_snapshot())
 	_assert_true(game.apply_snapshot(JSON.parse_string(snap)), "lost snapshot reloads")
-	_assert_equal(game.player_orders.outcome_grade.text, "LIKELY CAUSE · 4 starved\n" + STARVED_HINT, "reload shows the same cause")
+	_assert_equal(game.player_orders.outcome_grade.text, "LIKELY CAUSE · 4 starved", "reload shows the same cause summary")
 	_dispose(game)
 
 
@@ -309,12 +312,13 @@ func _test_real_suffocation_loss() -> void:
 	while not game.ended and t < 120.0:
 		if game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged:
 			game.acknowledge_breach_warning(true)
+		_resume_death_recap(game, "real suffocation loss")
 		game.user_paused = false
 		game.step_simulation(1.0)
 		t += 1.0
 	_assert_true(game.ended and game.outcome == "loss", "a wing out of air is lost")
 	print("REAL AIR LOSS at %.0fs: %s" % [game.day_cycle.elapsed_seconds, game.player_orders.outcome_grade.text.replace("\n", " | ")])
-	_assert_equal(game.player_orders.outcome_grade.text, "LIKELY CAUSE · 4 suffocated\n" + AIR_HINT, "air loss reads suffocated")
+	_assert_equal(game.player_orders.outcome_grade.text, "LIKELY CAUSE · 4 suffocated", "air loss reads suffocated without a second tip")
 	_dispose(game)
 
 

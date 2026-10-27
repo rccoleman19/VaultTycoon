@@ -79,6 +79,7 @@ func _test_wipe_ended_help() -> void:
 	game.acknowledge_breach_warning(true)
 	var guard := 0
 	while not game.ended and guard < 4000:
+		_resume_death_recap(game, "wipe after status expires")
 		game.user_paused = false
 		game.step_simulation(TICK)
 		guard += 1
@@ -98,6 +99,7 @@ func _test_wipe_keeps_death_message() -> void:
 	game.acknowledge_breach_warning(true)
 	var guard := 0
 	while not game.ended and guard < 4000:
+		_resume_death_recap(game, "wipe keeps death status")
 		game.user_paused = false
 		game.step_simulation(TICK)
 		guard += 1
