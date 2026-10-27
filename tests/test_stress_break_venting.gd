@@ -371,7 +371,10 @@ func _fallback_ready_game() -> VaultGame:
 		resident.needs.rest = 100.0
 		resident.needs.mood = 100.0
 		resident.needs.health = 100.0
-	game.food_system.meals = game.get_alive_count()
+	# Echo tests isolate Rec thresholds and competing care/build advice. Keep a
+	# bounded reserve above the food lead window; measured venting fixtures above
+	# still have zero meals so their hunger and mood-drain assertions are intact.
+	game.food_system.meals = 16
 	for x in range(17, 29):
 		var cell := Vector2i(x, 10)
 		_assert_true(game.map_grid.queue_dig(cell), "tail fixture queues connected rock")

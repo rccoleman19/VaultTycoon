@@ -67,6 +67,10 @@ func _run() -> void:
 func _healthy() -> VaultGame:
 	var game := _spawn_game()
 	game.begin_shift()
+	# These fixtures isolate hatch phases and response blockers. Give their
+	# four crew a bounded 240-second food runway, including when work is OFF;
+	# the explicit food-crisis test below replaces this reserve with zero meals.
+	game.food_system.meals = 24
 	for resident: VaultResident in game.residents:
 		resident.needs.food = 100.0
 		resident.needs.rest = 100.0
@@ -265,12 +269,12 @@ func _test_outranks_needs() -> void:
 	var game := _healthy()
 	game.residents[0].needs.food = 10.0
 	game.food_system.meals = 0
-	_assert_equal(_tuple(game)[0], "Next: YOU place a Nutrient Station · THEY cook", "DORMANT critical food tip")
+	_assert_equal(_tuple(game)[0], "Next: Ari starving · YOU place a Nutrient Station · THEY cook", "DORMANT critical food tip")
 	_set_all(game, "haul", VaultResident.PRIORITY_DISABLED)
 	_warn(game)
-	_assert_tuple(game, ENABLE_HAUL, "Haul blocker outranks the critical food tip")
+	_assert_tuple(game, ["Next: Ari starving · YOU enable Haul [P] · THEY patch hatch", ENABLE_HAUL[1], ENABLE_HAUL[2]], "Haul blocker outranks the critical food tip and keeps Ari's danger prefix")
 	_set_all(game, "haul", VaultResident.DEFAULT_WORK_PRIORITY)
-	_assert_equal(_tuple(game)[0], "Next: YOU place a Nutrient Station · THEY cook", "covered WARNING keeps the critical food tip")
+	_assert_equal(_tuple(game)[0], "Next: Ari starving · YOU place a Nutrient Station · THEY cook", "covered WARNING keeps the critical food tip")
 	_dispose(game)
 
 
@@ -305,6 +309,10 @@ func _test_dormant_and_sealed() -> void:
 	for resident: VaultResident in game.residents:
 		resident.drafted = true
 	game.food_system.salvage = 0
+	# This fixture isolates hatch phase. Its drafted crew and unfunded future
+	# food chain need a bounded 480-second reserve: with no undrafted workers,
+	# the funding/build forecast is longer than the shared helper's runway.
+	game.food_system.meals = 48
 	_assert_tuple(game, DIG, "SEALED returns to ordinary advice despite OFF, drafted and no salvage")
 	_dispose(game)
 
@@ -359,6 +367,9 @@ func _test_unacknowledged_warning() -> void:
 	_assert_tuple(game, ENABLE_DIG_LOCKED, "unacknowledged: acknowledge before enabling Dig")
 	_set_all(game, "dig", VaultResident.DEFAULT_WORK_PRIORITY)
 	_assert_tuple(game, PATCH_SHORT_1, "marking rock is not locked by the modal")
+	# Test the modal's R lock without adding a food deadline when every worker
+	# is drafted. The slow fallback funding/build forecast needs extra runway.
+	game.food_system.meals = 48
 	for resident: VaultResident in game.residents:
 		resident.drafted = true
 	_assert_tuple(game, UNDRAFT_LOCKED, "unacknowledged: acknowledge before undrafting")

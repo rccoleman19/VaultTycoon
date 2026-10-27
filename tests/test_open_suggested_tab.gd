@@ -30,7 +30,9 @@ func _healthy_game() -> VaultGame:
 		resident.sleeping = false
 		resident.bed_id = -1
 		resident.medical_bed_id = -1
-	game.food_system.meals = game.get_alive_count()
+	# Tab and highlight fixtures need ordinary build advice, with food danger
+	# exercised explicitly by the zero-meal transitions below.
+	game.food_system.meals = 16
 	return game
 
 
@@ -152,10 +154,10 @@ func _test_returning_bed(middle_tool: String) -> void:
 		kitchen.manually_disabled = true
 		game.residents[0].needs.food = 19.0
 		game.food_system.meals = 0
-		_assert_equal(orders._primary_next_step()["text"], "Next: YOU power the Nutrient Station · THEY cook", "Select comes from the real power-kitchen step")
+		_assert_equal(orders._primary_next_step()["text"], "Next: Ari starving · YOU power the Nutrient Station · THEY cook", "Select comes from the real power-kitchen step")
 	_refresh_and_assert(game, middle_tool, "dig")
 	game.residents[0].needs.food = 100.0
-	game.food_system.meals = game.get_alive_count()
+	game.food_system.meals = 16
 	game.residents[0].needs.rest = 28.0
 	_refresh_and_assert(game, "bed", "build")
 	_dispose(game)
@@ -172,7 +174,7 @@ func _test_non_build_suggestions() -> void:
 	kitchen.manually_disabled = true
 	game.residents[0].needs.food = 19.0
 	game.food_system.meals = 0
-	_assert_equal(game.player_orders._primary_next_step()["text"], "Next: YOU power the Nutrient Station · THEY cook", "disabled kitchen suggests Select")
+	_assert_equal(game.player_orders._primary_next_step()["text"], "Next: Ari starving · YOU power the Nutrient Station · THEY cook", "disabled kitchen suggests Select")
 	_refresh_and_assert(game, "select", "")
 	game.player_orders._set_architect_tab("dig")
 	_refresh_and_assert(game, "select", "dig")

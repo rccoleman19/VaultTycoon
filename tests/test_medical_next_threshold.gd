@@ -62,7 +62,8 @@ func _spawn_game() -> VaultGame:
 		resident.sleeping = false
 		resident.bed_id = -1
 		resident.medical_bed_id = -1
-	game.food_system.meals = game.get_alive_count()
+	# Isolate the HP boundary from food construction lead and its warning margin.
+	game.food_system.meals = 16
 	_assert_step(game, DIG)
 	return game
 
@@ -207,6 +208,12 @@ func _test_food() -> void:
 	resident.needs.health = SEEK_HP
 	resident.needs.food = 35.0
 	game.food_system.meals = 0
+	# Other crew cover the pending food. This patient must not claim its Haul
+	# job, whose deliberate food-work priority would hide the admission gate.
+	game.set_work_priority(resident.resident_id, "haul", VaultResident.PRIORITY_DISABLED)
+	# Pending meals cover the food runway without being edible at this zero-time
+	# admission checkpoint. A distant pickup cannot finish in advance(0.0).
+	game.job_system.queue_meals(Vector2i(27, 19), 16)
 	_assert_step(game, PLACE)
 	var bed := _add_completed(game, VaultBuilding.Kind.MEDICAL_BED, resident.get_cell(game.map_grid))
 	game.job_system.advance(0.0)

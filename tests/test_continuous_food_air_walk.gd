@@ -24,8 +24,12 @@ const HATCH_NEXT := "Next: YOU watch hatch · THEY auto-patch"
 # Match the whole recommendation: "select" alone cannot identify an action.
 const PLACEMENT_HINTS := {
 	CHARGE_NEXT: ["generator", "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power."],
+	"Next: YOU place a Charge Node · THEY power the kitchen": ["generator", "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power."],
+	"Next: YOU place a Charge Node · THEY power the Grow Tray": ["generator", "The grid lacks available power for the Grow Tray. Place a Charge Node to add 7 power."],
 	GROW_NEXT: ["grow", "Designate GROW and keep it powered. Haul defaults move raw food to stock."],
+	"Next: YOU place a Grow Tray · THEY grow": ["grow", "Place a Grow Tray and keep it powered. Its raw food output needs Haul delivery before Cook can use it."],
 	KITCHEN_NEXT: ["kitchen", "Designate NUTRI, power it, leave Cook + Haul above OFF."],
+	"Next: YOU place a Nutrient Station · THEY cook": ["kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals."],
 	AIR_NEXT: ["air", "Designate AIR $14 and keep it powered (3). Craft auto-builds the blueprint."],
 	"Next: YOU place bunks · THEY craft": ["bed", "Place bunks so tired undrafted crew have a bed."],
 }
@@ -211,8 +215,27 @@ func _has_deposit_cargo(game: VaultGame, type: int) -> bool:
 	return false
 
 
-func _act_on_next(game: VaultGame, step: Dictionary) -> bool:
+func _action_text(game: VaultGame, step: Dictionary) -> String:
 	var text: String = step.text
+	if text.begins_with("Next: YOU "):
+		return text
+	# Keep the original named sentence in the history. Validate its live
+	# resident and urgency metadata before matching the full action/tool/help.
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			continue
+		for condition in ["starving", "suffocating", "exhausted", "in despair"]:
+			var prefix := "Next: %s %s · " % [resident.resident_name, condition]
+			if text.begins_with(prefix) and bool(step.get("urgent", false)) and int(step.get("resident_id", -1)) == resident.resident_id:
+				return "Next: " + text.trim_prefix(prefix)
+	_fail_playthrough(game, "unrecognized or inconsistent resident-danger prefix")
+	return ""
+
+
+func _act_on_next(game: VaultGame, step: Dictionary) -> bool:
+	var text := _action_text(game, step)
+	if text.is_empty():
+		return false
 	var help: String = step.help
 	var tool: String = step.tool
 	if tool == "dig":
@@ -293,7 +316,7 @@ func _enable_buildings(game: VaultGame, kinds: Array) -> bool:
 func _enable_work(game: VaultGame, work: String) -> bool:
 	for resident in game.residents:
 		if resident.alive and not resident.drafted and resident.get_work_priority(work) == VaultResident.PRIORITY_DISABLED:
-			if not resident.set_work_priority(work, VaultResident.DEFAULT_WORK_PRIORITY):
+			if not game.set_work_priority(resident.resident_id, work, VaultResident.DEFAULT_WORK_PRIORITY):
 				return _fail_playthrough(game, "recommended %s enable rejected" % work)
 			break
 	return true

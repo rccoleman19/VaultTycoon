@@ -1127,6 +1127,294 @@ func _dig_tiles_after_rubble(shortfall: int, rubble: int) -> int:
 const FOOD_LEAD_DAYS := 2.5
 const FOOD_PER_DAY := 60.0
 const FOOD_PER_MEAL := 60.0
+# Non-food threats still use projected damage. Food uses the production runway below.
+const NEXT_DEATH_WARNING_SECONDS := 60.0
+
+# 03/4242 RELAY LUMEN: waiting for NO MEALS at 217.3 s left only 51 s
+# before Ari died at 268.3 s (CRITICAL at 230 s). Even an immediately placed
+# Charge Node took 26.1 s (ready at 243.4 s), leaving only 24.9 s for
+# Grow + raw haul + Cook + meal haul. Add 20 s for queued work and staggered
+# meals ON TOP OF the supply/build, real 9 s Grow cycle, Cook and delivery
+# lead, rather than waiting for that failed 51 s death window. A larger 75 s
+# buffer interrupts the healthy opening with 40–80 s of stock; 20 s preserves
+# that recovery window while warning before the larder runs out.
+const FOOD_RUNWAY_MARGIN_SECONDS := 20.0
+# Interrupted workers can need floor rest (48 rest/day: 0 -> 25 takes 20.8 s),
+# a seven-second break and turns at the shared Rec Console. Budget one 40 s
+# sim day before funding/building resumes, separately from pantry contingency.
+const FOOD_WORK_RECOVERY_SECONDS := DayCycle.SECONDS_PER_DAY
+# Air recovery includes a long salvage/supply chain (05: 171 s warning,
+# recycler powered at 248 s). Its existing forecast needs its own buffer.
+const AIR_RECOVERY_MARGIN_SECONDS := 75.0
+
+
+# Shared stock and already-produced food, in meals / living crew's meals per
+# second. Cooking consumes raw only at completion, so its input is ALREADY in
+# raw_food: adding another meal for a COOK job would double count it. Pending
+# haul totals include cargo in transit. Future Grow cycles are not stock.
+func _food_runway_seconds() -> float:
+	var consumption := 0.0
+	for resident: VaultResident in game.residents:
+		if resident.alive:
+			consumption += FOOD_PER_DAY * resident.needs.food_drain_scale / DayCycle.SECONDS_PER_DAY / FOOD_PER_MEAL
+	if consumption <= 0.0:
+		return INF
+	var meals := float(game.food_system.meals + game.job_system.get_pending_meals())
+	if game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) > 0:
+		meals += floorf(float(game.food_system.raw_food + game.job_system.get_pending_raw_food()) / FoodSystem.COOK_INPUT) * FoodSystem.COOK_OUTPUT
+	return meals / consumption
+
+
+func _food_work_seconds(work: String, amount: float) -> float:
+	var fastest := 0.0
+	for resident: VaultResident in game.residents:
+		if resident.alive:
+			# Enabling work or undrafting is itself an available player fix. Estimate
+			# the work after that action, rather than using the .35 floor for an
+			# otherwise healthy all-drafted crew.
+			fastest = maxf(fastest, resident.get_work_multiplier() * resident.get_trait_factor(work))
+	return amount / maxf(0.35, fastest)
+
+
+func _food_delivery_seconds(cell: Vector2i) -> float:
+	var stock := game.map_grid.nearest_stockpile(cell)
+	if stock.x < 0:
+		stock = game.job_system._stockpile_cell()
+	var path := game.map_grid.find_path(cell, stock)
+	if path.is_empty():
+		return INF
+	# A worker walks out to collect and returns with the output. Each handoff
+	# also crosses a simulation tick; use the same movement speed as residents.
+	return 2.0 * float(path.size()) * MapGrid.TILE_SIZE / VaultResident.MOVE_SPEED + 2.0 * VaultGame.SIMULATION_TICK
+
+
+func _food_funding_seconds(cost: int) -> float:
+	var reserve := 0 if game.breach_system.is_sealed() else BreachSystem.PATCH_COST - game.breach_system.patch_delivered
+	var shortfall := maxi(0, cost + reserve - game.food_system.salvage - game.job_system.get_uncredited_rubble())
+	if shortfall == 0:
+		return 0.0
+	var tiles := ceili(float(shortfall) / DIG_SALVAGE_YIELD)
+	var workers := 0
+	for resident: VaultResident in game.residents:
+		if not resident.alive or resident.drafted or resident.sleeping or resident.recreating or resident.stress_break_left > 0.0:
+			continue
+		if resident.current_job_type not in [JobSystem.JobType.COOK, JobSystem.JobType.HAUL_RAW_FOOD, JobSystem.JobType.HAUL_MEAL] and resident.medical_bed_id < 0:
+			workers += 1
+	workers = maxi(1, workers)
+	# Food delivery and sleep already occupy crew: living mouths are not all
+	# available parallel miners. Dig work is eight seconds per rock. Crew can excavate different cells
+	# concurrently, then Haul must credit the rubble before supply can start.
+	var rounds := ceilf(float(tiles) / workers)
+	return rounds * _food_work_seconds("dig", 8.0) + _food_delivery_seconds(MapGrid.CHAMBER.get_center())
+
+
+func _food_fixture_seconds(kind: int) -> float:
+	var fastest := INF
+	for building: VaultBuilding in game.buildings:
+		if building.kind != kind:
+			continue
+		if building.complete:
+			if kind == VaultBuilding.Kind.GENERATOR:
+				# Called for a capacity deficit: existing output is already spent.
+				continue
+			return 0.0
+		var supply := _food_delivery_seconds(building.cell) if not building.is_supplied() else 0.0
+		fastest = minf(fastest, _food_funding_seconds(maxi(0, building.get_cost() - building.delivered - game.job_system.get_build_supply_in_transit(building.building_id))) + supply + _food_work_seconds("craft", building.construction_left))
+	# New food fixtures take 8 work seconds (VaultBuilding.get_build_time).
+	return fastest if is_finite(fastest) else _food_funding_seconds(int(VaultBuilding.COSTS[kind])) + _food_work_seconds("craft", 8.0) + _food_delivery_seconds(MapGrid.CHAMBER.get_center())
+
+
+# Budget a dependency once: existing generators cannot pay for added capacity,
+# and delivered/in-transit blueprint supplies are no longer loose salvage.
+func _food_remaining_cost(kind: int, added_capacity := false) -> int:
+	var remaining := int(VaultBuilding.COSTS[kind])
+	for building: VaultBuilding in game.buildings:
+		if building.kind != kind:
+			continue
+		if building.complete:
+			if not added_capacity:
+				return 0
+			continue
+		remaining = mini(remaining, maxi(0, building.get_cost() - building.delivered - game.job_system.get_build_supply_in_transit(building.building_id)))
+	return remaining
+
+
+# A short pantry cannot fund the kitchen, power and next harvest independently
+# with the same salvage. If that shared funding also crosses a predicted stress
+# break, food needs the real Rec recovery first. Forecast it before the kitchen
+# is powered: waiting until its workers actually break made 05 miss its harvest.
+# Funded openings incur no speculative Rec delay.
+func _food_chain_work_lead(food_seconds: float) -> float:
+	var cost := _food_remaining_cost(VaultBuilding.Kind.KITCHEN) + _food_remaining_cost(VaultBuilding.Kind.GROW_TRAY)
+	var demand := 0
+	for kind: int in [VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GROW_TRAY]:
+		if game.get_powered_building_count(kind) == 0:
+			demand += int(VaultBuilding.POWER_DEMAND[kind])
+	if demand > game.power_grid.supply - game.power_grid.served:
+		cost += _food_remaining_cost(VaultBuilding.Kind.GENERATOR, true)
+	var funding := _food_funding_seconds(cost)
+	if funding <= 0.0:
+		return 0.0
+	var rec := _food_fixture_seconds(VaultBuilding.Kind.RECREATION_CONSOLE)
+	var horizon := food_seconds + funding + rec + FOOD_WORK_RECOVERY_SECONDS + FOOD_RUNWAY_MARGIN_SECONDS
+	for resident: VaultResident in game.residents:
+		if not resident.alive or resident.drafted or resident.sleeping or resident.medical_bed_id >= 0:
+			continue
+		var loss := -resident.needs._get_mood_delta_per_day(game.is_resident_lit(resident), false, game.oxygen_system.is_low()) / DayCycle.SECONDS_PER_DAY
+		var projected := resident.needs.mood - loss * horizon
+		# Match ResidentNeeds' future tired penalty; current loss already includes
+		# it below 30 rest. Rest drains 34/day while this worker stays awake.
+		if resident.needs.rest >= 30.0:
+			var tired_at := (resident.needs.rest - 30.0) / (34.0 / DayCycle.SECONDS_PER_DAY)
+			projected -= ResidentNeeds.LOW_NEED_MOOD_LOSS_PER_DAY / DayCycle.SECONDS_PER_DAY * maxf(0.0, horizon - tired_at)
+		if projected <= ResidentNeeds.BREAK_MOOD_THRESHOLD:
+			return funding + rec + FOOD_WORK_RECOVERY_SECONDS
+	return funding
+
+
+# One existing switch is quicker than supplying/building another generator.
+# Only shed a decorative load if it frees enough power for the food fixture;
+# life support is never a candidate.
+func _food_power_release_step(kind: int) -> Dictionary:
+	# Keep the last light: dark crew repeatedly break before food work.
+	if game.get_powered_building_count(VaultBuilding.Kind.LAMP) < 2:
+		return {}
+	var needed: int = VaultBuilding.POWER_DEMAND[kind]
+	var available := game.power_grid.supply - game.power_grid.served
+	for lamp: VaultBuilding in game.buildings:
+		if lamp.kind == VaultBuilding.Kind.LAMP and lamp.complete and lamp.powered and lamp.get_power_demand() > 0 and available + lamp.get_power_demand() >= needed:
+			return _food_step({
+				"text": "Next: YOU disable a Lumen · THEY power the kitchen" if kind == VaultBuilding.Kind.KITCHEN else "Next: YOU disable a Lumen · THEY power the Grow Tray",
+				"help": "Select a powered Lumen and click DISABLE to free power for food now. Restore lighting once a Charge Node is available.",
+				"tool": "select",
+			})
+	return {}
+
+
+# Before placing another food/power blueprint, fund it without spending the
+# hatch's four salvage. Waiting for stock here is a player action sequence;
+# changing the job system's reserve would silently alter plain idle play.
+func _food_prebuild_step(kind: int, placement: Dictionary) -> Dictionary:
+	if game.breach_system.is_sealed():
+		return placement
+	var reserve := maxi(0, BreachSystem.PATCH_COST - game.breach_system.patch_delivered - game.job_system.get_breach_supply_in_transit())
+	var shortfall := maxi(0, int(VaultBuilding.COSTS[kind]) + reserve - game.food_system.salvage)
+	if shortfall == 0:
+		return placement
+	var tiles := _salvage_dig_tiles(shortfall)
+	var name: String = VaultBuilding.KIND_NAMES[kind]
+	return _food_step({
+		"text": "Next: YOU mark %d rock [E] · THEY fund the %s" % [tiles, name] if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the %s" % name,
+		"help": "Fund the %s before placing it, keeping %d salvage for the hatch. Each dug rock yields %d salvage once hauled." % [name, reserve, DIG_SALVAGE_YIELD],
+		"tool": "dig" if tiles > 0 else "select",
+	})
+
+
+func _food_blueprint_in_progress(kind: int) -> bool:
+	for building: VaultBuilding in game.buildings:
+		if building.kind != kind or building.complete or not building.is_supplied():
+			continue
+		for job: Dictionary in game.job_system.jobs:
+			if not bool(job.done) and int(job.type) == JobSystem.JobType.BUILD and int(job.building_id) == building.building_id and int(job.reserved_by) > 0:
+				return true
+	return false
+
+
+func _food_fix_plan(rescue_seconds := INF) -> Dictionary:
+	var kitchen := _kitchen_recovery_step()
+	var kitchen_seconds := _food_fixture_seconds(VaultBuilding.Kind.KITCHEN)
+	if game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) == 0:
+		var available := game.power_grid.supply - game.power_grid.served
+		if available < int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.KITCHEN]) and _food_power_release_step(VaultBuilding.Kind.KITCHEN).is_empty():
+			kitchen_seconds += _food_fixture_seconds(VaultBuilding.Kind.GENERATOR)
+	var kitchen_building := _food_blueprint_in_progress(VaultBuilding.Kind.KITCHEN) and _has_eligible_worker("cook") and _has_eligible_worker("haul")
+	if kitchen_building:
+		# Construction already has a worker: parallelize its next blocker rather
+		# than repeat "leave Craft on" until the kitchen is complete and shed.
+		if game.power_grid.supply - game.power_grid.served < int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.KITCHEN]):
+			if not _food_blueprint_in_progress(VaultBuilding.Kind.GENERATOR):
+				var power_step := _charge_finish_step() if _unfinished_charge_count() > 0 else {
+					"text": "Next: YOU place a Charge Node · THEY power the kitchen",
+					"help": "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power.",
+					"tool": "generator",
+				}
+				if _unfinished_charge_count() == 0:
+					power_step = _food_prebuild_step(VaultBuilding.Kind.GENERATOR, power_step)
+				return {"step": _food_step(power_step), "seconds": kitchen_seconds + _food_work_seconds("cook", 4.0) + _food_delivery_seconds(MapGrid.CHAMBER.get_center())}
+		kitchen = {}
+	var delivery := _food_delivery_seconds(MapGrid.CHAMBER.get_center())
+	var cook := _food_work_seconds("cook", 4.0)
+	for resident: VaultResident in game.residents:
+		if resident.alive and resident.current_job_type == JobSystem.JobType.COOK:
+			cook = minf(cook, maxf(0.0, 4.0 - resident.work_accumulator) / (resident.get_work_multiplier() * resident.get_trait_factor("cook")))
+	var cooking := false
+	for resident: VaultResident in game.residents:
+		if resident.alive and resident.current_job_type == JobSystem.JobType.COOK:
+			cooking = true
+	var raw := game.food_system.raw_food + game.job_system.get_pending_raw_food()
+	var automatic_food := kitchen.is_empty() and _has_eligible_worker("cook") and _has_eligible_worker("haul") and (cooking or game.job_system.get_pending_meals() > 0 or kitchen_building)
+	if game.job_system.get_pending_meals() > 0 and not automatic_food:
+		return {"step": _meal_recovery_step(true), "seconds": delivery}
+	if raw >= FoodSystem.COOK_INPUT and not automatic_food:
+		return {"step": kitchen if not kitchen.is_empty() else _meal_recovery_step(true),
+			"seconds": kitchen_seconds + cook + delivery + (delivery if game.food_system.raw_food == 0 else 0.0)}
+	if not kitchen.is_empty():
+		return {"step": kitchen, "seconds": kitchen_seconds + cook + delivery}
+	# There is no forage/mark-food tool in this game (DIG yields salvage).
+	# Grow is the next actual source. Include unfinished construction, restoring
+	# power, the tray's remaining real cycle (Mk I 9 s / Mk II 6 s), raw haul,
+	# cooking and meal haul, rather than treating power restoration as a meal.
+	var grow_seconds := INF
+	for tray: VaultBuilding in game.buildings:
+		if tray.kind != VaultBuilding.Kind.GROW_TRAY:
+			continue
+		# Include disabled trays: ENABLE immediately recalculates power, resuming
+		# paused progress once powered. Completed trays need no supply/build time.
+		var ready := 0.0 if tray.complete else _food_fixture_seconds(VaultBuilding.Kind.GROW_TRAY)
+		if not tray.powered and game.power_grid.supply - game.power_grid.served < tray.get_base_power_demand() and _food_power_release_step(VaultBuilding.Kind.GROW_TRAY).is_empty():
+			ready += _food_fixture_seconds(VaultBuilding.Kind.GENERATOR)
+		grow_seconds = minf(grow_seconds, ready + maxf(0.0, tray.get_grow_seconds() - tray.production_progress) + _food_delivery_seconds(tray.cell))
+	if not is_finite(grow_seconds):
+		grow_seconds = _food_fixture_seconds(VaultBuilding.Kind.GROW_TRAY) + FoodSystem.GROW_SECONDS + delivery
+		if game.power_grid.supply - game.power_grid.served < int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.GROW_TRAY]) and _food_power_release_step(VaultBuilding.Kind.GROW_TRAY).is_empty():
+			grow_seconds += _food_fixture_seconds(VaultBuilding.Kind.GENERATOR)
+	grow_seconds = maxf(grow_seconds, kitchen_seconds) + cook + delivery
+	var rescue_budget := minf(rescue_seconds, _food_runway_seconds())
+	if grow_seconds > rescue_budget:
+		# A switch restores production, not an edible meal. Even a completed
+		# tray must cover its remaining cycle, raw haul, Cook and meal haul.
+		# Work already underway still offers a faster rescue than the next crop.
+		var ready: Dictionary = {}
+		if game.job_system.get_pending_meals() > 0:
+			ready = {"step": _food_step({
+				"text": "Next: YOU enable Haul · THEY deliver food" if not _has_eligible_worker("haul") else "Next: YOU leave Haul on · THEY deliver food",
+				"help": "Keep Haul enabled on a living, undrafted resident. Cooked meals are waiting for delivery.",
+				"tool": "select",
+			}), "seconds": delivery}
+		var raw_seconds := kitchen_seconds + cook + delivery + (delivery if game.food_system.raw_food < FoodSystem.COOK_INPUT else 0.0)
+		if raw >= FoodSystem.COOK_INPUT and (ready.is_empty() or raw_seconds < float(ready.seconds)):
+			ready = {"step": kitchen if not kitchen.is_empty() else _meal_recovery_step(true), "seconds": raw_seconds}
+		if not ready.is_empty() and float(ready.seconds) <= rescue_budget:
+			ready["rescue"] = true
+			return ready
+		return {"step": _food_step({
+			"text": "Next: nothing lands in time · keep crew fed where possible",
+			"help": "No available food fix can deliver a meal within the food runway. Keep Cook and Haul enabled to feed crew where possible.",
+			"tool": "select",
+			"too_late": true,
+		}), "seconds": grow_seconds}
+	# When cooking/delivery is already running, those meals are in runway.
+	# Lead with the next source while they still cover construction, rather
+	# than repeating an already-satisfied Cook instruction until raw hits zero.
+	var step := _meal_recovery_step(true)
+	if automatic_food:
+		step = _grow_recovery_step()
+	if str(step.get("tool", "")) == "grow":
+		step = _food_prebuild_step(VaultBuilding.Kind.GROW_TRAY, step)
+	var restores_tray := bool(step.get("restores_existing_tray", false))
+	if not restores_tray and _salvage_shortfall(VaultBuilding.Kind.GROW_TRAY) > 0:
+		step = _food_step(_fund_blueprint_step(VaultBuilding.Kind.GROW_TRAY))
+	return {"step": step, "seconds": grow_seconds}
 
 
 # Days the living crew can eat from stored meals plus what is already in their bellies.
@@ -1140,6 +1428,297 @@ func _crew_food_days() -> float:
 	if alive == 0:
 		return INF
 	return (belly + game.food_system.meals * FOOD_PER_MEAL) / (FOOD_PER_DAY * alive)
+
+
+# Allocate only stored rations, in the order crew reach the automatic eating
+# threshold. One remaining meal must not hide another resident's starvation.
+# Stop once the remaining rations cannot affect the warning horizon.
+func _food_depletion_times() -> Dictionary:
+	var depletion: Dictionary = {}
+	var next_meal: Dictionary = {}
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			continue
+		var rate := FOOD_PER_DAY * resident.needs.food_drain_scale / DayCycle.SECONDS_PER_DAY
+		depletion[resident.resident_id] = resident.needs.food / rate if rate > 0.0 else INF
+		if not resident.drafted and rate > 0.0:
+			next_meal[resident.resident_id] = maxf(0.0, (resident.needs.food - MED_BED_MIN_FOOD) / rate)
+	for _meal in game.food_system.meals:
+		var first_id := -1
+		var first_at := NEXT_DEATH_WARNING_SECONDS
+		for id: int in next_meal:
+			if float(next_meal[id]) < first_at:
+				first_id = id
+				first_at = next_meal[id]
+		if first_id < 0:
+			break
+		var resident := game.get_resident_by_id(first_id)
+		var ration_seconds := FOOD_PER_MEAL / (FOOD_PER_DAY * resident.needs.food_drain_scale / DayCycle.SECONDS_PER_DAY)
+		depletion[first_id] = float(depletion[first_id]) + ration_seconds
+		next_meal[first_id] = maxf(0.0, float(depletion[first_id]) - MED_BED_MIN_FOOD * ration_seconds / FOOD_PER_MEAL)
+	return depletion
+
+
+# Project only the existing drains, not future jobs or buildings.
+# Air below 15% can already be recovering, so its damage has an end as well as
+# an onset. Combining the intervals accounts for low HP and overlapping drains.
+func _projected_death_seconds(resident: VaultResident, food_seconds: float, relieved := "") -> float:
+	var needs := resident.needs
+	var medical := resident.medical_bed_id >= 0 and resident.state == "Rest-Medical"
+	var loss := -JobSystem.MEDICAL_HP_PER_SECOND if medical else 0.0
+	if relieved != "mood" and needs.mood <= ResidentNeeds.SEVERE_MOOD_THRESHOLD:
+		loss += 5.0 / DayCycle.SECONDS_PER_DAY
+	var changes: Array[Vector2] = []
+	if relieved != "rest" and not resident.sleeping and not medical:
+		if needs.rest <= 0.0 or resident.drafted:
+			changes.append(Vector2(needs.rest / (34.0 / DayCycle.SECONDS_PER_DAY), 30.0 / DayCycle.SECONDS_PER_DAY))
+	if relieved != "food" and is_finite(food_seconds):
+		changes.append(Vector2(food_seconds, 160.0 / DayCycle.SECONDS_PER_DAY))
+	if relieved != "air":
+		var oxygen := game.oxygen_system
+		var crossing := oxygen.get_seconds_to_critical_crossing()
+		if oxygen.is_critical():
+			if oxygen.net_rate <= 0.0 or oxygen.oxygen < OxygenSystem.CRITICAL_OXYGEN_THRESHOLD:
+				changes.append(Vector2(0.0, OxygenSystem.SUFFOCATION_DAMAGE_PER_SECOND))
+				if oxygen.net_rate > 0.0 and crossing >= 0.0:
+					changes.append(Vector2(crossing, -OxygenSystem.SUFFOCATION_DAMAGE_PER_SECOND))
+		elif oxygen.net_rate < 0.0 and crossing >= 0.0:
+			changes.append(Vector2(crossing, OxygenSystem.SUFFOCATION_DAMAGE_PER_SECOND))
+	changes.sort_custom(func(a: Vector2, b: Vector2) -> bool: return a.x < b.x)
+	var health := needs.health
+	var elapsed := 0.0
+	for change: Vector2 in changes:
+		var interval := float(change.x) - elapsed
+		if loss > 0.0 and health / loss <= interval:
+			return elapsed + health / loss
+		health = clampf(health - loss * interval, 0.0, 100.0)
+		elapsed = change.x
+		loss += change.y
+	return elapsed + health / loss if loss > 0.0 else INF
+
+
+# An enabled recipe is not a fix when stress breaks repeatedly interrupt its
+# four work seconds. Recover the crew's existing work loop before repeating
+# "leave Cook on". Keep the established Rec action, with the food warning name.
+func _food_work_blocker_step() -> Dictionary:
+	if not _has_eligible_worker("cook") or not _has_eligible_worker("haul") or game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) == 0:
+		return {}
+	var has_source := false
+	for building: VaultBuilding in game.buildings:
+		has_source = has_source or (building.kind == VaultBuilding.Kind.GROW_TRAY and (building.powered or not building.complete))
+	if game.food_system.raw_food + game.job_system.get_pending_raw_food() + game.job_system.get_pending_meals() == 0 and not has_source:
+		return {}
+	var breaking := false
+	var rec_lead := _food_fixture_seconds(VaultBuilding.Kind.RECREATION_CONSOLE) + FOOD_WORK_RECOVERY_SECONDS
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			continue
+		var loss := -resident.needs._get_mood_delta_per_day(game.is_resident_lit(resident), resident.sleeping, game.oxygen_system.is_low()) / DayCycle.SECONDS_PER_DAY
+		var until_break := maxf(0.0, resident.needs.mood - ResidentNeeds.BREAK_MOOD_THRESHOLD) / loss if loss > 0.0 else INF
+		breaking = breaking or resident.needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD or until_break < rec_lead
+	for rec: VaultBuilding in game.buildings:
+		# A +16 stress break is transient relief, not a repaired work loop.
+		breaking = breaking or (rec.kind == VaultBuilding.Kind.RECREATION_CONSOLE and not rec.complete)
+	if not breaking:
+		return {}
+	if game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) == 0:
+		for rec: VaultBuilding in game.buildings:
+			if rec.kind == VaultBuilding.Kind.RECREATION_CONSOLE and not rec.complete:
+				if _salvage_shortfall(rec.kind) > 0:
+					return _food_step(_fund_blueprint_step(rec.kind, true))
+				return _food_step({
+					"text": "Next: YOU leave Haul + Craft on · THEY finish the Rec Console",
+					"help": "Keep Haul + Craft above OFF so crew supply and finish the Rec Console blueprint.",
+					"tool": "select",
+				})
+		return _food_prebuild_step(VaultBuilding.Kind.RECREATION_CONSOLE, _food_step({
+			"text": "Next: YOU place a Rec Console · THEY recover mood",
+			"help": "Place a Rec Console so crew can recover mood.",
+			"tool": "rec",
+		}))
+	return _offline_rec_step()
+
+
+func _food_worker_recovery_seconds() -> float:
+	var recovery := _food_fixture_seconds(VaultBuilding.Kind.RECREATION_CONSOLE)
+	if game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) > 0 and game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) == 0 and game.power_grid.supply - game.power_grid.served < int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.RECREATION_CONSOLE]):
+		recovery += _food_fixture_seconds(VaultBuilding.Kind.GENERATOR)
+	return recovery + FOOD_WORK_RECOVERY_SECONDS
+
+
+func _resident_urgency_step() -> Dictionary:
+	var threatened: VaultResident = null
+	var air_lead := _food_fixture_seconds(VaultBuilding.Kind.AIR_RECYCLER)
+	var food_blocker := _food_work_blocker_step()
+	# Supplying a new Air blueprint suspends optional supply jobs. Let a Rec
+	# already restoring the food workers finish while air still covers that
+	# work plus the normal warning window; otherwise both chains stall.
+	var care_window := not food_blocker.is_empty() and game.oxygen_system.get_seconds_to_critical_crossing() > _food_fixture_seconds(VaultBuilding.Kind.RECREATION_CONSOLE) + air_lead
+	var air_forecast := game.oxygen_system.net_rate < 0.0 and game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) == 0 and not care_window
+	var soonest := maxf(NEXT_DEATH_WARNING_SECONDS, air_lead + AIR_RECOVERY_MARGIN_SECONDS) if air_forecast else NEXT_DEATH_WARNING_SECONDS
+	var food_times := _food_depletion_times()
+	# Food's trigger is runway versus the fastest available recovery lead time.
+	# Projected food damage is used ONLY to choose which living name to show.
+	var plan := _food_fix_plan()
+	var food_lead := float(plan.seconds) + _food_chain_work_lead(float(plan.seconds))
+	if not food_blocker.is_empty() and game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) == 0:
+		# The selected fix is restoring food workers, so its construction/power
+		# and recovery precede funding/building the missing harvest. A running
+		# food chain already counts its output in runway; optional future care
+		# must not add a construction delay to that existing production.
+		food_lead = maxf(food_lead, float(plan.seconds) + _food_worker_recovery_seconds())
+	var food_danger := _food_runway_seconds() < food_lead + FOOD_RUNWAY_MARGIN_SECONDS
+	# Repeating an already-enabled Cook order cannot clear another life-support
+	# deadline. Once food work is running/waiting on its source, let an actionable
+	# air fix lead while its supply/build/haul window is still open.
+	var food_resident: VaultResident = null
+	var food_death := INF
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			continue
+		var food_seconds := float(food_times[resident.resident_id]) + resident.needs.health / (160.0 / DayCycle.SECONDS_PER_DAY)
+		if food_seconds < food_death:
+			food_resident = resident
+			food_death = food_seconds
+		var seconds := _projected_death_seconds(resident, INF)
+		if seconds < soonest:
+			threatened = resident
+			soonest = seconds
+	# Pantry runway governs the crop cutoff. A produced-food rescue must also
+	# reach the named resident before their own starvation health runs out,
+	# including recovery if breaks currently block delivery or cooking.
+	if bool(plan.get("rescue", false)):
+		var rescue_budget := minf(food_death, _food_runway_seconds())
+		if not food_blocker.is_empty():
+			rescue_budget -= _food_worker_recovery_seconds()
+		if float(plan.seconds) > rescue_budget:
+			plan = _food_fix_plan(rescue_budget)
+	var food_waiting := ("YOU leave Cook on" in str(plan.step.text) and food_blocker.is_empty()) or bool(plan.step.get("too_late", false))
+	var cause := ""
+	if food_danger and food_resident != null and (threatened == null or (food_death <= soonest and not food_waiting)):
+		threatened = food_resident
+		soonest = food_death
+		cause = "food"
+	elif threatened != null:
+		var best_runway := soonest
+		for need: String in ["air", "rest", "mood"]:
+			var runway := _projected_death_seconds(threatened, INF, need)
+			if runway > best_runway:
+				cause = need
+				best_runway = runway
+	if threatened == null:
+		return {}
+	var step: Dictionary = {}
+	var condition := "critical"
+	match cause:
+		"food":
+			condition = "starving"
+			if threatened.drafted:
+				step = _food_step({
+					"text": "Next: YOU undraft %s [R] · THEY eat/work" % threatened.resident_name,
+					"help": "Drafted crew cannot eat. Select %s and press R to undraft; keep food work enabled." % threatened.resident_name,
+					"tool": "select",
+				})
+			else:
+				step = {} if bool(plan.step.get("too_late", false)) else food_blocker
+				if step.is_empty():
+					step = plan.step
+
+		"air":
+			condition = "suffocating"
+			# A covered hatch response already fixes the air leak. Preserve its
+			# warning/watch priority and wording; blockers were checked first.
+			if game.breach_system.is_response_active():
+				return _watch_hatch_step()
+			step = _air_recovery_step()
+			if step.is_empty() and game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) == 0:
+				step = _charge_finish_step() if _unfinished_charge_count() > 0 else {
+					"text": "Next: YOU place a Charge Node · THEY power the Air Recycler",
+					"help": "The grid lacks available power for the Air Recycler. Place a Charge Node to add 7 power.",
+					"tool": "generator",
+				}
+			if step.is_empty():
+				step = {
+					"text": "Next: YOU place Air Recycler · THEY recycle more air",
+					"help": "The current recycling cannot cover crew consumption. Place and power another Air Recycler.",
+					"tool": "air",
+				}
+		"rest":
+			condition = "exhausted"
+			step = {
+				"text": "Next: YOU undraft %s [R] · THEY rest" % threatened.resident_name if threatened.drafted else "Next: YOU place bunks · THEY craft",
+				"help": "Undraft tired crew so they can rest. Place bunks so tired undrafted crew have a bed.",
+				"tool": "select" if threatened.drafted else "bed",
+			}
+		"mood":
+			condition = "in despair"
+			if not threatened.drafted:
+				var console := game.get_building_by_id(threatened.recreation_id) as VaultBuilding
+				if threatened.recreating and console != null and console.reserved_by == threatened.resident_id and game.job_system.can_use_recreation_console(threatened, console):
+					# The reserved console already fixes mood, including the walk to it.
+					condition = "recovering at the Rec Console"
+					step = {
+						"text": "Next: THEY recover mood",
+						"help": "%s already has a powered, reachable Rec Console reserved. Let them recover mood." % threatened.resident_name,
+						"tool": "select",
+						"recovering": true,
+					}
+				else:
+					step = _offline_rec_step()
+			if step.is_empty():
+				step = {
+					"text": "Next: YOU undraft %s [R] · THEY recover mood" % threatened.resident_name if threatened.drafted else "Next: YOU place a Rec Console · THEY recover mood",
+					"help": "Undraft crew so they can recover mood. Place and power a Rec Console for recreation.",
+					"tool": "select" if threatened.drafted else "rec",
+				}
+	if step.is_empty():
+		return {}
+	step.text = "Next: %s %s · %s" % [threatened.resident_name, condition, str(step.text).trim_prefix("Next: ")]
+	step["urgent"] = true
+	step["resident_id"] = threatened.resident_id
+	step["cause"] = cause
+	step["death_seconds"] = soonest
+	return step
+
+
+func _urgency_interrupts_care(step: Dictionary) -> bool:
+	if step.is_empty():
+		return false
+	var resident := game.get_resident_by_id(int(step.get("resident_id", -1)))
+	if resident == null:
+		return false
+	match str(step.get("cause", "")):
+		"food":
+			return true
+
+		"air":
+			return true
+		"rest":
+			return resident.needs.rest <= 0.0
+		"mood":
+			return resident.needs.mood <= ResidentNeeds.SEVERE_MOOD_THRESHOLD and not bool(step.get("recovering", false))
+	return false
+
+
+func _name_food_recovery(step: Dictionary, urgent_step: Dictionary) -> Dictionary:
+	var resident: VaultResident = null
+	if str(urgent_step.get("cause", "")) == "food":
+		resident = game.get_resident_by_id(int(urgent_step.resident_id))
+	elif game.food_system.meals < game.get_alive_count():
+		# Existing crisis advice also names a crew member already below the
+		# food crisis threshold. Cookable raw/pending meals can cover the runway
+		# while Cook or Haul is OFF; that must not leave this crisis unnamed.
+		# This labels an existing action; new food warnings still use runway.
+		for candidate: VaultResident in game.residents:
+			if candidate.alive and candidate.needs.food < 20.0 and (resident == null or candidate.needs.food < resident.needs.food):
+				resident = candidate
+	if resident == null:
+		return step
+	step.text = "Next: %s starving · %s" % [resident.resident_name, str(step.text).trim_prefix("Next: ")]
+	step["urgent"] = true
+	step["resident_id"] = resident.resident_id
+	step["cause"] = "food"
+	return step
 
 
 func _charge_finish_step() -> Dictionary:
@@ -1189,8 +1768,14 @@ func _offline_rec_step() -> Dictionary:
 	}
 
 
-func _fund_blueprint_step(kind: int) -> Dictionary:
+func _fund_blueprint_step(kind: int, food_work_blocker := false) -> Dictionary:
 	var shortfall := _salvage_shortfall(kind)
+	if food_work_blocker:
+		# Existing food blueprints spend from the same inventory before this
+		# optional supply job. Account for them once when designating funding.
+		for building: VaultBuilding in game.buildings:
+			if not building.complete and building.kind != kind:
+				shortfall += maxi(0, building.get_cost() - building.delivered - game.job_system.get_build_supply_in_transit(building.building_id))
 	var tiles := _salvage_dig_tiles(shortfall)
 	var kind_name: String = VaultBuilding.KIND_NAMES[kind]
 	return {
@@ -1300,6 +1885,177 @@ func _hatch_key_step(action: String, they: String, help: String) -> Dictionary:
 	}
 
 
+func _kitchen_recovery_step() -> Dictionary:
+	var completed_kitchens := game.get_completed_building_count(VaultBuilding.Kind.KITCHEN)
+	if completed_kitchens < 1:
+		var unfinished_kitchens := 0
+		for kitchen: VaultBuilding in game.buildings:
+			if kitchen.kind == VaultBuilding.Kind.KITCHEN and not kitchen.complete:
+				unfinished_kitchens += 1
+		if unfinished_kitchens >= 1:
+			return _food_step({
+				"text": "Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station",
+				"help": "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint.",
+				"tool": "select",
+			})
+		return _food_step({
+			"text": "Next: YOU place a Nutrient Station · THEY cook",
+			"help": "Place and power a Nutrient Station so Cook can turn raw food into meals.",
+			"tool": "kitchen",
+		})
+	if completed_kitchens > 0 and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) == 0:
+		var all_kitchens_disabled := true
+		for kitchen: VaultBuilding in game.buildings:
+			if kitchen.kind == VaultBuilding.Kind.KITCHEN and kitchen.complete and not kitchen.manually_disabled:
+				all_kitchens_disabled = false
+				break
+		if all_kitchens_disabled:
+			return _food_step({
+				"text": "Next: YOU power the Nutrient Station · THEY cook",
+				"help": "Power the Nutrient Station so Cook can run.",
+				"tool": "select",
+			})
+		var release := _food_power_release_step(VaultBuilding.Kind.KITCHEN)
+		if not release.is_empty():
+			return release
+		if _unfinished_charge_count() > 0:
+			return _food_step(_charge_finish_step())
+		return _food_step({
+			"text": "Next: YOU place a Charge Node · THEY power the kitchen",
+			"help": "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power.",
+			"tool": "generator",
+		})
+	return {}
+
+
+func _meal_recovery_step(urgent := false) -> Dictionary:
+	if not _has_eligible_worker("haul") and (game.job_system.get_pending_meals() > 0 or (not game.food_system.can_cook() and game.job_system.get_pending_raw_food() > 0)):
+		return _food_step({
+			"text": "Next: YOU enable Haul · THEY deliver food",
+			"tool": "select",
+			"help": "Open PRIORITIES [P] and enable Haul on a living, undrafted resident. Food is waiting for delivery.",
+		})
+	if not _has_eligible_worker("cook") and (
+		not urgent or game.food_system.can_cook() or game.job_system.get_pending_raw_food() > 0
+		or game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) > 0
+	):
+		return _food_step({
+			"text": "Next: YOU enable Cook · THEY cook",
+			"tool": "select",
+			"help": "Enable Cook on a living, undrafted resident so the powered Nutrient Station can run.",
+		})
+	elif game.food_system.can_cook():
+		return _food_step({
+			"text": "Next: YOU leave Cook on · THEY cook",
+			"tool": "select",
+			"help": "Meals are short. The powered Nutrient Station can cook.",
+		})
+	else:
+		if game.job_system.get_pending_meals() == 0 and game.job_system.get_pending_raw_food() == 0:
+			return _grow_recovery_step()
+	return _food_step({
+		"text": "Next: YOU leave Cook on · THEY cook",
+		"tool": "select",
+		"help": "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food.",
+	})
+
+
+
+func _grow_recovery_step() -> Dictionary:
+	var total_trays := 0
+	var completed_trays := 0
+	var enabled_trays := 0
+	for tray: VaultBuilding in game.buildings:
+		if tray.kind != VaultBuilding.Kind.GROW_TRAY:
+			continue
+		total_trays += 1
+		if tray.complete:
+			completed_trays += 1
+			if not tray.manually_disabled:
+				enabled_trays += 1
+	if total_trays == 0:
+		return _food_step({
+			"text": "Next: YOU place a Grow Tray · THEY grow",
+			"tool": "grow",
+			"help": "Place a Grow Tray and keep it powered. Its raw food output needs Haul delivery before Cook can use it.",
+		})
+	if completed_trays == 0:
+		return _food_step({
+			"text": "Next: YOU leave Haul + Craft on · THEY finish the Grow Tray",
+			"tool": "select",
+			"help": "Keep Haul + Craft above OFF so crew supply and finish the Grow Tray blueprint.",
+		})
+	if game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) == 0:
+		if enabled_trays == 0:
+			return _food_step({
+				"text": "Next: YOU enable a Grow Tray · THEY grow",
+				"tool": "select",
+				"help": "Enable a completed Grow Tray so it can grow raw food. Haul delivers its output for Cook.",
+				"restores_existing_tray": true,
+			})
+		var release := _food_power_release_step(VaultBuilding.Kind.GROW_TRAY)
+		if not release.is_empty():
+			release["restores_existing_tray"] = true
+			return release
+		if _unfinished_charge_count() > 0:
+			return _food_step(_charge_finish_step())
+		return _food_step({
+			"text": "Next: YOU place a Charge Node · THEY power the Grow Tray",
+			"tool": "generator",
+			"help": "The grid lacks available power for the Grow Tray. Place a Charge Node to add 7 power.",
+		})
+	return _food_step({
+		"text": "Next: YOU leave Cook on · THEY cook",
+		"tool": "select",
+		"help": "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food.",
+	})
+
+
+func _air_recovery_step() -> Dictionary:
+	if game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) < 1:
+		var completed_air := 0
+		var unfinished_air := 0
+		var disabled_air := 0
+		for recycler: VaultBuilding in game.buildings:
+			if recycler.kind != VaultBuilding.Kind.AIR_RECYCLER:
+				continue
+			if recycler.complete:
+				completed_air += 1
+				if recycler.manually_disabled:
+					disabled_air += 1
+			else:
+				unfinished_air += 1
+		if completed_air == 0:
+			if unfinished_air > 0:
+				if _salvage_shortfall(VaultBuilding.Kind.AIR_RECYCLER) > 0:
+					return _fund_blueprint_step(VaultBuilding.Kind.AIR_RECYCLER)
+				return {
+					"text": "Next: YOU leave Haul + Craft on · THEY finish the Air Recycler",
+					"help": "Keep Haul + Craft above OFF so crew supply and finish the Air Recycler blueprint.",
+					"tool": "select",
+				}
+			return {
+				"text": "Next: YOU place Air Recycler · THEY craft it",
+				"help": "Designate AIR $14 and keep it powered (3). Craft auto-builds the blueprint.",
+				"tool": "air",
+			}
+		if disabled_air == completed_air:
+			return {
+				"text": "Next: YOU enable an Air Recycler · THEY recycle air",
+				"help": "Select a completed Air Recycler and click ENABLE so it can recycle air.",
+				"tool": "select",
+			}
+	return {}
+
+
+func _watch_hatch_step() -> Dictionary:
+	return {
+		"text": "Next: YOU watch hatch · THEY auto-patch",
+		"help": "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft.",
+		"tool": "select",
+	}
+
+
 func _primary_next_step() -> Dictionary:
 	var critical_resident := false
 	var mood_break_risk := false
@@ -1316,10 +2072,14 @@ func _primary_next_step() -> Dictionary:
 			rec_wanted = true
 		if resident.needs.wants_medical_care() and resident.medical_bed_id < 0:
 			injured_without_reservation = true
+	var urgent_step := _resident_urgency_step()
 	var breach_blocker := _breach_blocker_step()
 	if not breach_blocker.is_empty():
 		_hold_mood_break_tip(mood_break_risk, rec_wanted)
-		return breach_blocker
+		# Funding/patching the hatch still leads, but it must not erase an
+		# existing food warning while it blocks the workers/food budget.
+		return _name_food_recovery(breach_blocker, urgent_step)
+	var interrupts_care := _urgency_interrupts_care(urgent_step)
 	# An empty larder outranks the mood tips: a stress break passes, starvation does not.
 	var empty_larder_break := mood_break_risk and game.food_system.meals == 0
 	# With no Nutrient Station the larder only falls. Once the crew's stored meals and
@@ -1331,44 +2091,21 @@ func _primary_next_step() -> Dictionary:
 		and _crew_food_days() < FOOD_LEAD_DAYS
 	)
 	if unfed_larder_break or ((critical_resident or empty_larder_break) and game.food_system.meals < game.get_alive_count()):
-		var completed_kitchens := game.get_completed_building_count(VaultBuilding.Kind.KITCHEN)
-		# The crisis returns before the Rec branch, so keep the Rec-tip hold current here too.
 		_hold_mood_break_tip(mood_break_risk, rec_wanted)
-		if completed_kitchens < 1:
-			var unfinished_kitchens := 0
-			for kitchen: VaultBuilding in game.buildings:
-				if kitchen.kind == VaultBuilding.Kind.KITCHEN and not kitchen.complete:
-					unfinished_kitchens += 1
-			if unfinished_kitchens >= 1:
-				return _food_step({
-					"text": "Next: YOU leave Haul + Craft on · THEY finish the Nutrient Station",
-					"help": "Keep Haul + Craft above OFF so crew supply and finish the Nutrient Station blueprint.",
-					"tool": "select",
-				})
-			return _food_step({
-				"text": "Next: YOU place a Nutrient Station · THEY cook",
-				"help": "Place and power a Nutrient Station so Cook can turn raw food into meals.",
-				"tool": "kitchen",
-			})
-		if completed_kitchens > 0 and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) == 0:
-			var all_kitchens_disabled := true
-			for kitchen: VaultBuilding in game.buildings:
-				if kitchen.kind == VaultBuilding.Kind.KITCHEN and kitchen.complete and not kitchen.manually_disabled:
-					all_kitchens_disabled = false
-					break
-			if all_kitchens_disabled:
-				return _food_step({
-					"text": "Next: YOU power the Nutrient Station · THEY cook",
-					"help": "Power the Nutrient Station so Cook can run.",
-					"tool": "select",
-				})
-			if _unfinished_charge_count() > 0:
-				return _food_step(_charge_finish_step())
-			return _food_step({
-				"text": "Next: YOU place a Charge Node · THEY power the kitchen",
-				"help": "The grid lacks available power for the Nutrient Station. Place a Charge Node to add 7 power.",
-				"tool": "generator",
-			})
+		var kitchen_step := _kitchen_recovery_step()
+		if not kitchen_step.is_empty():
+			# Existing kitchen crisis advice already leads optional builds. Keep its
+			# wording unless a different threat, undrafting or ready meals take priority.
+			if not interrupts_care or (
+				str(urgent_step.get("kind", "")) == STEP_KIND_FOOD
+				and not bool(urgent_step.get("too_late", false))
+				and not game.get_resident_by_id(int(urgent_step.resident_id)).drafted
+				and game.job_system.get_pending_meals() == 0
+			):
+				return _name_food_recovery(kitchen_step, urgent_step)
+	if interrupts_care:
+		_hold_mood_break_tip(mood_break_risk, rec_wanted)
+		return urgent_step
 	mood_break_risk = _hold_mood_break_tip(mood_break_risk, rec_wanted)
 	if mood_break_risk and game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) < 1:
 		var unfinished_rec := 0
@@ -1450,76 +2187,13 @@ func _primary_next_step() -> Dictionary:
 			"tool": "bed",
 		}
 	if critical_resident and game.food_system.meals < game.get_alive_count() and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) >= 1:
-		if not _has_eligible_worker("haul") and (game.job_system.get_pending_meals() > 0 or (not game.food_system.can_cook() and game.job_system.get_pending_raw_food() > 0)):
-			return _food_step({
-				"text": "Next: YOU enable Haul · THEY deliver food",
-				"tool": "select",
-				"help": "Open PRIORITIES [P] and enable Haul on a living, undrafted resident. Food is waiting for delivery.",
-			})
-		if not _has_eligible_worker("cook"):
-			return _food_step({
-				"text": "Next: YOU enable Cook · THEY cook",
-				"tool": "select",
-				"help": "Enable Cook on a living, undrafted resident so the powered Nutrient Station can run.",
-			})
-		elif game.food_system.can_cook():
-			return _food_step({
-				"text": "Next: YOU leave Cook on · THEY cook",
-				"tool": "select",
-				"help": "Meals are short. The powered Nutrient Station can cook.",
-			})
-		else:
-			if game.job_system.get_pending_meals() == 0 and game.job_system.get_pending_raw_food() == 0:
-				var total_trays := 0
-				var completed_trays := 0
-				var enabled_trays := 0
-				for tray: VaultBuilding in game.buildings:
-					if tray.kind != VaultBuilding.Kind.GROW_TRAY:
-						continue
-					total_trays += 1
-					if tray.complete:
-						completed_trays += 1
-						if not tray.manually_disabled:
-							enabled_trays += 1
-				if total_trays == 0:
-					return _food_step({
-						"text": "Next: YOU place a Grow Tray · THEY grow",
-						"tool": "grow",
-						"help": "Place a Grow Tray and keep it powered. Its raw food output needs Haul delivery before Cook can use it.",
-					})
-				if completed_trays == 0:
-					return _food_step({
-						"text": "Next: YOU leave Haul + Craft on · THEY finish the Grow Tray",
-						"tool": "select",
-						"help": "Keep Haul + Craft above OFF so crew supply and finish the Grow Tray blueprint.",
-					})
-				if game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) == 0:
-					if enabled_trays == 0:
-						return _food_step({
-							"text": "Next: YOU enable a Grow Tray · THEY grow",
-							"tool": "select",
-							"help": "Enable a completed Grow Tray so it can grow raw food. Haul delivers its output for Cook.",
-						})
-					if _unfinished_charge_count() > 0:
-						return _food_step(_charge_finish_step())
-					return _food_step({
-						"text": "Next: YOU place a Charge Node · THEY power the Grow Tray",
-						"tool": "generator",
-						"help": "The grid lacks available power for the Grow Tray. Place a Charge Node to add 7 power.",
-					})
-			return _food_step({
-				"text": "Next: YOU leave Cook on · THEY cook",
-				"tool": "select",
-				"help": "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food.",
-			})
+		return _name_food_recovery(_meal_recovery_step(), urgent_step)
 	if game.breach_system.is_response_active():
 		# Covered WARNING/OPEN (the blocker step found nothing missing): survival
 		# tips above still win, but no build-order tip until the hatch seals.
-		return {
-			"text": "Next: YOU watch hatch · THEY auto-patch",
-			"help": "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft.",
-			"tool": "select",
-		}
+		return _watch_hatch_step()
+	if bool(urgent_step.get("recovering", false)):
+		return urgent_step
 	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
 	var floor_count := game.map_grid.get_floor_cells().size() - game.map_grid.layout_pocket_count
 	var dig_marks := game.map_grid.dig_marks.size()
@@ -1622,39 +2296,9 @@ func _primary_next_step() -> Dictionary:
 			"help": "Enable Grow + Nutrient power. Keep Cook/Haul above OFF so defaults keep working.",
 			"tool": "select",
 		})
-	if game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) < 1:
-		var completed_air := 0
-		var unfinished_air := 0
-		var disabled_air := 0
-		for recycler: VaultBuilding in game.buildings:
-			if recycler.kind != VaultBuilding.Kind.AIR_RECYCLER:
-				continue
-			if recycler.complete:
-				completed_air += 1
-				if recycler.manually_disabled:
-					disabled_air += 1
-			else:
-				unfinished_air += 1
-		if completed_air == 0:
-			if unfinished_air > 0:
-				if _salvage_shortfall(VaultBuilding.Kind.AIR_RECYCLER) > 0:
-					return _fund_blueprint_step(VaultBuilding.Kind.AIR_RECYCLER)
-				return {
-					"text": "Next: YOU leave Haul + Craft on · THEY finish the Air Recycler",
-					"help": "Keep Haul + Craft above OFF so crew supply and finish the Air Recycler blueprint.",
-					"tool": "select",
-				}
-			return {
-				"text": "Next: YOU place Air Recycler · THEY craft it",
-				"help": "Designate AIR $14 and keep it powered (3). Craft auto-builds the blueprint.",
-				"tool": "air",
-			}
-		if disabled_air == completed_air:
-			return {
-				"text": "Next: YOU enable an Air Recycler · THEY recycle air",
-				"help": "Select a completed Air Recycler and click ENABLE so it can recycle air.",
-				"tool": "select",
-			}
+	var air_step := _air_recovery_step()
+	if not air_step.is_empty():
+		return air_step
 	var hatch_ready := (
 		game.breach_system.is_sealed()
 		or (
@@ -1673,11 +2317,7 @@ func _primary_next_step() -> Dictionary:
 			"tool": "select",
 		}
 	if not game.breach_system.is_sealed():
-		return {
-			"text": "Next: YOU watch hatch · THEY auto-patch",
-			"help": "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft.",
-			"tool": "select",
-		}
+		return _watch_hatch_step()
 	if not game.day_cycle.completed:
 		var oldest_short_blueprint: VaultBuilding = null
 		for building: VaultBuilding in game.buildings:
@@ -3545,6 +4185,8 @@ func note_keep_running_loss() -> void:
 
 
 func _is_latchable_step(step: Dictionary) -> bool:
+	if bool(step.get("urgent", false)):
+		return false
 	return str(step.get("tool", "")) in ["medical", "rec"] or (
 		str(step.get("text", "")).contains("Med Bed") or str(step.get("text", "")).contains("Rec Console")
 	)
@@ -3606,6 +4248,8 @@ func _food_step(step: Dictionary) -> Dictionary:
 
 
 func _is_default_step(step: Dictionary) -> bool:
+	if bool(step.get("urgent", false)):
+		return false
 	if str(step.get("kind", "")) in KEEP_RUNNING_PASS_KINDS:
 		return false
 	var text := str(step.get("text", ""))
