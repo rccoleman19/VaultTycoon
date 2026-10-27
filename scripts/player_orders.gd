@@ -3263,8 +3263,15 @@ func _refresh_alerts(step: Dictionary) -> void:
 	var medical_beds_built := game.get_completed_building_count(VaultBuilding.Kind.MEDICAL_BED)
 	if medical_beds_built > 0:
 		alerts.append("INJURED %d · MED BEDS FREE %d" % [injured, free_medical])
-	elif injured > 0:
-		alerts.append("INJURED %d · NO MED BED" % injured)
+	else:
+		# F5a: NO MED BED names a Med Bed need, so a scratch above the seek threshold
+		# (no Med Bed wanted yet) stays out of it; the HUD injured count is unchanged.
+		var needing_med_bed := 0
+		for resident: VaultResident in game.residents:
+			if _counts_as_injured(resident) and resident.needs.wants_medical_care():
+				needing_med_bed += 1
+		if needing_med_bed > 0:
+			alerts.append("INJURED %d · NO MED BED" % needing_med_bed)
 	var lowest_mood_resident: VaultResident = null
 	var recreation_needed := false
 	for resident: VaultResident in game.residents:
@@ -3412,10 +3419,6 @@ const MED_BED_MIN_FOOD := 35.0
 
 func _counts_as_injured(resident: VaultResident) -> bool:
 	if not resident.alive or resident.needs.health >= 100.0:
-		return false
-	# A scratch above the Med Bed seek threshold is not a Med Bed need: the
-	# Next chain only asks for a Med Bed once a resident wants care.
-	if resident.medical_bed_id < 0 and not resident.needs.wants_medical_care():
 		return false
 	return resident.medical_bed_id >= 0 or resident.needs.food > MED_BED_MIN_FOOD
 

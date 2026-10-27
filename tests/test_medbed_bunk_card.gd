@@ -24,35 +24,39 @@ func _run() -> void:
 
 func _alerts(game: VaultGame) -> String:
 	game.player_orders.refresh()
-	return str(game.player_orders.alert_label.text) + " " + str(game.player_orders.alert_label.tooltip_text)
+	return "  ·  ".join(game.player_orders.all_alerts)
+
+
+func _fen(game: VaultGame) -> VaultResident:
+	for resident: VaultResident in game.residents:
+		resident.needs.health = 100.0
+		resident.needs.food = 70.0
+		resident.medical_bed_id = -1
+	return game.residents[0]
 
 
 func _test_scratch_not_injured() -> void:
 	var game := _sealed_game()
-	var fen: VaultResident = game.residents[0]
+	var fen := _fen(game)
 	fen.needs.health = 99.9
-	fen.needs.food = 70.0
 	_assert_false(fen.needs.wants_medical_care(), "fixture: 99.9 HP does not seek a Med Bed")
-	_assert_false(game.player_orders._counts_as_injured(fen), "F5a 99.9 HP without a Med Bed reservation is not counted injured")
+	_assert_true(game.player_orders._counts_as_injured(fen), "F5a HUD injured count unchanged for a scratch")
+	_assert_true("NO MED BED" not in _alerts(game), "F5a no NO MED BED alert for a 99.9 HP scratch")
 	fen.needs.health = ResidentNeeds.MEDICAL_SEEK_THRESHOLD + 0.5
-	_assert_false(game.player_orders._counts_as_injured(fen), "F5a just above the seek threshold is not counted injured")
-	_assert_true("NO MED BED" not in _alerts(game), "F5a no NO MED BED alert for a scratch")
+	_assert_true("NO MED BED" not in _alerts(game), "F5a no NO MED BED alert just above the seek threshold")
 	game.queue_free()
 	await _layout()
 
 
 func _test_real_injury() -> void:
 	var game := _sealed_game()
-	var fen: VaultResident = game.residents[0]
+	var fen := _fen(game)
 	fen.needs.health = ResidentNeeds.MEDICAL_SEEK_THRESHOLD
-	fen.needs.food = 70.0
-	_assert_true(game.player_orders._counts_as_injured(fen), "F5a at the seek threshold the resident is injured")
+	_assert_true("INJURED 1 · NO MED BED" in _alerts(game), "F5a at the seek threshold NO MED BED shows")
 	fen.needs.health = 60.0
-	_assert_true(game.player_orders._counts_as_injured(fen), "F5a 60 HP is injured")
-	fen.needs.health = 99.0
-	fen.medical_bed_id = 3
-	_assert_true(game.player_orders._counts_as_injured(fen), "F5a a resident already reserving a Med Bed still counts while healing")
-	fen.medical_bed_id = -1
+	var other: VaultResident = game.residents[1]
+	other.needs.health = 99.9
+	_assert_true("INJURED 1 · NO MED BED" in _alerts(game), "F5a NO MED BED counts only the resident who wants care")
 	game.queue_free()
 	await _layout()
 
