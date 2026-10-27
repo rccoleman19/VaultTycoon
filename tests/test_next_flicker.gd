@@ -835,6 +835,21 @@ func _test_bunk_text_stable() -> void:
 	_assert_equal(str(_present(game, GENERATOR_STEP).get("text", "")), GENERATOR_STEP.text, "D10 a different step kind is shown as built")
 	_tick(game, 3.0)
 	_assert_equal(str(_present(game, BUNK_ONE).get("text", "")), BUNK_ONE.text, "D10 after leaving the bunk step a new bunk step starts fresh")
+	# The latch holds whichever wording came first, including the singular one.
+	game.player_orders.clear_survival_tips()
+	_present(game, BUNK_ONE)
+	for variant: Dictionary in [BUNK_TWO, BUNK_CRISIS, BUNK_ONE]:
+		_tick(game, 3.0)
+		_assert_equal(str(_present(game, variant).get("text", "")), BUNK_ONE.text, "D10 a first singular wording is held too (%s)" % variant.text)
+	# An urgent bunk step is a different step even when its wording matches.
+	var urgent_bunk := BUNK_CRISIS.duplicate(true)
+	urgent_bunk["urgent"] = true
+	game.player_orders.clear_survival_tips()
+	_present(game, BUNK_TWO)
+	_tick(game, 3.0)
+	_assert_equal(str(_present(game, urgent_bunk).get("text", "")), BUNK_CRISIS.text, "D10 an urgent bunk step is never rewritten to the held text")
+	game.player_orders.clear_survival_tips()
+	_present(game, BUNK_TWO)
 	# An urgent, named bunk step is a different step and is never rewritten.
 	var named := {"text": "Next: Ari exhausted · YOU place bunks · THEY craft", "tool": "bed", "urgent": true, "resident_id": 1}
 	_tick(game, 3.0)
