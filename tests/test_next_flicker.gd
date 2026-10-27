@@ -912,16 +912,18 @@ func _test_rec_blocker_hold() -> void:
 func _test_unnamed_tip_shape() -> void:
 	var game := _starving_opening(5)
 	var orders = game.player_orders
-	var samples: Array = [
-		{"text": "Next: YOU place a Nutrient Station · THEY cook", "kind": "food"},
-		{"text": "Next: YOU leave Cook on · THEY make meals", "kind": "food"},
-		{"text": "Next: YOU undraft Ari [R] · THEY eat/work", "kind": "food"},
-		{"text": "Next: nothing lands in time · keep crew fed where possible", "kind": "food", "too_late": true},
-		{"text": "Next: keep crew fed", "kind": "food"},
-	]
-	for sample: Dictionary in samples:
-		var shaped: String = orders._unnamed_food_text(sample.duplicate(true))
-		_assert_unnamed_tip_shape(shaped, "D12 " + str(sample.text))
-	_assert_equal(orders._unnamed_food_text(samples[0].duplicate(true)), "Next: food runway short · YOU place a Nutrient Station · THEY cook", "D12 a well-formed step keeps its own action")
-	_assert_equal(orders._unnamed_food_text(samples[3].duplicate(true)), "Next: food runway short · YOU keep Cook + Haul on · THEY feed crew where possible", "D12 the too-late step gets the standing action")
+	_assert_true(orders.has_method("_unnamed_food_text"), "D12 the unnamed tip text builder exists")
+	if orders.has_method("_unnamed_food_text"):
+		var samples: Array = [
+			{"text": "Next: YOU place a Nutrient Station · THEY cook", "kind": "food"},
+			{"text": "Next: YOU leave Cook on · THEY make meals", "kind": "food"},
+			{"text": "Next: YOU undraft Ari [R] · THEY eat/work", "kind": "food"},
+			{"text": "Next: nothing lands in time · keep crew fed where possible", "kind": "food", "too_late": true},
+			{"text": "Next: keep crew fed", "kind": "food"},
+		]
+		for sample: Dictionary in samples:
+			var shaped: String = orders._unnamed_food_text(sample.duplicate(true))
+			_assert_unnamed_tip_shape(shaped, "D12 " + str(sample.text))
+		_assert_equal(orders._unnamed_food_text(samples[0].duplicate(true)), "Next: food runway short · YOU place a Nutrient Station · THEY cook", "D12 a well-formed step keeps its own action")
+		_assert_equal(orders._unnamed_food_text(samples[3].duplicate(true)), "Next: food runway short · YOU keep Cook + Haul on · THEY feed crew where possible", "D12 the too-late step gets the standing action")
 	_dispose(game)
