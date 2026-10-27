@@ -2226,13 +2226,28 @@ func _finish_death() -> void:
 	ended = false
 	outcome = "death"
 	user_paused = true
-	status_message = "%s has died. Review the death recap, then Resume or Retry from day checkpoint." % str(death_recap.get("name", "A resident"))
+	status_message = "%s has died. Review the death recap." % str(death_recap.get("name", "A resident"))
 	status_message_left = 8.0
 	player_orders.show_outcome(false, get_alive_count())
 
 
+# Possibility, not a forecast: victory needs day 7 complete, a sealed breach and
+# breathable oxygen. Optional wing orders never gate it. With no living crew it
+# is impossible; endless keep-running crew can always continue. Otherwise only
+# a proven food wipe before day 7 rules victory out. Air, work, power and hatch
+# forecasts can change with player fixes / fewer mouths, so uncertainty is true.
+func can_still_win_shift() -> bool:
+	if get_alive_count() <= 0:
+		return false
+	if keep_running:
+		return true
+	var seconds_left := maxf(0.0, DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE - day_cycle.elapsed_seconds)
+	return not player_orders._food_wipe_before(seconds_left)
+
+
 func resume_after_death() -> bool:
-	if outcome != "death" or get_alive_count() <= 0:
+	# Enforce the same decision for callers that bypass the recap button.
+	if outcome != "death" or not can_still_win_shift():
 		return false
 	outcome = ""
 	ended = false

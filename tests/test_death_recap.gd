@@ -74,6 +74,10 @@ func _run() -> void:
 	_case("m", _test_tip_cause_and_resets)
 	_case("n", _test_recap_button_chrome_and_retry_focus)
 	_case("o", _test_recap_without_checkpoint_button_and_focus)
+	_case("p", _test_named_continue_and_dynamic_button_width)
+	_case("q", _test_keep_running_named_continue)
+	_case("r", _test_doomed_survivors_cannot_continue)
+	_case("s", _test_named_continue_then_final_wipe)
 	for path: String in _paths:
 		_remove_test_save(path)
 	print("DEATH RECAP TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
@@ -185,10 +189,14 @@ func _assert_recap(game: VaultGame) -> void:
 	_assert_false("nothing lands in time" in tip, "too_late is never recorded as an actionable tip")
 	var resume := _button(orders, "outcome_resume_button")
 	var can_resume := game.get_alive_count() > 0 and game.outcome == "death"
+	if can_resume and game.has_method("can_still_win_shift"):
+		can_resume = bool(game.call("can_still_win_shift"))
 	_assert_true(resume != null, "recap has a Resume button")
 	if resume != null:
-		_assert_equal(resume.visible and not resume.disabled, can_resume, "Resume is available iff this death leaves survivors")
-		_assert_equal(resume.visible, can_resume, "loss hides Resume")
+		_assert_equal(resume.visible and not resume.disabled, can_resume, "Continue is available iff survivors can still win or keep running")
+		_assert_equal(resume.visible, can_resume, "a wipe or a proven doomed shift hides Continue")
+		if can_resume and not str(recap.get("name", "")).is_empty():
+			_assert_equal(resume.text, "Continue without %s" % str(recap.name), "Continue names the dead resident from the recap")
 	var retry := _button(orders, "outcome_retry_button")
 	_assert_true(retry != null, "recap has a Retry from day checkpoint button")
 	if retry != null:
@@ -837,6 +845,205 @@ func _test_recap_without_checkpoint_button_and_focus() -> void:
 	_assert_true(resume.has_focus() and game.get_viewport().gui_get_focus_owner() == resume and not retry.has_focus(), "disabled Retry falls back to visible enabled Resume for focus")
 	orders.hide_outcome()
 	_assert_recap_focus_cleared(game, resume, retry, "hiding no-checkpoint recap")
+	_dispose(game)
+
+
+func _prepare_breathable_sealed_recap(game: VaultGame, elapsed_seconds := 0.0) -> void:
+	game.oxygen_system.oxygen = 100.0
+	game.breach_system.advance(0.0, game.breach_system.warning_at)
+	game.breach_system.patch_delivered = BreachSystem.PATCH_COST
+	game.breach_system.apply_patch_work(100.0)
+	game.player_orders.show_breach_warning(false)
+	game.day_cycle.deserialize({"elapsed_seconds": elapsed_seconds, "current_day": mini(7, floori(elapsed_seconds / DayCycle.SECONDS_PER_DAY) + 1), "completed": false})
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.mood = 100.0
+		resident.needs.health = 100.0
+
+
+func _assert_continue_width(resume: Button, retry: Button, context: String) -> void:
+	var font := resume.get_theme_font("font")
+	var font_size := resume.get_theme_font_size("font_size")
+	var text_width := font.get_string_size(resume.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	var style_width := resume.get_theme_stylebox("normal").get_minimum_size().x
+	_assert_true(resume.custom_minimum_size.x >= ceilf(text_width + style_width), "%s sets a minimum width covering the full label and button padding" % context)
+	_assert_true(resume.custom_minimum_size == retry.custom_minimum_size, "%s keeps Continue and Retry at equal minimum sizes" % context)
+	_assert_equal(resume.get_combined_minimum_size().x, retry.get_combined_minimum_size().x, "%s gives both buttons the same effective width" % context)
+
+
+func _assert_shift_can_continue(game: VaultGame, expected: bool, context: String) -> void:
+	# The control commit must fail an assertion instead of calling an absent method.
+	_assert_true(game.has_method("can_still_win_shift"), "%s uses the game's documented winnability predicate" % context)
+	if game.has_method("can_still_win_shift"):
+		_assert_equal(bool(game.call("can_still_win_shift")), expected, context)
+
+
+func _test_named_continue_and_dynamic_button_width() -> void:
+	var game := _game()
+	game.begin_shift()
+	_prepare_breathable_sealed_recap(game, 278.0)
+	var target: VaultResident = game.residents[0]
+	target.resident_name = "Ari"
+	_force_starvation(game, target)
+	var orders := game.player_orders
+	var resume := _button(orders, "outcome_resume_button")
+	var retry := _button(orders, "outcome_retry_button")
+	_assert_true(game.outcome == "death" and game.get_alive_count() > 0, "winnable day-seven fixture records a real death with living survivors")
+	_assert_shift_can_continue(game, true, "healthy survivors can reach day seven in sealed breathable air")
+	_assert_true(resume != null and retry != null, "a winnable death retains both recap actions")
+	if resume == null or retry == null:
+		_dispose(game)
+		return
+	_assert_true(resume.visible and not resume.disabled, "winnable death shows enabled Continue")
+	_assert_equal(resume.text, "Continue without Ari", "winnable death uses the exact dead resident name")
+	_assert_continue_width(resume, retry, "short dead name")
+	var old_width := resume.custom_minimum_size.x
+	# Changing only the saved recap name proves show_outcome reads that key and
+	# recomputes sizes after setting its label, including repeated presentations.
+	var long_name := "Alexandria Marigold Montgomery"
+	game.death_recap["name"] = long_name
+	orders.show_outcome(false, game.get_alive_count())
+	_assert_equal(resume.text, "Continue without %s" % long_name, "reopening uses the recap name instead of the resident object's name")
+	_assert_true(resume.custom_minimum_size.x > old_width, "a longer recap name recomputes the previously built button minimum")
+	_assert_continue_width(resume, retry, "long dead name")
+	_assert_true(retry.visible and not retry.disabled and retry.has_focus(), "named Continue preserves enabled Retry and its default focus")
+	_assert_false((orders.get("_outcome_legacy_row") as HBoxContainer).visible, "a winnable recap keeps the legacy row hidden")
+	game.death_recap.erase("name")
+	orders.show_outcome(false, game.get_alive_count())
+	_assert_true(resume.visible and not resume.disabled and not resume.text.is_empty() and not "Resume" in resume.text, "a missing recap name uses Continue wording without Resume")
+	_assert_continue_width(resume, retry, "missing dead name")
+	_assert_true(game.resume_after_death(), "the named winnable death permits the direct continuation path")
+	game.step_simulation(2.1)
+	_assert_true(game.ended and game.outcome == "win", "the surviving crew actually reaches the real day-seven win after continuing")
+	_dispose(game)
+
+
+func _test_keep_running_named_continue() -> void:
+	var game := _game()
+	game.begin_shift()
+	_prepare_breathable_sealed_recap(game, DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE - VaultGame.SIMULATION_TICK)
+	game.food_system.meals = 1000
+	game.step_simulation(VaultGame.SIMULATION_TICK * 2.0)
+	_assert_true(game.outcome == "win" and game.ended, "endless-mode fixture first earns a real day-seven win")
+	_assert_true(game.start_keep_running(), "a real win enters keep-running mode")
+	# Endless mode has no further win condition. Even the food proof that
+	# blocks finite-shift continuation must allow living crew to keep running.
+	game.food_system.meals = 0
+	game.food_system.raw_food = 0
+	game.job_system.reset()
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 0.0
+		resident.needs.health = 1.0
+		resident.medical_bed_id = -1
+		resident.state = "Idle"
+	var target: VaultResident = game.residents[0]
+	target.resident_name = "Noel"
+	_force_starvation(game, target)
+	var resume := _button(game.player_orders, "outcome_resume_button")
+	var retry := _button(game.player_orders, "outcome_retry_button")
+	_assert_true(game.keep_running and game.outcome == "death" and game.get_alive_count() > 0, "keep-running death retains living survivors")
+	_assert_shift_can_continue(game, true, "endless mode permits surviving residents to continue")
+	_assert_true(resume != null and retry != null, "keep-running death retains both recap buttons")
+	if resume != null and retry != null:
+		_assert_true(resume.visible and not resume.disabled, "keep-running death always shows enabled Continue for survivors")
+		_assert_equal(resume.text, "Continue without Noel", "keep-running Continue uses the exact dead resident name")
+		_assert_continue_width(resume, retry, "keep-running death")
+	_dispose(game)
+
+
+func _test_doomed_survivors_cannot_continue() -> void:
+	var game := _game()
+	game.begin_shift()
+	_prepare_breathable_sealed_recap(game)
+	_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(21, 17))
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(25, 16))
+	game.power_grid.recalculate(game.buildings)
+	game.food_system.meals = 0
+	game.food_system.raw_food = 0
+	game.food_system.salvage = 0
+	game.job_system.reset()
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 0.0
+		resident.needs.health = 1.0
+		resident.medical_bed_id = -1
+		resident.state = "Idle"
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.production_progress = 0.0
+	var target: VaultResident = game.residents[0]
+	target.resident_name = "Devin"
+	_force_starvation(game, target)
+	var orders := game.player_orders
+	var resume := _button(orders, "outcome_resume_button")
+	var retry := _button(orders, "outcome_retry_button")
+	_assert_true(game.outcome == "death" and game.get_alive_count() > 0, "doomed fixture has living survivors instead of a final wipe")
+	_assert_true(game.food_system.meals == 0 and game.food_system.raw_food == 0 and game.job_system.get_pending_raw_food() == 0 and game.job_system.get_pending_meals() == 0, "doomed crew has no stored or already-produced food")
+	_assert_shift_can_continue(game, false, "all survivors starve before day seven and before any possible new harvest")
+	_assert_true(resume != null and retry != null, "doomed death keeps both button objects for inspection")
+	if resume != null and retry != null:
+		_assert_true(not resume.visible and resume.disabled, "doomed surviving crew hides and disables Continue")
+		_assert_true(retry.visible and not retry.disabled, "doomed surviving crew keeps checkpoint Retry visible and enabled")
+		_assert_true(retry.has_focus() and game.get_viewport().gui_get_focus_owner() == retry, "doomed surviving crew gives checkpoint Retry default focus")
+	_assert_true((orders.get("_outcome_legacy_row") as HBoxContainer).visible, "doomed surviving crew restores the legacy row alongside Retry")
+	var before := game.create_snapshot()
+	_assert_false(game.resume_after_death(), "calling the Resume path directly refuses a proven doomed finite shift")
+	_assert_json_equal(game, game.create_snapshot(), before, "refused continuation preserves the complete death snapshot")
+	_assert_true(game.outcome == "death" and game.user_paused and orders.outcome_panel.visible, "refused continuation retains the paused death recap")
+	# These are deliberate conservative escape hatches: an uncertain available
+	# fix must keep the option visible, even if the regular urgency tip is late.
+	var survivor: VaultResident = null
+	for resident: VaultResident in game.residents:
+		if resident.alive:
+			survivor = resident
+			break
+	_assert_true(survivor != null, "doomed fixture retains a living resident for conservative checks")
+	if survivor != null:
+		survivor.needs.food = 100.0
+		_assert_shift_can_continue(game, true, "one survivor with a full belly prevents hiding Continue")
+		survivor.needs.food = 0.0
+		game.food_system.raw_food = FoodSystem.COOK_INPUT
+		_assert_shift_can_continue(game, true, "cookable raw stock preserves an available food rescue")
+		game.food_system.raw_food = 0
+		game.job_system.queue_meals(game.map_grid.nearest_stockpile(survivor.get_cell(game.map_grid)), 1)
+		_assert_shift_can_continue(game, true, "a produced meal awaiting haul preserves an available rescue")
+		game.job_system.reset()
+		survivor.medical_bed_id = 999
+		survivor.state = "Rest-Medical"
+		_assert_shift_can_continue(game, true, "assigned medical recovery remains conservatively continuable")
+		survivor.medical_bed_id = -1
+		survivor.state = "Idle"
+		game.day_cycle.deserialize({"elapsed_seconds": DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE - 0.1, "current_day": 7, "completed": false})
+		_assert_shift_can_continue(game, true, "a survivor who can reach the imminent day-seven boundary keeps Continue")
+		game.day_cycle.reset()
+		var tray := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 17))
+		tray.production_progress = tray.get_grow_seconds() - 0.01
+		game.power_grid.recalculate(game.buildings)
+		_assert_shift_can_continue(game, true, "a tray with an imminent harvest leaves enough uncertainty to keep Continue")
+	_dispose(game)
+
+
+func _test_named_continue_then_final_wipe() -> void:
+	var game := _game()
+	game.begin_shift()
+	_prepare_breathable_sealed_recap(game)
+	game.residents[0].resident_name = "Mira"
+	_force_starvation(game, game.residents[0])
+	var orders := game.player_orders
+	var resume := _button(orders, "outcome_resume_button")
+	var retry := _button(orders, "outcome_retry_button")
+	_assert_true(resume != null and resume.visible and not resume.disabled, "before the wipe healthy survivors can continue")
+	if resume != null:
+		_assert_equal(resume.text, "Continue without Mira", "the pre-wipe recap uses the named Continue label")
+	for resident: VaultResident in game.residents:
+		if resident.alive:
+			_force_starvation(game, resident)
+	_assert_true(game.outcome == "loss" and game.ended and game.get_alive_count() == 0, "the final resident death still ends in a real wipe")
+	_assert_shift_can_continue(game, false, "a final wipe cannot win or continue")
+	_assert_true(resume != null and not resume.visible and resume.disabled, "a wipe still hides and disables Continue")
+	_assert_true(retry != null and retry.visible and not retry.disabled and retry.has_focus(), "a wipe keeps checkpoint Retry enabled with default focus")
+	_assert_true((orders.get("_outcome_legacy_row") as HBoxContainer).visible, "the wipe keeps the legacy outcome row")
+	_assert_false(game.resume_after_death(), "the direct Resume path still refuses a final wipe")
 	_dispose(game)
 
 

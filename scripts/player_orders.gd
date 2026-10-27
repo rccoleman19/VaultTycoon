@@ -934,7 +934,7 @@ func _build_outcome() -> void:
 	recap_row.add_theme_constant_override("separation", 12)
 	content.add_child(recap_row)
 	outcome_resume_button = Button.new()
-	outcome_resume_button.text = "Resume"
+	outcome_resume_button.text = "Continue with survivors"
 	_style_outcome_recap_button(outcome_resume_button)
 	outcome_resume_button.pressed.connect(func() -> void: game.resume_after_death())
 	recap_row.add_child(outcome_resume_button)
@@ -943,14 +943,21 @@ func _build_outcome() -> void:
 	_style_outcome_recap_button(outcome_retry_button)
 	outcome_retry_button.pressed.connect(func() -> void: game.retry_day_checkpoint())
 	recap_row.add_child(outcome_retry_button)
-	var button_width := maxf(outcome_resume_button.get_combined_minimum_size().x, outcome_retry_button.get_combined_minimum_size().x)
-	for button: Button in [outcome_resume_button, outcome_retry_button]:
-		button.custom_minimum_size.x = button_width
+	_size_outcome_recap_buttons()
 	outcome_panel.visible = false
 
 
+func _size_outcome_recap_buttons() -> void:
+	# Reset the old equal width before measuring a new resident's longer label.
+	for button: Button in [outcome_resume_button, outcome_retry_button]:
+		button.custom_minimum_size.x = 0
+	var button_width := maxf(outcome_resume_button.get_combined_minimum_size().x, outcome_retry_button.get_combined_minimum_size().x)
+	for button: Button in [outcome_resume_button, outcome_retry_button]:
+		button.custom_minimum_size.x = button_width
+
+
 func _style_outcome_recap_button(button: Button) -> void:
-	button.custom_minimum_size = Vector2(240, 40)
+	button.custom_minimum_size = Vector2(0, 40)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var styles := {
 		"normal": _panel_style(Color("263e46"), Color("8faeb7")),
@@ -962,8 +969,8 @@ func _style_outcome_recap_button(button: Button) -> void:
 	}
 	for state: String in styles:
 		var style: StyleBoxFlat = styles[state]
-		style.content_margin_left = 16
-		style.content_margin_right = 16
+		style.content_margin_left = 10
+		style.content_margin_right = 10
 		style.content_margin_top = 8
 		style.content_margin_bottom = 8
 		button.add_theme_stylebox_override(state, style)
@@ -1522,19 +1529,19 @@ func _food_depletion_times() -> Dictionary:
 # Project only the existing drains, not future jobs or buildings.
 # Air below 15% can already be recovering, so its damage has an end as well as
 # an onset. Combining the intervals accounts for low HP and overlapping drains.
-func _projected_death_seconds(resident: VaultResident, food_seconds: float, relieved := "") -> float:
+func _projected_death_seconds(resident: VaultResident, food_seconds: float, relieved := "", only_food := false) -> float:
 	var needs := resident.needs
 	var medical := resident.medical_bed_id >= 0 and resident.state == "Rest-Medical"
-	var loss := -JobSystem.MEDICAL_HP_PER_SECOND if medical else 0.0
-	if relieved != "mood" and needs.mood <= ResidentNeeds.SEVERE_MOOD_THRESHOLD:
+	var loss := -JobSystem.MEDICAL_HP_PER_SECOND if medical and not only_food else 0.0
+	if not only_food and relieved != "mood" and needs.mood <= ResidentNeeds.SEVERE_MOOD_THRESHOLD:
 		loss += 5.0 / DayCycle.SECONDS_PER_DAY
 	var changes: Array[Vector2] = []
-	if relieved != "rest" and not resident.sleeping and not medical:
+	if not only_food and relieved != "rest" and not resident.sleeping and not medical:
 		if needs.rest <= 0.0 or resident.drafted:
 			changes.append(Vector2(needs.rest / (34.0 / DayCycle.SECONDS_PER_DAY), 30.0 / DayCycle.SECONDS_PER_DAY))
 	if relieved != "food" and is_finite(food_seconds):
 		changes.append(Vector2(food_seconds, 160.0 / DayCycle.SECONDS_PER_DAY))
-	if relieved != "air":
+	if not only_food and relieved != "air":
 		var oxygen := game.oxygen_system
 		var crossing := oxygen.get_seconds_to_critical_crossing()
 		if oxygen.is_critical():
@@ -1555,6 +1562,37 @@ func _projected_death_seconds(resident: VaultResident, food_seconds: float, reli
 		elapsed = change.x
 		loss += change.y
 	return elapsed + health / loss if loss > 0.0 else INF
+
+
+# A deliberately optimistic impossibility proof for can_still_win_shift.
+# Next's `too_late` means pantry runway misses a production estimate, not that
+# every resident must die. Require no food anywhere, then grant instant power,
+# construction, Mk II upgrades, cooking and delivery. Even an imaginary new tray
+# still needs its six-second cycle; existing trays keep their growth fraction.
+# If all crew starve before even that raw harvest AND before day 7, no meal fix
+# can save the shift. Ignore remediable rest/mood/air damage in this projection.
+func _food_wipe_before(seconds_left: float) -> bool:
+	if seconds_left <= VaultGame.SIMULATION_TICK or _food_runway_seconds() > 0.0:
+		return false
+	if game.food_system.meals > 0 or game.food_system.raw_food > 0 or game.job_system.get_pending_meals() > 0 or game.job_system.get_pending_raw_food() > 0:
+		return false
+	var first_raw := VaultBuilding.GROW_MK2_SECONDS
+	for tray: VaultBuilding in game.buildings:
+		if tray.kind == VaultBuilding.Kind.GROW_TRAY:
+			var remaining_fraction := maxf(0.0, 1.0 - tray.production_progress / tray.get_grow_seconds())
+			first_raw = minf(first_raw, remaining_fraction * VaultBuilding.GROW_MK2_SECONDS)
+	var deadline := minf(seconds_left, first_raw) - VaultGame.SIMULATION_TICK
+	var depletion := _food_depletion_times()
+	for resident: VaultResident in game.residents:
+		if not resident.alive:
+			continue
+		# Hungry crew cannot newly claim medical care. Existing reservations can
+		# keep healing even while starving, so do not try to prove those doomed.
+		if resident.needs.food > MED_BED_MIN_FOOD or resident.medical_bed_id >= 0:
+			return false
+		if _projected_death_seconds(resident, float(depletion[resident.resident_id]), "", true) >= deadline:
+			return false
+	return true
 
 
 # An enabled recipe is not a fix when stress breaks repeatedly interrupt its
@@ -3394,13 +3432,16 @@ func show_outcome(won: bool, survivors: int) -> void:
 	show_breach_warning(false)
 	outcome_panel.visible = true
 	_outcome_backdrop.visible = not won
-	var resumable := not won and game.outcome == "death" and game.get_alive_count() > 0
+	var resumable := not won and game.outcome == "death" and game.can_still_win_shift()
 	outcome_resume_button.visible = resumable
 	outcome_resume_button.disabled = not resumable
 	outcome_retry_button.visible = not won
 	outcome_retry_button.disabled = not game.can_retry_day_checkpoint()
 	_outcome_recap_row.visible = not won
 	_outcome_legacy_row.visible = not resumable
+	var dead_name := str(game.death_recap.get("name", "")).strip_edges()
+	outcome_resume_button.text = "Continue without %s" % dead_name if not dead_name.is_empty() else "Continue with survivors"
+	_size_outcome_recap_buttons()
 	var invested := mk2_salvage_invested()
 	outcome_invested.text = "Salvage invested: %d in Mk II upgrades" % invested
 	outcome_invested.visible = invested > 0
