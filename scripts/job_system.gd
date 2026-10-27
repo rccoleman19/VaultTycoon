@@ -774,6 +774,11 @@ func _find_free_recreation_console(resident: VaultResident) -> VaultBuilding:
 	return best
 
 
+# Public read for UI callers (player_orders urgency rank); same rule the job loop uses.
+func can_use_recreation_console(resident: VaultResident, building: VaultBuilding) -> bool:
+	return _can_use_recreation_console(resident, building)
+
+
 func _can_use_recreation_console(resident: VaultResident, building: VaultBuilding) -> bool:
 	if building == null or not building.complete or building.kind != VaultBuilding.Kind.RECREATION_CONSOLE or not building.powered:
 		return false

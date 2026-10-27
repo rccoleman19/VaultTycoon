@@ -1625,7 +1625,7 @@ func _resident_urgency_step() -> Dictionary:
 			condition = "in despair"
 			if not threatened.drafted:
 				var console := game.get_building_by_id(threatened.recreation_id) as VaultBuilding
-				if threatened.recreating and console != null and console.reserved_by == threatened.resident_id and game.job_system._can_use_recreation_console(threatened, console):
+				if threatened.recreating and console != null and console.reserved_by == threatened.resident_id and game.job_system.can_use_recreation_console(threatened, console):
 					# The reserved console already fixes mood, including the walk to it.
 					condition = "recovering at the Rec Console"
 					step = {
