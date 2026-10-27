@@ -3380,12 +3380,18 @@ func _remember_survival_tip(step: Dictionary) -> void:
 		return
 	var resident := game.get_resident_by_id(int(step.get("resident_id", -1)))
 	var tip := str(step.get("text", ""))
-	if resident != null and resident.alive and tip.begins_with("Next: ") and resident.resident_name in tip and not _survival_tips.has(resident.resident_id):
-		# Retain the first saving opportunity, before later symptoms narrow the
-		# advice to an action that may no longer have enough time to work.
-		_survival_tips[resident.resident_id] = tip
-		_survival_tip_details[resident.resident_id] = {
-			"cause": str(step.get("cause", step.get("kind", ""))),
+	if resident != null and resident.alive and tip.begins_with("Next: ") and resident.resident_name in tip:
+		var cause := str(step.get("cause", step.get("kind", "")))
+		if not _survival_tips.has(resident.resident_id):
+			_survival_tips[resident.resident_id] = {}
+			_survival_tip_details[resident.resident_id] = {}
+		if _survival_tips[resident.resident_id].has(cause):
+			return
+		# Retain the first saving opportunity for each cause, before later
+		# symptoms narrow the advice to an action that may arrive too late.
+		_survival_tips[resident.resident_id][cause] = tip
+		_survival_tip_details[resident.resident_id][cause] = {
+			"cause": cause,
 			"elapsed_seconds": _survival_tip_sim_time(),
 			# A newly shown UI tip belongs to the upcoming simulation tick.
 			"tick": _survival_tip_tick if _sampling_survival_tip else _survival_tip_tick + 1,
@@ -3397,7 +3403,9 @@ func _survival_tip_sim_time() -> float:
 
 
 func _saving_tip_for(resident: VaultResident) -> String:
-	var first: Dictionary = _survival_tip_details.get(resident.resident_id, {})
+	var cause: String = ["food", "rest", "mood", "air", ""][_resident_loss_cause(resident)]
+	var details: Dictionary = _survival_tip_details.get(resident.resident_id, {})
+	var first: Dictionary = details.get(cause, {})
 	if first.is_empty():
 		return ""
 	# Damage and the death signal run before this tick advances the clock.
@@ -3407,10 +3415,10 @@ func _saving_tip_for(resident: VaultResident) -> String:
 		var clock_capped := game.day_cycle.completed and not game.keep_running
 		if not clock_capped or int(first.tick) >= _survival_tip_tick:
 			return ""
-	var cause: String = ["food", "rest", "mood", "air", ""][_resident_loss_cause(resident)]
 	if cause.is_empty() or str(first.cause) != cause:
 		return ""
-	return str(_survival_tips.get(resident.resident_id, ""))
+	var tips: Dictionary = _survival_tips.get(resident.resident_id, {})
+	return str(tips.get(cause, ""))
 
 
 func death_recap_for(resident: VaultResident) -> Dictionary:

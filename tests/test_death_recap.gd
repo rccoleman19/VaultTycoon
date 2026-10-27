@@ -78,6 +78,7 @@ func _run() -> void:
 	_case("q", _test_keep_running_named_continue)
 	_case("r", _test_doomed_survivors_cannot_continue)
 	_case("s", _test_named_continue_then_final_wipe)
+	_case("t", _test_saving_tip_per_cause)
 	for path: String in _paths:
 		_remove_test_save(path)
 	print("DEATH RECAP TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
@@ -351,7 +352,10 @@ func _test_first_actionable_tip() -> void:
 	_assert_true(game.player_orders.has_method("death_recap_for"), "headless sampling can retrieve a resident's saved live Next tip")
 	if game.player_orders.has_method("death_recap_for"):
 		var sampled: Dictionary = game.player_orders.get("_survival_tips")
-		_assert_equal(str(sampled.get(target.resident_id, "")), str(live_step.get("text", "")), "simulation sampling retains the exact actionable tip without UI refresh")
+		# Accept the parent tree's flat map for the regression control run.
+		var retained: Variant = sampled.get(target.resident_id, "")
+		var sampled_tip := str(retained.get(str(live_step.get("cause", "")), "")) if retained is Dictionary else str(retained)
+		_assert_equal(sampled_tip, str(live_step.get("text", "")), "simulation sampling retains the exact actionable tip without UI refresh")
 	game.player_orders.refresh()
 	var next: String = game.player_orders.objective_label.text
 	_assert_true(next.begins_with("Next: ") and target.resident_name in next and "undraft" in next, "live Next names the drafted starving resident and a real rescue action")
@@ -445,6 +449,78 @@ func _test_earlier_tip_and_reload() -> void:
 	_assert_false(later in body or later.trim_prefix("Next: ") in body, "panel excludes the later actionable tip")
 	_assert_false("Next: " in body, "saving-tip panel strips the live label's Next prefix")
 	_assert_tip_round_trip(game)
+	_dispose(game)
+
+
+func _test_saving_tip_per_cause() -> void:
+	var game := _game(3, false, false, true)
+	game.begin_shift()
+	var fixture := _saving_tip_fixture(game)
+	var target: VaultResident = fixture.target
+	var kitchen: VaultBuilding = fixture.kitchen
+	var observer := game.player_orders as SamplingOrders
+	# Controlled needs transition: the first named warning concerns rest,
+	# with ample food. Use the real selector and pre-damage sampler throughout.
+	target.needs.food = 100.0
+	target.needs.rest = 0.0
+	target.needs.health = 30.0
+	game.food_system.meals = 100
+	var rest_step := game.player_orders._primary_next_step()
+	var rest_tip := str(rest_step.get("text", ""))
+	_assert_equal(rest_step.get("resident_id", -1), target.resident_id, "rest warning names the controlled resident")
+	_assert_equal(rest_step.get("cause", ""), "rest", "first warning concerns exhaustion rather than food")
+	_assert_true(rest_tip.begins_with("Next: ") and target.resident_name in rest_tip and "undraft" in rest_tip and "rest" in rest_tip, "first rest warning offers a named actionable rescue")
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	var first: Dictionary = observer.first_actionable.get(target.resident_id, {})
+	_assert_equal(first.get("text", ""), rest_tip, "real sampling encounters the exhaustion warning first")
+	_assert_equal(first.get("cause", ""), "rest", "resident's first sampled cause is rest")
+	# The same resident later needs food. A previous rest warning must not
+	# lock out this still-actionable starvation warning.
+	target.needs.rest = 100.0
+	target.needs.health = 100.0
+	target.needs.food = 0.0
+	game.food_system.meals = 0
+	game.food_system.raw_food = FoodSystem.COOK_INPUT
+	var food_step := game.player_orders._primary_next_step()
+	var food_tip := str(food_step.get("text", ""))
+	_assert_equal(food_step.get("resident_id", -1), target.resident_id, "later food warning names the same resident")
+	_assert_equal(food_step.get("cause", ""), "food", "later warning concerns starvation")
+	_assert_true(food_tip.begins_with("Next: ") and target.resident_name in food_tip and "undraft" in food_tip and "eat/work" in food_tip, "later food warning offers the available eating rescue")
+	_assert_false(bool(food_step.get("too_late", false)) or bool(food_step.get("recovering", false)), "first food warning is still actionable")
+	game.step_simulation(1.0)
+	# A second, distinct food intervention must not replace the first food
+	# warning, even though food was not the resident's first-ever cause.
+	target.drafted = false
+	kitchen.manually_disabled = true
+	game.power_grid.recalculate(game.buildings)
+	var later_step := game.player_orders._primary_next_step()
+	var later_tip := str(later_step.get("text", ""))
+	_assert_equal(later_step.get("cause", ""), "food", "second food warning has the same starvation cause")
+	_assert_true(later_tip.begins_with("Next: ") and target.resident_name in later_tip and later_tip != food_tip, "second food warning offers a distinct named intervention")
+	_assert_false(bool(later_step.get("too_late", false)) or bool(later_step.get("recovering", false)), "second food warning is still actionable")
+	game.step_simulation(1.0)
+	var rest_at := -1.0
+	var food_at := -1.0
+	var later_at := -1.0
+	for sample: Dictionary in observer.sampled_steps:
+		if str(sample.text) == rest_tip and rest_at < 0.0:
+			rest_at = float(sample.seconds)
+		if str(sample.text) == food_tip and food_at < 0.0:
+			food_at = float(sample.seconds)
+		if str(sample.text) == later_tip and later_at < 0.0:
+			later_at = float(sample.seconds)
+	_assert_true(rest_at >= 0.0 and food_at > rest_at, "real sampler encounters the food rescue strictly after the rest rescue")
+	_assert_true(later_at > food_at, "real sampler encounters the distinct same-cause warning later")
+	_force_starvation(game, target)
+	_assert_equal(game.outcome, "death", "per-cause fixture ends in a real resident death")
+	_assert_equal(_recap(game).get("cause", ""), "starvation", "the controlled transition ends in starvation")
+	_assert_equal(_recap(game).get("tip", ""), food_tip, "recap retains the earliest food tip after the earlier exhaustion warning")
+	var body := game.player_orders.outcome_text.text
+	_assert_true(_saving_line(target, food_tip) in body, "starvation recap explains which food action would have saved the resident")
+	_assert_false("No tip could have saved them." in body, "an earlier actionable food warning prevents the no-tip claim")
+	_assert_false(rest_tip in body or rest_tip.trim_prefix("Next: ") in body, "starvation recap excludes the retained exhaustion warning")
+	_assert_false(later_tip in body or later_tip.trim_prefix("Next: ") in body, "earliest-per-cause recap excludes the later food intervention")
+	print("[SAVING TIP PER CAUSE] rest=%.1fs %s / food=%.1fs %s / later=%.1fs %s / recap=%s" % [rest_at, rest_tip, food_at, food_tip, later_at, later_tip, body.replace("\n", " / ")])
 	_dispose(game)
 
 
