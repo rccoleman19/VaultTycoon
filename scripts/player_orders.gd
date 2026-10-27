@@ -2507,10 +2507,24 @@ func _next_kind_affordable(kind: int) -> bool:
 	return kind >= 0 and game.food_system.salvage - game.job_system.get_breach_salvage_reserve() >= int(VaultBuilding.COSTS[kind])
 
 
+# The presentation prefix comes from the step's fields, not segment position:
+# only a named urgent step carries "Next: <Name> <condition> · ", and an unnamed
+# food step carries the runway label only on food-chain steps.
+func _next_step_prefix(step: Dictionary) -> String:
+	var text := str(step.get("text", ""))
+	if not bool(step.get("urgent", false)):
+		return "Next: "
+	if bool(step.get("food_unnamed", false)):
+		var label := "Next: %s · " % FOOD_SHORT_LABEL
+		return label if text.begins_with(label) else "Next: "
+	return text.get_slice(" · ", 0) + " · "
+
+
 func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 	var text := str(step.get("text", ""))
 	var danger := bool(step.get("urgent", false))
-	var body := text.get_slice(" · ", 1) if danger else text.trim_prefix("Next: ").get_slice(" · ", 0)
+	var prefix := _next_step_prefix(step)
+	var body := text.trim_prefix(prefix).get_slice(" · ", 0)
 	var funding := " · THEY fund the " in text
 	var placing := body.begins_with("YOU place ")
 	var kind := _next_named_build_kind(step)
@@ -2529,7 +2543,6 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		return step
 	var idle := _has_idle_crew()
 	var sink := salvage_survival_sink(spendable) if idle else -1
-	var prefix := text.get_slice(" · ", 0) + " · " if danger else "Next: "
 	# The recorded 05 food-worker recovery already places Rec. Express its
 	# affordable recovery as spending too, even though its kind is unchanged.
 	var food_rec_recovery := danger and str(step.get("cause", "")) == "food" and kind == VaultBuilding.Kind.RECREATION_CONSOLE and sink == kind
