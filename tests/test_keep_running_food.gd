@@ -8,7 +8,7 @@ const KR_FOOD_SAVE := "user://test_keep_running_food.json"
 const ENABLE_COOK := "Next: Ari starving · YOU enable Cook · THEY cook"
 const ENABLE_HAUL := "Next: Ari starving · YOU enable Haul · THEY deliver food"
 const ENABLE_TRAY := "Next: Ari starving · YOU enable a Grow Tray · THEY grow"
-const LEAVE_COOK := "Next: Ari starving · YOU leave Cook on · THEY cook"
+const TOO_LATE := "Next: Ari starving · nothing lands in time · keep crew fed where possible"
 const PLACE_TRAY_CALM := "Next: YOU place Grow Tray · THEY haul output"
 
 
@@ -17,9 +17,9 @@ func _run() -> void:
 	_run_case("Haul OFF with food awaiting delivery shows Enable Haul, before and after the Annex", _test_haul_off)
 	_run_case("an empty larder does not recommend a new Grow Tray, before and after the Annex", _test_no_tray)
 	_run_case("an empty larder does not recommend finishing a Grow Tray, before and after the Annex", _test_unfinished_tray)
-	_run_case("a disabled Grow Tray asks to enable it, before and after the Annex", _test_disabled_tray)
+	_run_case("a disabled Grow Tray needs enough food runway to enable it, before and after the Annex", _test_disabled_tray)
 	_run_case("following Enable Grow Tray keeps all four residents alive for 100 sim seconds", _test_disabled_tray_outcome)
-	_run_case("an empty larder keeps the switch that repowers a completed Grow Tray", _test_shed_tray_repower)
+	_run_case("a completed Grow Tray keeps its repower switch while produced meals cover the harvest", _test_shed_tray_repower)
 	_run_case("an unfunded Grow blueprint does not hide enabling the completed tray", _test_disabled_tray_with_blueprint)
 	_run_case("a calm kept-running vault without a Grow Tray asks for one", _test_calm_no_tray)
 	_run_case("the food step survives a save and load", _test_save_load)
@@ -138,18 +138,26 @@ func _assert_food_next(game: VaultGame, expected: String, open: bool, what: Stri
 
 
 func _assert_waiting_raw_next(game: VaultGame, open: bool, what: String) -> void:
-	# These fixtures have zero runway. Even the real Grow cycle alone cannot
-	# finish within it, so keep Cook available instead of suggesting a late tray.
-	_assert_food_next(game, LEAVE_COOK, open, what)
+	# These fixtures have zero food runway. Cook has no ingredients, and a
+	# future crop cannot land within it, including after an immediate switch.
+	_assert_food_next(game, TOO_LATE, open, what)
 	var primary: Dictionary = game.player_orders._primary_next_step()
 	_assert_equal(str(primary.tool), "select", "%s (%s): waiting needs no Grow tool" % [what, _label(open)])
-	_assert_true(str(primary.help).contains("waiting on raw food"), "%s (%s): help explains the raw-food blocker" % [what, _label(open)])
+	_assert_true(str(primary.help).contains("No available food fix"), "%s (%s): help explains the missed deadline" % [what, _label(open)])
+
+
+func _cover_next_harvest(game: VaultGame) -> void:
+	# Cooked output already awaiting Haul gives four crew 30 seconds (five
+	# crew 24 seconds). That covers this completed tray's real meal lead while
+	# remaining below the lead plus warning margin, so Enable still matters.
+	game.job_system.queue_meals(_kitchen(game).cell, 3)
 
 
 func _test_cook_off() -> void:
 	for open: bool in [false, true]:
 		var game := _vault(open)
 		_starve(game)
+		game.food_system.raw_food = FoodSystem.COOK_INPUT
 		_set_work(game, "cook", VaultResident.PRIORITY_DISABLED)
 		_assert_food_next(game, ENABLE_COOK, open, "Cook OFF")
 		_dispose(game)
@@ -192,6 +200,8 @@ func _test_disabled_tray() -> void:
 		game.status_message_left = 0.0
 		_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY), 0, "every Grow Tray off (%s)" % _label(open))
 		_starve(game)
+		_assert_waiting_raw_next(game, open, "disabled Grow Tray with zero runway")
+		_cover_next_harvest(game)
 		_assert_food_next(game, ENABLE_TRAY, open, "disabled Grow Tray")
 		_dispose(game)
 
@@ -207,6 +217,7 @@ func _test_disabled_tray_outcome() -> void:
 		_dispose(game)
 		return
 	_starve(game)
+	_cover_next_harvest(game)
 	_set_work(game, "cook", VaultResident.DEFAULT_WORK_PRIORITY)
 	_set_work(game, "haul", VaultResident.DEFAULT_WORK_PRIORITY)
 	_assert_true(game.toggle_building_enabled(tray.building_id), "real player toggle disables the tray")
@@ -216,9 +227,9 @@ func _test_disabled_tray_outcome() -> void:
 	_assert_equal(game.get_alive_count(), 4, "the recovery starts with all four residents alive")
 	_assert_approximately(ari.needs.food, 19.0, 0.0001, "Ari starts at food 19")
 	_assert_approximately(ari.needs.health, 100.0, 0.0001, "Ari starts at 100 HP")
-	_assert_equal(game.food_system.meals, 0, "the recovery starts with no meals")
+	_assert_equal(game.food_system.meals, 0, "the recovery starts with no stored meals")
 	_assert_equal(game.food_system.raw_food, 0, "the recovery starts with no raw food")
-	_assert_equal(game.job_system.get_pending_meals(), 0, "the recovery starts with no pending meals")
+	_assert_equal(game.job_system.get_pending_meals(), 3, "produced meals cover the completed tray's harvest lead")
 	_assert_equal(game.job_system.get_pending_raw_food(), 0, "the recovery starts with no pending raw food")
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.KITCHEN), 1, "the kitchen is already powered")
 	_assert_equal(game.power_grid.supply - game.power_grid.served, 5, "five spare power can cover the disabled tray")
@@ -227,6 +238,8 @@ func _test_disabled_tray_outcome() -> void:
 		+ game.player_orders._food_delivery_seconds(tray.cell) \
 		+ game.player_orders._food_work_seconds("cook", 4.0) \
 		+ game.player_orders._food_delivery_seconds(MapGrid.CHAMBER.get_center())
+	_assert_true(expected_seconds <= game.player_orders._food_runway_seconds(),
+		"already-produced meals cover the full crop, raw haul, Cook and meal haul lead")
 	var disabled_plan: Dictionary = game.player_orders._food_fix_plan()
 	_assert_approximately(float(disabled_plan.get("seconds", INF)), expected_seconds, 0.0001,
 		"the disabled completed tray needs its remaining grow cycle and delivery, with no new build")
@@ -250,14 +263,16 @@ func _test_disabled_tray_outcome() -> void:
 				var enabled_plan: Dictionary = game.player_orders._food_fix_plan()
 				_assert_approximately(float(enabled_plan.get("seconds", INF)), expected_seconds, 0.0001,
 					"the estimate follows the immediate Enable path without adding construction")
-		var food_before := ari.needs.food
+		var raw_before := game.food_system.raw_food
 		game.step_simulation(VaultGame.SIMULATION_TICK)
-		if first_meal_seconds < 0.0 and (game.food_system.meals > 0 or game.job_system.get_pending_meals() > 0 or ari.needs.food > food_before):
+		# Detect a real Cook completion from a fresh harvest, independently of
+		# the cooked buffer that made the initial Enable instruction timely.
+		if first_meal_seconds < 0.0 and game.food_system.raw_food < raw_before:
 			first_meal_seconds = (tick + 1) * VaultGame.SIMULATION_TICK
 			ari_alive_at_first_meal = ari.alive
 	_assert_true(saw_enable, "the displayed tip said Enable Grow Tray (initial Next: %s)" % first_next)
 	_assert_equal(enable_actions, 1, "following the displayed tip needs one real Enable action")
-	_assert_true(first_meal_seconds > 0.0 and ari_alive_at_first_meal, "a real cooked meal is available or in flight while Ari is alive")
+	_assert_true(first_meal_seconds > 0.0 and ari_alive_at_first_meal, "a fresh harvest becomes a real cooked meal while Ari is alive")
 	_assert_approximately(game.keep_running_seconds - start_seconds, 100.0, VaultGame.SIMULATION_TICK,
 		"the recovery drives 100 real simulation seconds")
 	_assert_true(ari.alive, "Ari survives 100 sim seconds after following the tip")
@@ -288,6 +303,8 @@ func _test_shed_tray_repower() -> void:
 	_assert_true(not tray.manually_disabled and not tray.powered, "the completed enabled tray starts shed")
 	_assert_true(game.get_powered_building_count(VaultBuilding.Kind.LAMP) >= 2, "repowering can preserve the last light")
 	_assert_equal(game.power_grid.supply - game.power_grid.served, 2, "one Lumen switch frees enough power for the tray")
+	_assert_waiting_raw_next(game, false, "shed Grow Tray with zero runway")
+	_cover_next_harvest(game)
 	_assert_food_next(game, "Next: Ari starving · YOU disable a Lumen · THEY power the Grow Tray", false, "shed Grow Tray")
 	_assert_true(lamp != null and lamp.powered, "a powered Lumen is available to switch off")
 	if lamp != null:
@@ -303,6 +320,7 @@ func _test_disabled_tray_with_blueprint() -> void:
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.GROW_TRAY, game._annex_free_cells(1)[0]), "another Grow Tray has an unsupplied blueprint")
 	game.food_system.salvage = 0
 	_starve(game)
+	_cover_next_harvest(game)
 	game.status_message_left = 0.0
 	_assert_food_next(game, ENABLE_TRAY, false, "disabled completed tray beside an unfunded blueprint")
 	_dispose(game)
@@ -341,6 +359,7 @@ func _test_save_load() -> void:
 			var game := _vault(open, with_tray)
 			_starve(game)
 			if with_tray:
+				game.food_system.raw_food = FoodSystem.COOK_INPUT
 				_set_work(game, "cook", VaultResident.PRIORITY_DISABLED)
 			var what := "reloaded %s" % ("Cook OFF" if with_tray else "no Grow Tray")
 			_remove_test_save(KR_FOOD_SAVE)
@@ -362,6 +381,7 @@ func _test_recovery() -> void:
 	for open: bool in [false, true]:
 		var game := _vault(open)
 		_starve(game)
+		game.food_system.raw_food = FoodSystem.COOK_INPUT
 		_set_work(game, "cook", VaultResident.PRIORITY_DISABLED)
 		_assert_equal(_next(game), ENABLE_COOK, "starving (%s)" % _label(open))
 		_set_work(game, "cook", 3)
@@ -381,6 +401,7 @@ func _test_beats_latch() -> void:
 	# comfort satisfied, so the plain Med Bed suggestion latches.
 	_assert_equal(_next(game), str(PlayerOrders.COMFORT_TEXT.next), "no Med Bed: Next points at the comfort card")
 	_starve(game)
+	game.food_system.raw_food = FoodSystem.COOK_INPUT
 	_set_work(game, "cook", VaultResident.PRIORITY_DISABLED)
 	_assert_equal(_next(game), ENABLE_COOK, "the food emergency shows through the comfort Next")
 	_dispose(game)
@@ -401,6 +422,7 @@ func _test_beats_latch() -> void:
 	ari.needs.health = 100.0
 	_assert_true(_next(game).contains("Med Bed"), "the Med Bed suggestion holds after the injury heals")
 	_starve(game)
+	game.food_system.raw_food = FoodSystem.COOK_INPUT
 	_set_work(game, "cook", VaultResident.PRIORITY_DISABLED)
 	_assert_equal(_next(game), ENABLE_COOK, "the food emergency shows through the latch")
 	_dispose(game)

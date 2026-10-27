@@ -42,6 +42,10 @@ const ENABLE_COOK_HELP := "Enable Cook on a living, undrafted resident so the po
 const COOK_NEXT := "Next: YOU leave Cook on · THEY cook"
 const COOK_HELP := "Meals are short. The powered Nutrient Station can cook."
 const WAITING_COOK_HELP := "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food."
+const TOO_LATE_FOOD_NEXT := "Next: nothing lands in time · keep crew fed where possible"
+const TOO_LATE_FOOD_HELP := "No available food fix can deliver a meal within the food runway. Keep Cook and Haul enabled to feed crew where possible."
+const DELIVER_MEALS_NEXT := "Next: YOU leave Haul on · THEY deliver food"
+const DELIVER_MEALS_HELP := "Keep Haul enabled on a living, undrafted resident. Cooked meals are waiting for delivery."
 const ENABLE_HAUL_NEXT := "Next: YOU enable Haul · THEY deliver food"
 const ENABLE_HAUL_HELP := "Open PRIORITIES [P] and enable Haul on a living, undrafted resident. Food is waiting for delivery."
 const GROW_NEXT := "Next: YOU place a Grow Tray · THEY grow"
@@ -788,7 +792,11 @@ func _test_pending_food_suppresses_grow() -> void:
 		game.food_system.raw_food = 0
 		game.job_system.queue_meals(Vector2i(20, 12), pending.x)
 		game.job_system.queue_raw_food(Vector2i(21, 12), pending.y)
-		_assert_step(game, _starving_next(COOK_NEXT), "select", WAITING_COOK_HELP)
+		# Cooked output alone needs timely delivery before the next harvest.
+		# Mixed backlog covers the pantry window and keeps the existing Cook wait;
+		# raw-only backlog still needs the Cook chain.
+		var needs_delivery: bool = pending.x > 0 and pending.y == 0
+		_assert_step(game, _starving_next(DELIVER_MEALS_NEXT if needs_delivery else COOK_NEXT), "select", DELIVER_MEALS_HELP if needs_delivery else WAITING_COOK_HELP)
 		for resident: VaultResident in game.residents:
 			resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
 		_assert_step(game, _starving_next(ENABLE_HAUL_NEXT), "select", ENABLE_HAUL_HELP)
@@ -829,12 +837,13 @@ func _test_grow_crisis_guards() -> void:
 	game.food_system.meals = NONFOOD_TEST_MEALS
 	_assert_dig(game, "sufficient stored meals suppress Grow despite a critical resident")
 	game.food_system.meals = 0
-	_assert_step(game, _starving_next(COOK_NEXT), "select", WAITING_COOK_HELP)
+	# With no stock or output, a new tray cannot rescue this zero runway.
+	_assert_step(game, _starving_next(TOO_LATE_FOOD_NEXT), "select", TOO_LATE_FOOD_HELP)
 	# Critical rest also diagnoses supply after the bunk requirement is satisfied.
 	game.residents[0].needs.food = 100.0
 	game.residents[0].needs.rest = 14.0
 	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(21, 12))
-	_assert_step(game, _starving_next(COOK_NEXT), "select", WAITING_COOK_HELP)
+	_assert_step(game, _starving_next(TOO_LATE_FOOD_NEXT), "select", TOO_LATE_FOOD_HELP)
 	_dispose(game)
 
 
@@ -845,7 +854,7 @@ func _test_interrupts_before_cook() -> void:
 	resident.needs.rest = 100.0
 	resident.needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 0, "no completed rec console is available")
-	_assert_step(game, _starving_next(COOK_NEXT), "select", WAITING_COOK_HELP)
+	_assert_step(game, _starving_next(TOO_LATE_FOOD_NEXT), "select", TOO_LATE_FOOD_HELP)
 	game.food_system.meals = NONFOOD_TEST_MEALS
 	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
 	resident.needs.mood = 100.0
@@ -967,9 +976,10 @@ func _test_no_pending_food_with_haul_off() -> void:
 	game.residents[0].set_work_priority("cook", VaultResident.PRIORITY_HIGHEST)
 	_assert_step(game, _starving_next(COOK_NEXT), "select", COOK_HELP)
 	game.food_system.raw_food = 0
-	_assert_step(game, _starving_next(COOK_NEXT), "select", WAITING_COOK_HELP)
+	# Enabling Cook cannot create a source when no harvest lands in time.
+	_assert_step(game, _starving_next(TOO_LATE_FOOD_NEXT), "select", TOO_LATE_FOOD_HELP)
 	game.residents[0].set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
-	_assert_step(game, _starving_next(ENABLE_COOK_NEXT), "select", ENABLE_COOK_HELP)
+	_assert_step(game, _starving_next(TOO_LATE_FOOD_NEXT), "select", TOO_LATE_FOOD_HELP)
 	_dispose(game)
 
 
