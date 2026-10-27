@@ -170,10 +170,10 @@ func _test_coverage_geometry_and_starting_counts() -> void:
 	dark_resident.position = game.map_grid.cell_to_world(Vector2i(28, 20))
 	game.player_orders.refresh()
 	_assert_true("D1" in game.player_orders.lighting_label.text, "right HUD updates when one resident enters darkness")
-	_assert_false("DARKNESS" in game.player_orders.alert_label.text, "darkness alert waits for the onset dwell")
+	_assert_false("DARKNESS" in "  ·  ".join(game.player_orders.all_alerts), "darkness alert waits for the onset dwell")
 	game._update_dark_alert(VaultGame.DARK_ALERT_ONSET)
 	game.player_orders.refresh()
-	_assert_true("DARKNESS · 1 CREW UNLIT" in game.player_orders.alert_label.text, "darkness alert reports the affected crew count")
+	_assert_true("DARKNESS · 1 CREW UNLIT" in "  ·  ".join(game.player_orders.all_alerts), "darkness alert reports the affected crew count")
 
 	var dark_rock := Vector2i(29, 20)
 	var topology_before := game.map_grid.topology_revision
@@ -306,7 +306,7 @@ func _test_dark_alert_dwell() -> void:
 	_step_ticks(game, 0.1)
 	_assert_true(resident.dark_alert_flagged, "2.0s unlit: resident counts for the alert")
 	game.player_orders.refresh()
-	_assert_true("DARKNESS · 1 CREW UNLIT" in game.player_orders.alert_label.text, "2.0s unlit: alert text shows")
+	_assert_true("DARKNESS · 1 CREW UNLIT" in "  ·  ".join(game.player_orders.all_alerts), "2.0s unlit: alert text shows")
 	resident.position = lit_pos
 	_step_ticks(game, 0.1)
 	_assert_equal(game.get_dark_resident_count(), 0, "HUD dark count clears at once")
@@ -320,7 +320,7 @@ func _test_dark_alert_dwell() -> void:
 	_step_ticks(game, 0.1)
 	_assert_false(resident.dark_alert_flagged, "6.0s lit: resident drops from the alert")
 	game.player_orders.refresh()
-	_assert_false("DARKNESS" in game.player_orders.alert_label.text, "6.0s lit: alert text clears")
+	_assert_false("DARKNESS" in "  ·  ".join(game.player_orders.all_alerts), "6.0s lit: alert text clears")
 	resident.position = dark_pos
 	_step_ticks(game, 1.0)
 	resident.position = lit_pos

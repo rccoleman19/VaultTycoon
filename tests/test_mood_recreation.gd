@@ -656,7 +656,7 @@ func _test_hud_contract() -> void:
 	orders.refresh()
 	_assert_true("39% · STRESSED" in orders.crew_mood_label.text, "crew HUD exposes the stressed tier")
 	_assert_equal(orders.crew_mood_bar.modulate, Color("efc56b"), "stressed crew mood uses the warning color")
-	_assert_true("MOOD STRESSED · Ari" in orders.alert_label.text, "compound alerts name the stressed resident")
+	_assert_true("MOOD STRESSED · Ari" in "  ·  ".join(orders.all_alerts), "compound alerts name the stressed resident")
 	_assert_equal(orders.need_labels.mood.text, "MOOD", "resident inspector relabels the legacy light need")
 	_assert_equal(orders.need_bars.mood.value, 39.0, "resident mood bar shows the canonical meter")
 	_assert_true("Mood: STRESSED" in orders.inspector_state.text, "resident inspector includes the mood tier")
@@ -673,8 +673,8 @@ func _test_hud_contract() -> void:
 	orders.refresh()
 	_assert_true("BREAK RISK" in orders.crew_mood_label.text, "crew HUD exposes the exact break-risk boundary")
 	_assert_equal(orders.crew_mood_bar.modulate, Color("ef5a54"), "break-risk crew mood uses the danger color")
-	_assert_true("MOOD BREAK RISK · Ari" in orders.alert_label.text, "break-risk alert names the affected resident")
-	_assert_true("NO REC CONSOLE" in orders.alert_label.text, "seek-level mood without a console raises an actionable shortage alert")
+	_assert_true("MOOD BREAK RISK · Ari" in "  ·  ".join(orders.all_alerts), "break-risk alert names the affected resident")
+	_assert_true("NO REC CONSOLE" in "  ·  ".join(orders.all_alerts), "seek-level mood without a console raises an actionable shortage alert")
 
 	var console := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, blueprint_cell)
 	game.power_grid.recalculate(game.buildings)
@@ -721,7 +721,7 @@ func _test_hud_contract() -> void:
 	_assert_true(game.toggle_building_enabled(console.building_id), "console can be disabled from its fixture lifecycle")
 	orders.refresh()
 	_assert_true("DISABLED" in orders.inspector_state.text and "Recreation: OFFLINE" in orders.inspector_state.text, "disabled console reports both power and recreation state")
-	_assert_true("REC CONSOLE OFFLINE" in orders.alert_label.text, "low mood with an existing disabled console reports an outage rather than a shortage")
+	_assert_true("REC CONSOLE OFFLINE" in "  ·  ".join(orders.all_alerts), "low mood with an existing disabled console reports an outage rather than a shortage")
 	_assert_false(resident.recreating, "disabling the console immediately clears its HUD-driving resident state")
 	_dispose(game)
 

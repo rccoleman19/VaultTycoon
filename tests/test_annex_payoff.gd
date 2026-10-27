@@ -90,7 +90,7 @@ func _test_celebration() -> void:
 	_finish(game)
 	game.player_orders.refresh()
 	_assert_true(game.status_message.begins_with("ANNEX OPEN: Eko moves in"), "status toast: %s" % game.status_message)
-	_assert_true(game.player_orders.alert_label.text.contains("NEW CREW · EKO MOVES IN"), "alert names the arrival")
+	_assert_true("  ·  ".join(game.player_orders.all_alerts).contains("NEW CREW · EKO MOVES IN"), "alert names the arrival")
 	_assert_equal(game.player_orders.alert_label.get_theme_color("font_color"), Color("75d4b4"), "a lone welcome reads green")
 	_assert_true(game.player_orders.annex_box.visible, "the card stays as a stable marker")
 	_assert_equal(game.player_orders.annex_header.text, "ANNEX OPEN · 5 crew · vault stable", "stable header")
@@ -98,7 +98,7 @@ func _test_celebration() -> void:
 	_assert_equal(game.player_orders.objective_label.text, "Next: YOU enjoy a stable vault · THEY run all of it", "stable Next")
 	game.step_simulation(31.0)
 	game.player_orders.refresh()
-	_assert_false(game.player_orders.alert_label.text.contains("NEW CREW"), "the welcome fades after 30 s")
+	_assert_false("  ·  ".join(game.player_orders.all_alerts).contains("NEW CREW"), "the welcome fades after 30 s")
 	_dispose(game)
 
 

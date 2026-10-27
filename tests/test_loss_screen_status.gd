@@ -125,7 +125,7 @@ func _test_real_wipe_open() -> void:
 			orders.refresh()
 			saw_live_blocker = true
 			_assert_equal(_last_line(orders.breach_label.text), "BLOCKED · ENABLE HAUL", "live OPEN still names the Haul blocker")
-			_assert_true("BREACH OPEN · O2 VENTING" in orders.alert_label.text, "live OPEN alert names the venting breach")
+			_assert_true("BREACH OPEN · O2 VENTING" in "  ·  ".join(orders.all_alerts), "live OPEN alert names the venting breach")
 	_assert_true(saw_live_blocker, "the wing reached OPEN before the wipe")
 	_assert_true(game.ended and game.outcome == "loss", "O2 loss wipes the wing for real")
 	_assert_equal(game.get_alive_count(), 0, "no residents remain")
@@ -208,7 +208,7 @@ func _test_live_controls() -> void:
 	var orders := game.player_orders
 	_set_all(game, "cook", VaultResident.PRIORITY_DISABLED)
 	orders.refresh()
-	_assert_true("NO COOK ENABLED" in orders.alert_label.text, "living wing with Cook OFF still warns")
+	_assert_true("NO COOK ENABLED" in "  ·  ".join(orders.all_alerts), "living wing with Cook OFF still warns")
 	_assert_false(orders.alert_label.text.begins_with("SHIFT ENDED"), "live alert is not an outcome line")
 	_assert_true(orders.objective_label.text.begins_with("Next: "), "live Next stays a tip")
 	_dispose(game)
@@ -224,7 +224,7 @@ func _test_live_controls() -> void:
 	_assert_true(game.day_cycle.completed and not game.ended, "completed clock with an open hatch is still live")
 	orders.refresh()
 	_assert_equal(orders.objective_label.text, "VICTORY PENDING // SEAL HATCH", "victory pending keeps its blocker")
-	_assert_true("VICTORY PENDING · SEAL HATCH" in orders.alert_label.text, "victory pending alert keeps its blocker")
+	_assert_true("VICTORY PENDING · SEAL HATCH" in "  ·  ".join(orders.all_alerts), "victory pending alert keeps its blocker")
 	_assert_equal(_last_line(orders.breach_label.text), "BLOCKED · ENABLE HAUL", "live OPEN DETAILS keeps the Haul blocker")
 	_dispose(game)
 

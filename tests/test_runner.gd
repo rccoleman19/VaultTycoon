@@ -22,7 +22,7 @@ func _init() -> void:
 func _run() -> void:
 	_run_case("main scene boots with a sealed four-resident wing", _test_scene_boot_and_initial_state)
 	_run_case("bed shortage compares undrafted bunk need with free completed bunks", _test_bed_shortage_alert)
-	_run_case("alert bar leads with CRITICAL, then O2 and food threats, then the rest", _test_alert_severity_order)
+	_run_case("alerts rank by threat time with stable severity ties and unchanged wording", _test_alert_severity_order)
 	_run_case("starvation is not a Med Bed injury and an empty larder says NO MEALS", _test_starvation_not_injury)
 	_run_case("DETAILS respects manual choices through ongoing brownouts", _test_details_brownout_collapse)
 	_run_case("DETAILS opens once for each overlapping urgency onset", _test_details_overlapping_urgencies)
@@ -156,7 +156,7 @@ func _test_bed_shortage_alert() -> void:
 	_assert_equal(game.active_tool, "select", "fresh shift keeps Select active")
 	_assert_equal(game.map_grid.dig_marks.size(), 0, "fresh shift has no dig marks")
 	_assert_equal(game.player_orders.objective_label.text, "Next: YOU mark rock [E] · THEY dig on Dig defaults", "fresh shift keeps the initial dig objective")
-	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "fresh shift needs no bunks yet")
+	_assert_false("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "fresh shift needs no bunks yet")
 	for resident: VaultResident in game.residents:
 		resident.needs.rest = 60.0
 		resident.drafted = false
@@ -164,29 +164,29 @@ func _test_bed_shortage_alert() -> void:
 		resident.bed_id = -1
 	game.residents[0].needs.rest = 28.0
 	game.player_orders.refresh()
-	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "rest 28 needs a bunk when none exist")
+	_assert_true("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "rest 28 needs a bunk when none exist")
 	game.residents[0].needs.rest = 29.0
 	game.player_orders.refresh()
-	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "rest 29 does not need a bunk")
+	_assert_false("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "rest 29 does not need a bunk")
 	var bunk := _add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
 	game.residents[0].needs.rest = 28.0
 	game.player_orders.refresh()
-	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "one free completed bunk meets one tired resident's need")
+	_assert_false("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "one free completed bunk meets one tired resident's need")
 	game.residents[1].needs.rest = 28.0
 	game.player_orders.refresh()
-	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "two tired residents outnumber one free bunk")
+	_assert_true("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "two tired residents outnumber one free bunk")
 	game.residents[1].needs.rest = 60.0
 	game.residents[1].sleeping = true
 	game.residents[1].bed_id = bunk.building_id
 	game.player_orders.refresh()
-	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "an occupied completed bunk is not free")
+	_assert_true("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "an occupied completed bunk is not free")
 	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	for resident: VaultResident in game.residents:
 		resident.needs.rest = 60.0
 		resident.sleeping = false
 		resident.bed_id = -1
 	game.player_orders.refresh()
-	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "two completed bunks with a rested crew cause no shortage")
+	_assert_false("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "two completed bunks with a rested crew cause no shortage")
 	_dispose(game)
 
 	game = _spawn_game()
@@ -199,7 +199,7 @@ func _test_bed_shortage_alert() -> void:
 	game.residents[0].needs.rest = 28.0
 	game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(18, 12))
 	game.player_orders.refresh()
-	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "an unfinished bunk cannot satisfy one tired resident")
+	_assert_true("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "an unfinished bunk cannot satisfy one tired resident")
 	_dispose(game)
 
 	game = _spawn_game()
@@ -212,20 +212,20 @@ func _test_bed_shortage_alert() -> void:
 	game.residents[0].drafted = true
 	game.residents[0].needs.rest = 28.0
 	game.player_orders.refresh()
-	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "a drafted tired resident does not need a bunk")
+	_assert_false("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "a drafted tired resident does not need a bunk")
 	game.residents[0].drafted = false
 	game.residents[0].alive = false
 	game.player_orders.refresh()
-	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "a dead tired resident does not need a bunk")
+	_assert_false("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "a dead tired resident does not need a bunk")
 	game.residents[0].alive = true
 	game.residents[0].needs.rest = 60.0
 	game.residents[0].sleeping = true
 	game.residents[0].bed_id = -1
 	game.player_orders.refresh()
-	_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "an undrafted floor sleeper needs a bunk even above rest 28")
+	_assert_true("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "an undrafted floor sleeper needs a bunk even above rest 28")
 	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
 	game.player_orders.refresh()
-	_assert_false("BED SHORTAGE" in game.player_orders.alert_label.text, "one free completed bunk clears the floor sleeper's shortage immediately")
+	_assert_false("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "one free completed bunk clears the floor sleeper's shortage immediately")
 	_dispose(game)
 
 
@@ -235,28 +235,44 @@ func _test_alert_severity_order() -> void:
 	game.residents[1].drafted = true
 	game.food_system.meals = 0
 	game.oxygen_system.oxygen = OxygenSystem.LOW_OXYGEN_THRESHOLD
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
 	game.player_orders.refresh()
-	var text := game.player_orders.alert_label.text
-	_assert_true(text.begins_with("OXYGEN LOW  ·  NO MEALS"), "with no CRITICAL the O2 then food threats lead the bar")
-	_assert_true(text.find("NO MEALS") < text.find("DRAFTED CREW 1 · AUTO WORK PAUSED"), "drafted crew falls behind the food threat")
+	var segments := game.player_orders.all_alerts
+	_assert_equal(segments[0], "NO MEALS", "zero pantry runway ranks before future critical air")
+	_assert_equal(segments[1], "OXYGEN LOW", "declining air ranks before nonlethal drafted-work advice")
+	_assert_true(segments.find("NO MEALS") < segments.find("DRAFTED CREW 1 · AUTO WORK PAUSED"), "drafted crew falls behind the food threat")
 	game.residents[0].needs.food = 10.0
 	game.player_orders.refresh()
-	text = game.player_orders.alert_label.text
-	var segments := text.split("  ·  ")
-	_assert_equal(segments[0], "CRITICAL: Ari", "a resident CRITICAL leads the bar")
-	_assert_equal(segments[1], "OXYGEN LOW", "O2 follows the life threat")
-	_assert_equal(segments[2], "NO MEALS", "food follows O2")
+	segments = game.player_orders.all_alerts
+	_assert_equal(segments[0], "NO MEALS", "zero food runway remains earlier than a resident's projected death")
+	_assert_equal(segments[1], "OXYGEN LOW", "air reaches critical before it kills the critical resident")
+	_assert_equal(segments[2], "CRITICAL: Ari", "the resident threat ranks before alerts without a death deadline")
 	_assert_true(segments.find("DRAFTED CREW 1 · AUTO WORK PAUSED") > 2, "the rest keep their wording behind the threats")
-	_assert_equal(text.count("CRITICAL: "), 1, "the CRITICAL segment appears once")
+	_assert_equal("  ·  ".join(segments).count("CRITICAL: "), 1, "the CRITICAL alert appears once")
 	var expected := ["CRITICAL: Ari", "OXYGEN LOW", "NO MEALS", "DRAFTED CREW 1 · AUTO WORK PAUSED"]
 	for segment in expected:
-		_assert_true(segment in segments, "no segment is dropped: %s" % segment)
-	game.residents[0].needs.food = 80.0
-	game.residents[1].drafted = false
+		_assert_true(segment in segments, "no generated alert is dropped: %s" % segment)
+	game.oxygen_system.oxygen = OxygenSystem.CRITICAL_OXYGEN_THRESHOLD
+	game.player_orders.refresh()
+	segments = game.player_orders.all_alerts
+	_assert_equal(segments[0], "OXYGEN CRITICAL", "critical air keeps the original severity order when its deadline ties empty food")
+	_assert_equal(segments[1], "NO MEALS", "the zero-runway food alert follows tied critical air")
 	game.food_system.meals = 40
+	game.oxygen_system.oxygen = OxygenSystem.LOW_OXYGEN_THRESHOLD
+	game.residents[0].needs.food = 80.0
+	game.residents[0].needs.rest = 0.0
+	game.residents[0].needs.health = 1.0
+	game.player_orders.refresh()
+	segments = game.player_orders.all_alerts
+	_assert_equal(segments[0], "CRITICAL: Ari", "an exhausted resident near death leads future critical air")
+	_assert_equal(segments[1], "OXYGEN LOW", "future critical air follows the nearer resident deadline")
+	game.residents[0].needs.rest = 80.0
+	game.residents[0].needs.health = 100.0
+	game.residents[1].drafted = false
 	game.oxygen_system.oxygen = OxygenSystem.STARTING_OXYGEN
 	game.player_orders.refresh()
-	_assert_false(game.player_orders.alert_label.text.begins_with("CRITICAL"), "the lead clears with the threat")
+	_assert_false("CRITICAL: Ari" in game.player_orders.all_alerts, "the generated critical alert clears with the threat")
+	_assert_false(game.player_orders.alert_label.text.begins_with("CRITICAL"), "the visible critical alert clears with the threat")
 	_dispose(game)
 
 
@@ -272,25 +288,28 @@ func _test_starvation_not_injury() -> void:
 		resident.needs.food = 0.0
 		resident.needs.health = 70.0
 	game.player_orders.refresh()
-	var text := game.player_orders.alert_label.text
+	var text := "  ·  ".join(game.player_orders.all_alerts)
 	_assert_false("INJURED" in text, "starving crew are not counted as injured")
 	_assert_true("NO MEALS" in text, "an empty larder says NO MEALS")
 	_assert_false("LOW MEALS" in text, "and not LOW MEALS")
-	_assert_true(text.begins_with("CRITICAL: "), "the starving resident still leads the bar")
+	_assert_true("Ari starving" in game.player_orders.objective_label.text, "Next already names roster-first Ari's starvation")
+	_assert_true("CRITICAL: Bo" in game.player_orders.all_alerts and "CRITICAL: Ari" not in game.player_orders.all_alerts,
+		"the first uncovered starving resident still generates a CRITICAL alert")
+	_assert_true("CRITICAL: Bo" in game.player_orders.alert_list, "Bo's uncovered starvation warning survives Next dedupe")
 	game.food_system.meals = 2
 	game.player_orders.refresh()
-	text = game.player_orders.alert_label.text
+	text = "  ·  ".join(game.player_orders.all_alerts)
 	_assert_true("LOW MEALS" in text and not "NO MEALS" in text, "a short larder still says LOW MEALS")
 	game.residents[0].needs.food = 80.0
 	game.residents[0].needs.health = 60.0
 	game.player_orders.refresh()
-	_assert_true("INJURED 1 · NO MED BED" in game.player_orders.alert_label.text, "a fed resident's lost HP is an injury")
+	_assert_true("INJURED 1 · NO MED BED" in "  ·  ".join(game.player_orders.all_alerts), "a fed resident's lost HP is an injury")
 	game.residents[1].needs.food = MED_BED_FOOD_EDGE
 	game.player_orders.refresh()
-	_assert_true("INJURED 1 · NO MED BED" in game.player_orders.alert_label.text, "food 35 is still too hungry for a Med Bed")
+	_assert_true("INJURED 1 · NO MED BED" in "  ·  ".join(game.player_orders.all_alerts), "food 35 is still too hungry for a Med Bed")
 	game.residents[1].needs.food = MED_BED_FOOD_EDGE + 0.5
 	game.player_orders.refresh()
-	_assert_true("INJURED 2 · NO MED BED" in game.player_orders.alert_label.text, "above food 35 the injury counts")
+	_assert_true("INJURED 2 · NO MED BED" in "  ·  ".join(game.player_orders.all_alerts), "above food 35 the injury counts")
 	# The model behind the rule: a Med Bed turns a hungry resident away.
 	game.residents[0].needs.health = 100.0
 	game.residents[2].needs.health = 100.0
@@ -303,16 +322,16 @@ func _test_starvation_not_injury() -> void:
 	game.job_system.advance(0.5)
 	_assert_equal(hungry.medical_bed_id, -1, "a Med Bed does not admit a resident at food 35")
 	game.player_orders.refresh()
-	_assert_true("INJURED 0 · MED BEDS FREE 1" in game.player_orders.alert_label.text, "so they are not counted against it")
+	_assert_true("INJURED 0 · MED BEDS FREE 1" in "  ·  ".join(game.player_orders.all_alerts), "so they are not counted against it")
 	hungry.medical_bed_id = bed.building_id
 	bed.reserved_by = hungry.resident_id
 	game.player_orders.refresh()
-	_assert_true("INJURED 1 · MED BEDS FREE 0" in game.player_orders.alert_label.text, "a patient already in care still counts")
+	_assert_true("INJURED 1 · MED BEDS FREE 0" in "  ·  ".join(game.player_orders.all_alerts), "a patient already in care still counts")
 	for resident: VaultResident in game.residents:
 		resident.alive = false
 	game.food_system.meals = 0
 	game.player_orders.refresh()
-	_assert_false("NO MEALS" in game.player_orders.alert_label.text, "no living crew, no meal alert")
+	_assert_false("NO MEALS" in "  ·  ".join(game.player_orders.all_alerts), "no living crew, no meal alert")
 	_dispose(game)
 
 
@@ -370,7 +389,7 @@ func _test_details_brownout_collapse() -> void:
 	_add_details_brownout(game)
 	game.player_orders.refresh()
 	_assert_details_state(game, true, "brownout onset opens DETAILS on next refresh")
-	_assert_true("BROWNOUT" in game.player_orders.alert_label.text, "real brownout remains visible in alerts")
+	_assert_true("BROWNOUT" in "  ·  ".join(game.player_orders.all_alerts), "real brownout remains generated in alerts")
 	_exercise_details_ui(game, true)
 	_assert_details_state(game, false, "brownout collapse survives 50 paused refreshes")
 	game.player_orders.help_button.pressed.emit()
@@ -494,7 +513,7 @@ func _test_details_victory_pending() -> void:
 	_assert_true(game.day_cycle.completed and not game.ended, "real final simulation tick reaches pending victory")
 	_assert_equal(game.player_orders.objective_label.text, "VICTORY PENDING // SEAL HATCH", "pending objective remains exact")
 	_assert_equal(game.player_orders.objective_label.get_theme_color("font_color"), Color("ef6860"), "pending objective retains urgency colour")
-	_assert_true("VICTORY PENDING · SEAL HATCH" in game.player_orders.alert_label.text, "pending hatch alert remains intact")
+	_assert_true("VICTORY PENDING · SEAL HATCH" in game.player_orders.alert_list, "pending hatch alert remains intact")
 	_assert_details_state(game, true, "new victory pending reopens an already known breach")
 	_exercise_details_ui(game, true)
 	_assert_details_state(game, false, "victory pending respects later collapse across refreshes")
@@ -1608,7 +1627,7 @@ func _test_fixture_recovery_controls_while_paused() -> void:
 	_assert_true("SHED · BROWNOUT" in game.player_orders.inspector_state.text, "inspector distinguishes a shed fixture")
 	_assert_true("Priority: LOW (fixed)" in game.player_orders.inspector_state.text, "inspector explains the immutable shed tier")
 	_assert_true("SHED 3 POWER" in game.player_orders.power_detail_label.text, "power readout exposes shed demand")
-	_assert_true("POWER BROWNOUT" in game.player_orders.alert_label.text, "compound alerts name the brownout")
+	_assert_true("POWER BROWNOUT" in "  ·  ".join(game.player_orders.all_alerts), "compound alerts name the brownout")
 
 	var elapsed_before := game.day_cycle.elapsed_seconds
 	var oxygen_before := game.oxygen_system.oxygen
@@ -1930,7 +1949,7 @@ func _test_breach_warning_interrupt() -> void:
 	_assert_equal(game.job_system.get_breach_response_status(), "BLOCKED · ENABLE HAUL", "weak wing reports its first response blocker")
 	_assert_true(game.player_orders.breach_warning_panel.visible, "first warning opens the priority incident card")
 	_assert_true(game.player_orders.breach_resume_button.has_focus(), "priority incident focuses its Resume action")
-	_assert_true("SEAL WARNING" in game.player_orders.alert_label.text, "warning overrides nominal wing status")
+	_assert_true("SEAL WARNING" in "  ·  ".join(game.player_orders.all_alerts), "warning generates an alert instead of nominal wing status")
 	_assert_approximately(game.breach_system.get_pressure_percent(), 0.0, 0.0001, "pressure starts at zero percent at the warning boundary")
 	for index in game.residents.size():
 		_assert_approximately(game.residents[index].needs.health, initial_health[index], 0.0001, "warning boundary causes no early damage to resident %d" % index)
@@ -1966,7 +1985,7 @@ func _test_breach_warning_interrupt() -> void:
 	_assert_equal(game.breach_system.phase, BreachSystem.Phase.OPEN, "unanswered hatch opens at exactly 80 seconds")
 	_assert_false(game.user_paused, "opening does not grant a second automatic pause")
 	_assert_equal(warning_signals["count"], 1, "opening does not replay the warning interrupt")
-	_assert_true("BREACH OPEN" in game.player_orders.alert_label.text, "open breach remains visible in compound alerts")
+	_assert_true("BREACH OPEN" in "  ·  ".join(game.player_orders.all_alerts), "open breach remains generated in alerts")
 	_dispose(game)
 
 
@@ -2477,7 +2496,7 @@ func _test_day_seven_requires_sealed_breathable_wing() -> void:
 	_assert_true(game.get_alive_count() > 0, "victory gate is the hatch rather than colony loss")
 	game.player_orders.refresh()
 	_assert_true("VICTORY PENDING // SEAL HATCH" in game.player_orders.objective_label.text, "completed clock names the unsealed hatch victory blocker")
-	_assert_true("VICTORY PENDING · SEAL HATCH" in game.player_orders.alert_label.text, "alerts keep the pending hatch action visible")
+	_assert_true("VICTORY PENDING · SEAL HATCH" in game.player_orders.alert_list, "alerts keep the pending hatch action visible")
 
 	_assert_equal(game.breach_system.add_delivery(BreachSystem.PATCH_COST), BreachSystem.PATCH_COST, "late response accepts its four salvage")
 	_assert_true(game.breach_system.apply_patch_work(BreachSystem.PATCH_WORK_SECONDS), "late eight-second patch seals the hatch")
@@ -2489,7 +2508,7 @@ func _test_day_seven_requires_sealed_breathable_wing() -> void:
 	_assert_true(game.get_alive_count() > 0, "oxygen victory gate is evaluated before suffocation becomes colony loss")
 	game.player_orders.refresh()
 	_assert_true("VICTORY PENDING // RESTORE O2 TO 15%" in game.player_orders.objective_label.text, "completed clock names the oxygen victory blocker")
-	_assert_true("VICTORY PENDING · O2 >= 15%" in game.player_orders.alert_label.text, "alerts state the exact breathable threshold")
+	_assert_true("VICTORY PENDING · O2 >= 15%" in game.player_orders.alert_list, "alerts state the exact breathable threshold")
 
 	game.oxygen_system.oxygen = OxygenSystem.STARTING_OXYGEN
 	game._simulation_step(VaultGame.SIMULATION_TICK)

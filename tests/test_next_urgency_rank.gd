@@ -76,7 +76,7 @@ func _test_engaged_relay_lumen() -> void:
 		if not checked_critical and elapsed >= 230.0 - 0.00001:
 			checked_critical = true
 			_assert_starvation_next(game, 230.0)
-			_assert_true("CRITICAL: Ari" in game.player_orders.alert_label.text,
+			_assert_true("CRITICAL: Ari" in "  ·  ".join(game.player_orders.all_alerts),
 				"230s replay reaches the reported CRITICAL: Ari state")
 			break
 	_assert_true(checked_healthy and checked_empty_larder and checked_critical,
