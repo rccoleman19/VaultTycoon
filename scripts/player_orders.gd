@@ -1801,6 +1801,10 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 				})
 			else:
 				step = {} if bool(plan.step.get("too_late", false)) else food_blocker
+				if not step.is_empty():
+					var shed := _shed_tray_step(suppressed_builds)
+					if not shed.is_empty():
+						step = shed
 				if step.is_empty():
 					step = plan.step
 
@@ -2190,6 +2194,25 @@ func _meal_recovery_step(urgent := false) -> Dictionary:
 		"help": "Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food.",
 	})
 
+
+
+func _shed_tray_step(suppressed_builds: Dictionary = {}) -> Dictionary:
+	if game.ended or game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY) == 0 or game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) > 0:
+		return {}
+	if game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) == 0 or game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) == 0:
+		return {}
+	var blocked_tray := false
+	for tray: VaultBuilding in game.buildings:
+		if tray.kind == VaultBuilding.Kind.GROW_TRAY and tray.complete and (tray.manually_disabled or game.power_grid.is_building_shed(tray.building_id)):
+			blocked_tray = true
+			break
+	if not blocked_tray:
+		return {}
+	var step := _grow_recovery_step()
+	if _next_build_is_suppressed(step, suppressed_builds):
+		return {}
+	step["restores_existing_tray"] = true
+	return step
 
 
 func _grow_recovery_step() -> Dictionary:
@@ -2604,6 +2627,10 @@ func _primary_next_step_chain(suppressed_builds: Dictionary) -> Dictionary:
 	if interrupts_care:
 		_hold_mood_break_tip(mood_break_risk, rec_wanted)
 		return urgent_step
+	var shed := _shed_tray_step(suppressed_builds)
+	if not shed.is_empty():
+		_hold_mood_break_tip(mood_break_risk, rec_wanted)
+		return shed
 	mood_break_risk = _hold_mood_break_tip(mood_break_risk, rec_wanted)
 	if mood_break_risk and game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) < 1 and not suppressed_builds.has(VaultBuilding.Kind.RECREATION_CONSOLE):
 		var unfinished_rec := 0

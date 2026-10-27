@@ -389,10 +389,11 @@ func _test_engaged() -> void:
 		_assert_true("YOU spend" not in _text(game), "T4 level %02d with only one idle second receives no spend nudge" % level)
 		_advance_clock(game, 2.0)
 		var step := _next(game)
-		var expected := "Next: Ari starving · YOU spend 8: build Rec Console · THEY craft" if level == 5 else "Next: Dax starving · YOU spend 18: build Charge Node · THEY craft"
-		_assert_equal(str(step.get("text", "")), expected, "T4 engaged %02d chooses its affordable survival sink and preserves the resident prefix" % level)
-		_assert_equal(str(step.get("action", "")), "spend", "T4 engaged survival advice exposes Spend")
-		_assert_true(bool(step.get("urgent", false)) and str(step.get("cause", "")) == "food", "T4 engaged spend keeps food danger metadata")
+		# Restoring the existing shed tray now leads optional Rec/spend advice.
+		var expected := "Next: Ari starving · YOU disable a Lumen · THEY power the Grow Tray" if level == 5 else "Next: Dax starving · YOU place a Charge Node · THEY power the Grow Tray"
+		_assert_equal(str(step.get("text", "")), expected, "T4 engaged %02d restores the shed tray and preserves the resident prefix" % level)
+		_assert_equal(str(step.get("action", "")), "", "T4 existing-tray recovery keeps its direct action")
+		_assert_true(bool(step.get("urgent", false)) and str(step.get("cause", "")) == "food", "T4 engaged tray recovery keeps food danger metadata")
 		var immediate := {"text": "Next: Ari starving · YOU disable a Lumen · THEY power the Grow Tray", "tool": "select", "kind": "food", "urgent": true, "resident_id": game.residents[0].resident_id, "cause": "food"}
 		_assert_equal(str(_present(game, immediate).get("text", "")), str(immediate.text), "T4 free Lumen power recovery keeps precedence over stored-salvage spending")
 		var late := {"text": "Next: Ari starving · nothing lands in time · keep crew fed where possible", "tool": "select", "kind": "food", "urgent": true, "too_late": true, "resident_id": game.residents[0].resident_id, "cause": "food"}

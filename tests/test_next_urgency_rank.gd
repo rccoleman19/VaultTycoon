@@ -83,16 +83,16 @@ func _test_engaged_relay_lumen() -> void:
 		"deterministic driver reaches early-runway, empty-larder and critical checkpoints (frame %d, sim %.1fs)" % [
 			_frame, game.day_cycle.elapsed_seconds])
 
-	# Recovery guard: with the same buildings, the sealed hatch, full bellies and
-	# stocked meals, the named life threat clears and optional build advice returns.
+	# With full bellies and stocked meals the named threat clears, while the
+	# existing shed tray still needs power before optional mood care.
 	for resident: VaultResident in game.residents:
 		resident.needs.food = 100.0
 		resident.needs.rest = 100.0
 		resident.needs.health = 100.0
 	game.food_system.meals = 24
 	game.player_orders.refresh()
-	_assert_equal(game.player_orders.objective_label.text, REC_NEXT,
-		"removing imminent death restores the existing Rec Console build advice")
+	_assert_equal(game.player_orders.objective_label.text, "Next: YOU disable a Lumen · THEY power the Grow Tray",
+		"removing imminent death keeps the existing shed-tray fix ahead of mood care")
 	_dispose(game)
 	_remove_test_save(RECORDS_PATH)
 
