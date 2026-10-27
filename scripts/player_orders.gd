@@ -1252,6 +1252,7 @@ const FOOD_PER_MEAL := 60.0
 const NEXT_DEATH_WARNING_SECONDS := 60.0
 const STARVING_RUNWAY_S := NEXT_DEATH_WARNING_SECONDS
 const STARVING_SWITCH_S := 10.0
+const FOOD_SHORT_LABEL := "food runway short"
 
 # 03/4242 RELAY LUMEN: waiting for NO MEALS at 217.3 s left only 51 s
 # before Ari died at 268.3 s (CRITICAL at 230 s). Even an immediately placed
@@ -1723,15 +1724,23 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 	# air fix lead while its supply/build/haul window is still open.
 	var food_resident: VaultResident = null
 	var food_death := INF
+	# The food steps and their urgency follow the forecast and the nearest
+	# deadline. The NAME is separate: only a resident inside their own
+	# STARVING_RUNWAY_S, kept until fed unless another is STARVING_SWITCH_S closer.
+	var named_resident: VaultResident = null
+	var named_death := INF
 	var sticky_resident: VaultResident = null
 	var sticky_food_death := INF
 	for resident: VaultResident in game.residents:
 		if not resident.alive:
 			continue
 		var food_seconds := float(food_times[resident.resident_id]) + resident.needs.health / (160.0 / DayCycle.SECONDS_PER_DAY)
-		if food_seconds < STARVING_RUNWAY_S and food_seconds < food_death:
+		if food_seconds < food_death:
 			food_resident = resident
 			food_death = food_seconds
+		if food_seconds < STARVING_RUNWAY_S and food_seconds < named_death:
+			named_resident = resident
+			named_death = food_seconds
 		if resident.resident_id == _starving_resident_id and food_seconds < STARVING_RUNWAY_S:
 			sticky_resident = resident
 			sticky_food_death = food_seconds
@@ -1739,10 +1748,9 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 		if seconds < soonest:
 			threatened = resident
 			soonest = seconds
-	if sticky_resident != null and food_death > sticky_food_death - STARVING_SWITCH_S:
-		food_resident = sticky_resident
-		food_death = sticky_food_death
-	_starving_resident_id = food_resident.resident_id if food_resident != null else -1
+	if sticky_resident != null and named_death > sticky_food_death - STARVING_SWITCH_S:
+		named_resident = sticky_resident
+	_starving_resident_id = named_resident.resident_id if named_resident != null else -1
 	# Pantry runway governs the crop cutoff. A produced-food rescue must also
 	# reach the named resident before their own starvation health runs out,
 	# including recovery if breaks currently block delivery or cooking.
@@ -1754,8 +1762,8 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 			plan = _food_fix_plan(rescue_budget)
 	var food_waiting := ("YOU leave Cook on" in str(plan.step.text) and food_blocker.is_empty()) or bool(plan.step.get("too_late", false))
 	var cause := ""
-	if food_danger and food_resident != null and food_death < STARVING_RUNWAY_S and (threatened == null or (food_death <= soonest and not food_waiting)):
-		threatened = food_resident
+	if food_danger and food_resident != null and (threatened == null or (food_death <= soonest and not food_waiting)):
+		threatened = named_resident if named_resident != null else food_resident
 		soonest = food_death
 		cause = "food"
 	elif threatened != null:
@@ -1771,7 +1779,7 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 	var condition := "critical"
 	match cause:
 		"food":
-			condition = "starving"
+			condition = "starving" if named_resident != null else ""
 			if threatened.drafted:
 				step = _food_step({
 					"text": "Next: YOU undraft %s [R] · THEY eat/work" % threatened.resident_name,
@@ -1832,7 +1840,11 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 				}
 	if step.is_empty() or _next_build_is_suppressed(step, suppressed_builds):
 		return {}
-	step.text = "Next: %s %s · %s" % [threatened.resident_name, condition, str(step.text).trim_prefix("Next: ")]
+	if cause == "food" and named_resident == null:
+		step.text = "Next: %s · %s" % [FOOD_SHORT_LABEL, str(step.text).trim_prefix("Next: ")]
+		step["food_unnamed"] = true
+	else:
+		step.text = "Next: %s %s · %s" % [threatened.resident_name, condition, str(step.text).trim_prefix("Next: ")]
 	step["urgent"] = true
 	step["resident_id"] = threatened.resident_id
 	step["cause"] = cause
@@ -1862,6 +1874,14 @@ func _urgency_interrupts_care(step: Dictionary) -> bool:
 func _name_food_recovery(step: Dictionary, urgent_step: Dictionary) -> Dictionary:
 	var resident: VaultResident = null
 	if str(urgent_step.get("cause", "")) == "food":
+		if bool(urgent_step.get("food_unnamed", false)):
+			# Forecast only: no resident is inside their own runway yet.
+			step.text = "Next: %s · %s" % [FOOD_SHORT_LABEL, str(step.text).trim_prefix("Next: ")]
+			step["urgent"] = true
+			step["resident_id"] = int(urgent_step.resident_id)
+			step["cause"] = "food"
+			step["food_unnamed"] = true
+			return step
 		resident = game.get_resident_by_id(int(urgent_step.resident_id))
 	elif game.food_system.meals < game.get_alive_count():
 		# Existing crisis advice also names a crew member already below the
