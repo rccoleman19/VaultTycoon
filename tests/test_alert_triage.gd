@@ -206,9 +206,12 @@ func _test_next_urgency_recap() -> void:
 	game.player_orders._remember_survival_tip(decorated)
 	var tips: Dictionary = game.player_orders.get("_survival_tips")
 	var details: Dictionary = game.player_orders.get("_survival_tip_details")
-	_assert_equal(str(tips.get(ari.resident_id, "")), PLACE_BUNKS,
+	# Tips are retained per resident and cause (feat/death-recap 0350ec56).
+	var ari_tips: Dictionary = tips.get(ari.resident_id, {})
+	var ari_details: Dictionary = details.get(ari.resident_id, {})
+	_assert_equal(str(ari_tips.get("rest", "")), PLACE_BUNKS,
 		"recap stores the exact saving action after stripping every queued suffix")
-	_assert_equal(str(details.get(ari.resident_id, {}).get("cause", "")), "rest",
+	_assert_equal(str(ari_details.get("rest", {}).get("cause", "")), "rest",
 		"recap retains the real urgency's cause")
 	_assert_true(bool(decorated.get("urgent", false)) and int(decorated.get("resident_id", -1)) == ari.resident_id
 		and str(decorated.get("cause", "")) == "rest"
