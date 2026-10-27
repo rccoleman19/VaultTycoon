@@ -25,6 +25,7 @@ func _run() -> void:
 	_run_case("D7 the food forecast holds without an on-off flip and releases on schedule", _test_forecast_hold)
 	_run_case("D8 a named death overrides the forecast hold", _test_forecast_named_override)
 	_run_case("D9 the unnamed prefix goes only on food-chain steps", _test_prefix_food_chain_only)
+	_run_case("D12 the unnamed tip always states the action with YOU and THEY", _test_unnamed_tip_shape)
 	_run_case("D10 place 1 bunk, place 2 bunks and place bunks are one stable step", _test_bunk_text_stable)
 	_run_case("D11 the food-worker Rec blocker waits out the Next hold of a bunk step", _test_rec_blocker_hold)
 	print("NEXT FLICKER TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
@@ -492,6 +493,17 @@ func _assert_unnamed_food(game: VaultGame, message: String) -> void:
 	_assert_true(int(urgent.get("resident_id", -1)) >= 0, message + " keeps a resident id for urgency handling")
 	var next_text := str(_next(game).get("text", ""))
 	_assert_true(next_text.begins_with("Next: food runway short · YOU "), message + " reaches the public Next unnamed: " + next_text)
+	_assert_unnamed_tip_shape(text, message + " urgency step")
+	_assert_unnamed_tip_shape(next_text, message + " public Next")
+
+
+# The unnamed tip is an instruction: label, then YOU <action>, then THEY <effect>.
+func _assert_unnamed_tip_shape(text: String, message: String) -> void:
+	var body := text.trim_prefix("Next: food runway short · ")
+	_assert_true(text.begins_with("Next: food runway short · ") and body.begins_with("YOU "), message + " has the label then YOU: " + text)
+	_assert_true(body.trim_prefix("YOU ").get_slice(" · THEY ", 0).strip_edges().length() > 0, message + " states a YOU action: " + text)
+	_assert_true(" · THEY " in body and body.get_slice(" · THEY ", 1).strip_edges().length() > 0, message + " states a THEY part: " + text)
+	_assert_equal(text.count("food runway short"), 1, message + " carries the label once")
 
 
 func _assert_no_food_cause(game: VaultGame, message: String) -> void:
@@ -822,25 +834,36 @@ func _tick(game: VaultGame, seconds: float) -> void:
 func _test_bunk_text_stable() -> void:
 	var game := _nudge_wing()
 	game.player_orders.clear_survival_tips()
-	var first := str(_present(game, BUNK_TWO).get("text", ""))
-	_assert_equal(first, BUNK_TWO.text, "D10 the first bunk wording is shown as built")
-	for variant: Dictionary in [BUNK_ONE, BUNK_CRISIS, BUNK_TWO, BUNK_CRISIS, BUNK_ONE]:
+	_assert_equal(str(_present(game, BUNK_TWO).get("text", "")), BUNK_TWO.text, "D10 the first bunk wording is shown as built")
+	# A step that states no count keeps the count text first shown.
+	for variant: Dictionary in [BUNK_CRISIS, BUNK_TWO, BUNK_CRISIS, BUNK_CRISIS]:
 		_tick(game, 3.0)
 		var shown := _present(game, variant)
-		_assert_equal(str(shown.get("text", "")), BUNK_TWO.text, "D10 a count or tier change alone keeps the text (%s)" % variant.text)
+		_assert_equal(str(shown.get("text", "")), BUNK_TWO.text, "D10 place 2 bunks stays while the count is stable (%s)" % variant.text)
 		_assert_equal(str(shown.get("help", "")), str(BUNK_TWO.help), "D10 the help stays with the held text")
 		_assert_equal(str(shown.get("tool", "")), "bed", "D10 the tool is unchanged")
+	# A genuine count change mid-episode (a bunk was placed) reaches Next, then holds.
+	_tick(game, 3.0)
+	_assert_equal(str(_present(game, BUNK_ONE).get("text", "")), BUNK_ONE.text, "D10 a real count change 2 -> 1 is shown")
+	for variant: Dictionary in [BUNK_CRISIS, BUNK_CRISIS, BUNK_ONE, BUNK_CRISIS]:
+		_tick(game, 3.0)
+		_assert_equal(str(_present(game, variant).get("text", "")), BUNK_ONE.text, "D10 place 1 bunk does not flip to place bunks (%s)" % variant.text)
+	_tick(game, 3.0)
+	_assert_equal(str(_present(game, BUNK_TWO).get("text", "")), BUNK_TWO.text, "D10 a real count change 1 -> 2 is shown")
+	# A stated count over a held count-less wording is shown as built.
+	game.player_orders.clear_survival_tips()
+	_present(game, BUNK_CRISIS)
+	_tick(game, 3.0)
+	var stated := _present(game, BUNK_TWO)
+	_assert_equal(str(stated.get("text", "")), BUNK_TWO.text, "D10 a stated count over place bunks is shown as built")
+	_assert_equal(str(stated.get("help", "")), str(BUNK_TWO.help), "D10 its help is shown as built")
 	# A different step kind ends the latch, and a later bunk step starts a fresh one.
+	game.player_orders.clear_survival_tips()
+	_present(game, BUNK_ONE)
 	_tick(game, 3.0)
 	_assert_equal(str(_present(game, GENERATOR_STEP).get("text", "")), GENERATOR_STEP.text, "D10 a different step kind is shown as built")
 	_tick(game, 3.0)
-	_assert_equal(str(_present(game, BUNK_ONE).get("text", "")), BUNK_ONE.text, "D10 after leaving the bunk step a new bunk step starts fresh")
-	# The latch holds whichever wording came first, including the singular one.
-	game.player_orders.clear_survival_tips()
-	_present(game, BUNK_ONE)
-	for variant: Dictionary in [BUNK_TWO, BUNK_CRISIS, BUNK_ONE]:
-		_tick(game, 3.0)
-		_assert_equal(str(_present(game, variant).get("text", "")), BUNK_ONE.text, "D10 a first singular wording is held too (%s)" % variant.text)
+	_assert_equal(str(_present(game, BUNK_CRISIS).get("text", "")), BUNK_CRISIS.text, "D10 after leaving the bunk step place bunks starts fresh")
 	# An urgent bunk step is a different step even when its wording matches.
 	var urgent_bunk := BUNK_CRISIS.duplicate(true)
 	urgent_bunk["urgent"] = true
@@ -848,10 +871,9 @@ func _test_bunk_text_stable() -> void:
 	_present(game, BUNK_TWO)
 	_tick(game, 3.0)
 	_assert_equal(str(_present(game, urgent_bunk).get("text", "")), BUNK_CRISIS.text, "D10 an urgent bunk step is never rewritten to the held text")
+	var named := {"text": "Next: Ari exhausted · YOU place bunks · THEY craft", "tool": "bed", "urgent": true, "resident_id": 1}
 	game.player_orders.clear_survival_tips()
 	_present(game, BUNK_TWO)
-	# An urgent, named bunk step is a different step and is never rewritten.
-	var named := {"text": "Next: Ari exhausted · YOU place bunks · THEY craft", "tool": "bed", "urgent": true, "resident_id": 1}
 	_tick(game, 3.0)
 	_assert_equal(str(_present(game, named).get("text", "")), named.text, "D10 an urgent named bunk step keeps its own text")
 	_dispose(game)
@@ -884,4 +906,22 @@ func _test_rec_blocker_hold() -> void:
 	var plain := REC_BLOCKER.duplicate(true)
 	plain.erase("food_unnamed")
 	_assert_equal(str(_present(game, plain).get("text", "")), REC_BLOCKER.text, "D11 only the unnamed food blocker waits")
+	_dispose(game)
+
+
+func _test_unnamed_tip_shape() -> void:
+	var game := _starving_opening(5)
+	var orders = game.player_orders
+	var samples: Array = [
+		{"text": "Next: YOU place a Nutrient Station · THEY cook", "kind": "food"},
+		{"text": "Next: YOU leave Cook on · THEY make meals", "kind": "food"},
+		{"text": "Next: YOU undraft Ari [R] · THEY eat/work", "kind": "food"},
+		{"text": "Next: nothing lands in time · keep crew fed where possible", "kind": "food", "too_late": true},
+		{"text": "Next: keep crew fed", "kind": "food"},
+	]
+	for sample: Dictionary in samples:
+		var shaped: String = orders._unnamed_food_text(sample.duplicate(true))
+		_assert_unnamed_tip_shape(shaped, "D12 " + str(sample.text))
+	_assert_equal(orders._unnamed_food_text(samples[0].duplicate(true)), "Next: food runway short · YOU place a Nutrient Station · THEY cook", "D12 a well-formed step keeps its own action")
+	_assert_equal(orders._unnamed_food_text(samples[3].duplicate(true)), "Next: food runway short · YOU keep Cook + Haul on · THEY feed crew where possible", "D12 the too-late step gets the standing action")
 	_dispose(game)

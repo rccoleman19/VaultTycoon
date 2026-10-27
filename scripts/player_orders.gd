@@ -1855,7 +1855,7 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 		return {}
 	if cause == "food" and named_resident == null:
 		if _is_food_chain_step(step):
-			step.text = "Next: %s · %s" % [FOOD_SHORT_LABEL, str(step.text).trim_prefix("Next: ")]
+			step.text = _unnamed_food_text(step)
 		step["food_unnamed"] = true
 	else:
 		step.text = "Next: %s %s · %s" % [threatened.resident_name, condition, str(step.text).trim_prefix("Next: ")]
@@ -1888,6 +1888,15 @@ func _food_forecast_with_hold(runway: float, trigger: float, named: bool) -> boo
 # The unnamed forecast prefix belongs only on steps that act on the food chain:
 # not on the Rec Console steps that keep food workers from breaking, and not on
 # unrelated blockers such as the hatch warning.
+# The unnamed tip always reads "food runway short · YOU <action> · THEY <effect>".
+# The too-late step names no action of its own, so it gets the standing one.
+func _unnamed_food_text(step: Dictionary) -> String:
+	var body := str(step.text).trim_prefix("Next: ")
+	if bool(step.get("too_late", false)) or not (body.begins_with("YOU ") and " · THEY " in body):
+		body = "YOU keep Cook + Haul on · THEY feed crew where possible"
+	return "Next: %s · %s" % [FOOD_SHORT_LABEL, body]
+
+
 func _is_food_chain_step(step: Dictionary) -> bool:
 	var text := str(step.get("text", "")).to_lower()
 	if str(step.get("tool", "")) == "rec" or "rec console" in text:
@@ -1925,7 +1934,7 @@ func _name_food_recovery(step: Dictionary, urgent_step: Dictionary) -> Dictionar
 		if bool(urgent_step.get("food_unnamed", false)):
 			# Forecast only: no resident is inside their own runway yet.
 			if _is_food_chain_step(step):
-				step.text = "Next: %s · %s" % [FOOD_SHORT_LABEL, str(step.text).trim_prefix("Next: ")]
+				step.text = _unnamed_food_text(step)
 			step["urgent"] = true
 			step["resident_id"] = int(urgent_step.resident_id)
 			step["cause"] = "food"
@@ -2438,10 +2447,18 @@ func _salvage_next_step(step: Dictionary) -> Dictionary:
 	return result
 
 
-# "place 1 bunk", "place 2 bunks" and "place bunks" are one step: a count change
-# alone keeps the text first shown until Next leaves the bunk step.
+# "place 1 bunk", "place 2 bunks" and "place bunks" are one step. Latch the
+# wording, not the information: a bunk step that states no count ("place bunks")
+# keeps the count text first shown, so 1 bunk <-> bunks never flips on its own.
+# A stated count ("place 2 bunks") is shown as built and becomes the latch, so a
+# real mid-episode count change (2 -> 1 after a placement) still reaches Next.
 func _is_bunk_place_step(step: Dictionary) -> bool:
 	return str(step.get("tool", "")) == "bed" and not bool(step.get("urgent", false)) and str(step.get("text", "")).begins_with("Next: YOU place ") and "bunk" in str(step.get("text", ""))
+
+
+func _bunk_step_states_count(step: Dictionary) -> bool:
+	var count_word := str(step.get("text", "")).trim_prefix("Next: YOU place ").get_slice(" ", 0)
+	return count_word.is_valid_int()
 
 
 func _stabilize_bunk_step(step: Dictionary) -> Dictionary:
@@ -2449,13 +2466,13 @@ func _stabilize_bunk_step(step: Dictionary) -> Dictionary:
 		_next_bunk_text = ""
 		_next_bunk_help = ""
 		return step
-	if _next_bunk_text.is_empty():
+	if _next_bunk_text.is_empty() or _bunk_step_states_count(step):
 		_next_bunk_text = str(step.text)
 		_next_bunk_help = str(step.get("help", ""))
-	else:
-		step.text = _next_bunk_text
-		if not _next_bunk_help.is_empty():
-			step["help"] = _next_bunk_help
+		return step
+	step.text = _next_bunk_text
+	if not _next_bunk_help.is_empty():
+		step["help"] = _next_bunk_help
 	return step
 
 
