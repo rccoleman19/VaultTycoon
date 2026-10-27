@@ -73,6 +73,7 @@ run_godot_check late-shift-goals --script res://tests/test_late_shift_goals.gd
 run_godot_check next-flicker --script res://tests/test_next_flicker.gd
 run_godot_check shed-tray-tip --script res://tests/test_shed_tray_tip.gd
 run_godot_check unnamed-rec-lead --script res://tests/test_unnamed_rec_lead.gd
+run_godot_check medbed-bunk-card --script res://tests/test_medbed_bunk_card.gd
 run_godot_check death-recap --script res://tests/test_death_recap.gd
 run_godot_check retry-checkpoint-match --script res://tests/test_retry_checkpoint_match.gd
 run_godot_check medical --script res://tests/test_medical.gd
