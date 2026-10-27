@@ -72,6 +72,8 @@ func _run() -> void:
 	_case("k", _test_real_first_tip)
 	_case("l", _test_fatal_tick_tip_is_not_saving)
 	_case("m", _test_tip_cause_and_resets)
+	_case("n", _test_recap_button_chrome_and_retry_focus)
+	_case("o", _test_recap_without_checkpoint_button_and_focus)
 	for path: String in _paths:
 		_remove_test_save(path)
 	print("DEATH RECAP TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
@@ -758,6 +760,84 @@ func _recap(game: VaultGame) -> Dictionary:
 
 func _button(orders: PlayerOrders, property: String) -> Button:
 	return orders.get(property) as Button if property in orders else null
+
+
+func _assert_recap_button_chrome(orders: PlayerOrders, button: Button, label: String) -> void:
+	var panel := orders.outcome_panel.get_theme_stylebox("panel") as StyleBoxFlat
+	var backdrop := orders.get("_outcome_backdrop") as ColorRect
+	for state: String in ["normal", "hover", "pressed", "disabled", "focus"]:
+		var style := button.get_theme_stylebox(state) as StyleBoxFlat
+		_assert_true(button.has_theme_stylebox_override(state) and style != null, "%s %s has an explicit StyleBoxFlat override" % [label, state])
+		if style == null:
+			continue
+		_assert_true(style.border_width_left > 0 and style.border_width_top > 0 and style.border_width_right > 0 and style.border_width_bottom > 0, "%s %s has a visible border on every side" % [label, state])
+		_assert_true(style.bg_color.a > 0.0 and panel != null and backdrop != null and style.bg_color != panel.bg_color and style.bg_color != backdrop.color, "%s %s has a visible fill distinct from the panel and backdrop" % [label, state])
+
+
+func _assert_recap_focus_cleared(game: VaultGame, resume: Button, retry: Button, context: String) -> void:
+	var focus := game.get_viewport().gui_get_focus_owner()
+	_assert_false(resume.has_focus() or retry.has_focus() or focus == resume or focus == retry, "%s clears recap button focus" % context)
+
+
+func _test_recap_button_chrome_and_retry_focus() -> void:
+	var game := _game()
+	game.begin_shift()
+	_force_starvation(game, game.residents[0])
+	var orders := game.player_orders
+	var resume := _button(orders, "outcome_resume_button")
+	var retry := _button(orders, "outcome_retry_button")
+	_assert_true(game.outcome == "death" and orders.outcome_panel.is_visible_in_tree(), "a real resident death opens the recap in the SceneTree")
+	_assert_true(resume != null and retry != null, "the shown death recap has both action buttons")
+	if resume == null or retry == null:
+		_dispose(game)
+		return
+	_assert_true(resume.is_visible_in_tree() and retry.is_visible_in_tree() and not resume.disabled and not retry.disabled, "Resume and checkpoint Retry are both visible and enabled")
+	_assert_recap_button_chrome(orders, resume, "Resume")
+	_assert_recap_button_chrome(orders, retry, "Retry")
+	_assert_true(resume.custom_minimum_size == retry.custom_minimum_size and retry.custom_minimum_size.x >= 120 and retry.custom_minimum_size.y >= 30, "both recap buttons have an equal usable minimum size")
+	_assert_true(retry.has_focus() and game.get_viewport().gui_get_focus_owner() == retry, "enabled Retry gets default focus after a real death")
+	orders.hide_outcome()
+	_assert_false(orders.outcome_panel.visible, "hide_outcome closes the recap")
+	_assert_recap_focus_cleared(game, resume, retry, "hide_outcome")
+	orders.show_outcome(false, game.get_alive_count())
+	_assert_true(retry.has_focus(), "reopening the death recap restores Retry focus")
+	retry.pressed.emit()
+	_assert_true(game.outcome == "" and not orders.outcome_panel.visible and game.get_alive_count() == game.residents.size(), "pressing Retry restores the checkpoint and closes the recap")
+	_assert_recap_focus_cleared(game, resume, retry, "Retry")
+	for resident: VaultResident in game.residents:
+		if resident.alive:
+			_force_starvation(game, resident)
+	_assert_true(game.outcome == "loss" and game.ended and orders.outcome_panel.is_visible_in_tree(), "the final real death opens the loss recap")
+	_assert_true(retry.is_visible_in_tree() and not retry.disabled, "final loss still offers the available checkpoint Retry")
+	_assert_true(retry.has_focus() and game.get_viewport().gui_get_focus_owner() == retry, "enabled Retry gets default focus on the final loss recap")
+	orders.hide_outcome()
+	_assert_recap_focus_cleared(game, resume, retry, "hiding final loss")
+	_dispose(game)
+
+
+func _test_recap_without_checkpoint_button_and_focus() -> void:
+	var game := _game()
+	game.begin_shift()
+	_remove_test_save(_checkpoint_path)
+	_force_starvation(game, game.residents[0])
+	var orders := game.player_orders
+	var resume := _button(orders, "outcome_resume_button")
+	var retry := _button(orders, "outcome_retry_button")
+	_assert_true(game.outcome == "death" and orders.outcome_panel.is_visible_in_tree(), "a real death without a checkpoint opens the recap")
+	_assert_true(resume != null and retry != null, "the no-checkpoint recap retains both action buttons")
+	if resume == null or retry == null:
+		_dispose(game)
+		return
+	_assert_true(resume.is_visible_in_tree() and retry.is_visible_in_tree() and not resume.disabled and retry.disabled, "missing checkpoint keeps Retry visible but disabled beside enabled Resume")
+	_assert_recap_button_chrome(orders, retry, "disabled Retry")
+	var normal := retry.get_theme_stylebox("normal") as StyleBoxFlat
+	var disabled := retry.get_theme_stylebox("disabled") as StyleBoxFlat
+	_assert_true(normal != null and disabled != null and disabled.bg_color.get_luminance() < normal.bg_color.get_luminance(), "disabled Retry keeps its button fill but visibly dims it")
+	_assert_true(resume.custom_minimum_size == retry.custom_minimum_size and retry.custom_minimum_size.x >= 120 and retry.custom_minimum_size.y >= 30, "disabled Retry keeps the same usable minimum size as Resume")
+	_assert_true(resume.has_focus() and game.get_viewport().gui_get_focus_owner() == resume and not retry.has_focus(), "disabled Retry falls back to visible enabled Resume for focus")
+	orders.hide_outcome()
+	_assert_recap_focus_cleared(game, resume, retry, "hiding no-checkpoint recap")
+	_dispose(game)
 
 
 func _force_starvation(game: VaultGame, resident: VaultResident) -> void:

@@ -935,13 +935,43 @@ func _build_outcome() -> void:
 	content.add_child(recap_row)
 	outcome_resume_button = Button.new()
 	outcome_resume_button.text = "Resume"
+	_style_outcome_recap_button(outcome_resume_button)
 	outcome_resume_button.pressed.connect(func() -> void: game.resume_after_death())
 	recap_row.add_child(outcome_resume_button)
 	outcome_retry_button = Button.new()
 	outcome_retry_button.text = "Retry from day checkpoint"
+	_style_outcome_recap_button(outcome_retry_button)
 	outcome_retry_button.pressed.connect(func() -> void: game.retry_day_checkpoint())
 	recap_row.add_child(outcome_retry_button)
+	var button_width := maxf(outcome_resume_button.get_combined_minimum_size().x, outcome_retry_button.get_combined_minimum_size().x)
+	for button: Button in [outcome_resume_button, outcome_retry_button]:
+		button.custom_minimum_size.x = button_width
 	outcome_panel.visible = false
+
+
+func _style_outcome_recap_button(button: Button) -> void:
+	button.custom_minimum_size = Vector2(240, 40)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var styles := {
+		"normal": _panel_style(Color("263e46"), Color("8faeb7")),
+		"hover": _panel_style(Color("35545b"), Color("efc56b")),
+		"pressed": _panel_style(Color("1b3038"), Color("efc56b")),
+		"disabled": _panel_style(Color("1c2b32"), Color("45616a")),
+		# Focus overlays the current state; a light tint keeps hover/press visible.
+		"focus": _panel_style(Color(Color("efc56b"), 0.10), Color("efc56b"), 2),
+	}
+	for state: String in styles:
+		var style: StyleBoxFlat = styles[state]
+		style.content_margin_left = 16
+		style.content_margin_right = 16
+		style.content_margin_top = 8
+		style.content_margin_bottom = 8
+		button.add_theme_stylebox_override(state, style)
+	button.add_theme_color_override("font_color", Color("e0efe9"))
+	button.add_theme_color_override("font_hover_color", Color("ffffff"))
+	button.add_theme_color_override("font_pressed_color", Color("ffffff"))
+	button.add_theme_color_override("font_focus_color", Color("ffffff"))
+	button.add_theme_color_override("font_disabled_color", Color("8faeb7"))
 
 
 # End-of-run line (midgame slice 4): salvage spent on the Mk II fits still standing. Derived
@@ -3417,9 +3447,10 @@ func show_outcome(won: bool, survivors: int) -> void:
 			button.focus_neighbor_right = target
 			button.focus_neighbor_top = target
 			button.focus_neighbor_bottom = target
-		outcome_resume_button.grab_focus()
-	elif not won and not outcome_retry_button.disabled:
+	if outcome_retry_button.is_visible_in_tree() and not outcome_retry_button.disabled:
 		outcome_retry_button.grab_focus()
+	elif outcome_resume_button.is_visible_in_tree() and not outcome_resume_button.disabled:
+		outcome_resume_button.grab_focus()
 
 
 # Records + ladder C3: the wing's record under the crew rating. A win shows the best grade, a loss
@@ -3549,8 +3580,18 @@ func format_loss_cause(counts: Array[int]) -> String:
 
 func hide_outcome() -> void:
 	if outcome_panel != null:
+		var focus_owner := get_viewport().gui_get_focus_owner()
+		if focus_owner != null and outcome_panel.is_ancestor_of(focus_owner):
+			focus_owner.release_focus()
 		outcome_panel.visible = false
 		_outcome_backdrop.visible = false
+		for button: Button in [outcome_resume_button, outcome_retry_button]:
+			button.focus_next = NodePath()
+			button.focus_previous = NodePath()
+			button.focus_neighbor_left = NodePath()
+			button.focus_neighbor_right = NodePath()
+			button.focus_neighbor_top = NodePath()
+			button.focus_neighbor_bottom = NodePath()
 
 
 func _set_need(key: String, label_text: String, value: float) -> void:
