@@ -47,6 +47,9 @@ func _running() -> VaultGame:
 	game.oxygen_system.oxygen = 100.0
 	game.step_simulation(1.0)
 	game.start_keep_running()
+	# This vault has no powered Air Recycler, so salvage-aware Next would lead with reclamation.
+	# The fixture is about the keep-running pointer: start it as already taken (no salvage paid).
+	game.reclaim_active = true
 	for resident: VaultResident in game.residents:
 		resident.needs.food = 100.0
 		resident.needs.rest = 100.0
