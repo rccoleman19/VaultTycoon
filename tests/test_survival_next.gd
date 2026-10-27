@@ -64,10 +64,8 @@ const GROW_CHARGE_HELP := "The grid lacks available power for the Grow Tray. Pla
 # for four crew, beyond the tested food construction lead plus its margin.
 const NONFOOD_TEST_MEALS := 16
 # Keep a real 60-second larder window when exercising Grow recovery actions.
-# With Ari at 19 food and others at 100, four shared meals feed Ari twice,
-# then Bo and Cyra: Dax has the earliest uncovered hunger. Three meals leave
-# Cyra next. Six meals move that warning back to Ari. Grow-stage names use
-# this real automatic-eating order, rather than assuming Ari is always first.
+# These fixtures also put the named resident inside their own 60-second death
+# window, rather than using the pantry's construction forecast as hunger.
 const VIABLE_GROW_TEST_MEALS := 6
 
 
@@ -232,6 +230,7 @@ func _test_kitchen_guards() -> void:
 	var game := _healthy_game()
 	var resident: VaultResident = game.residents[0]
 	game.food_system.meals = 0
+	resident.needs.food = 50.0
 	_assert_equal(game.player_orders._primary_next_step()["text"], _starving_next(KITCHEN_NEXT), "zero runway warns before a low need meter")
 	resident.needs.food = 20.0
 	resident.needs.rest = 15.0
@@ -264,6 +263,38 @@ func _critical_game() -> VaultGame:
 	game.residents[0].needs.food = 19.0
 	game.food_system.meals = 0
 	return game
+
+
+func _set_grow_build_crisis(game: VaultGame) -> void:
+	# Six meals keep a new tray viable. The lower food meters take later
+	# rations before Ari gets a second: 19 / 1.5 + 40 + 20 / 4 = 57.67 s.
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 0.0
+		resident.needs.health = 100.0
+	game.residents[0].needs.food = 19.0
+	game.residents[0].needs.health = 20.0
+	game.food_system.meals = VIABLE_GROW_TEST_MEALS
+
+
+func _set_grow_power_crisis(game: VaultGame) -> void:
+	# Four rations feed everyone once. Ari is outside the warning window;
+	# Dax's 40 s ration plus 10 s health makes him the real urgent resident.
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 0.0
+		resident.needs.health = 100.0
+	game.residents[0].needs.food = 19.0
+	game.residents[3].needs.health = 40.0
+	game.food_system.meals = 4
+
+
+func _set_grow_running_crisis(game: VaultGame) -> void:
+	# Three rations go to Ari, Bo and Dax before Cyra's next meal. Dax now
+	# has 77.67 s, clearing his sticky warning; unfed Cyra has 49 s.
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 19.0
+		resident.needs.health = 100.0
+	game.residents[2].needs.food = 36.0
+	game.food_system.meals = 3
 
 
 func _test_enabled_kitchen_shed() -> void:
@@ -458,8 +489,7 @@ func _test_progression_grow_finish() -> void:
 	game.power_grid.recalculate(game.buildings)
 	_assert_true(game.power_grid.is_building_shed(tray.building_id), "completed Grow is shed beside unfinished spare")
 	_assert_step(game, FOOD_CHARGE_NEXT, "generator", FOOD_CHARGE_HELP)
-	game.residents[0].needs.food = 19.0
-	game.food_system.meals = 4
+	_set_grow_power_crisis(game)
 	game.food_system.raw_food = 0
 	tray.manually_disabled = true
 	_assert_step(game, _starving_next(ENABLE_GROW_NEXT, "Dax"), "select", ENABLE_GROW_HELP)
@@ -468,7 +498,7 @@ func _test_progression_grow_finish() -> void:
 	_assert_step(game, _starving_next(GROW_CHARGE_NEXT, "Dax"), "generator", GROW_CHARGE_HELP)
 	for kitchen: VaultBuilding in extra_kitchens:
 		kitchen.manually_disabled = true
-	game.food_system.meals = 3
+	_set_grow_running_crisis(game)
 	game.power_grid.recalculate(game.buildings)
 	_assert_step(game, _starving_next(COOK_NEXT, "Cyra"), "select", WAITING_COOK_HELP)
 	_dispose(game)
@@ -734,7 +764,7 @@ func _test_disabled_cooks() -> void:
 func _test_cook_waiting_for_raw_food() -> void:
 	var game := _powered_critical_game()
 	game.food_system.raw_food = 0
-	game.food_system.meals = VIABLE_GROW_TEST_MEALS
+	_set_grow_build_crisis(game)
 	_assert_equal(game.job_system.get_pending_raw_food(), 0, "no raw food is pending")
 	_assert_step(game, _starving_next(GROW_NEXT), "grow", GROW_HELP)
 	game.active_tool = "dig"
@@ -754,7 +784,7 @@ func _test_cook_waiting_for_raw_food() -> void:
 func _test_grow_tray_supply_diagnosis() -> void:
 	var game := _powered_critical_game()
 	game.food_system.raw_food = 0
-	game.food_system.meals = VIABLE_GROW_TEST_MEALS
+	_set_grow_build_crisis(game)
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12)), "unfinished tray blueprint can be placed")
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY), 0, "blueprint is not a completed tray")
 	_assert_step(game, _starving_next(FINISH_GROW_NEXT), "select", FINISH_GROW_HELP)
@@ -763,7 +793,7 @@ func _test_grow_tray_supply_diagnosis() -> void:
 	first.manually_disabled = true
 	second.manually_disabled = true
 	# Forty seconds covers restoring power, but remains below lead + 20.
-	game.food_system.meals = 4
+	_set_grow_power_crisis(game)
 	game.power_grid.recalculate(game.buildings)
 	_assert_step(game, _starving_next(ENABLE_GROW_NEXT, "Dax"), "select", ENABLE_GROW_HELP)
 	first.manually_disabled = false
@@ -776,7 +806,7 @@ func _test_grow_tray_supply_diagnosis() -> void:
 	_assert_true(first.powered, "completed enabled tray receives power")
 	_assert_false(second.powered, "disabled spare tray stays unpowered")
 	# Powered harvest needs less lead: thirty seconds keeps this warning live.
-	game.food_system.meals = 3
+	_set_grow_running_crisis(game)
 	_assert_step(game, _starving_next(COOK_NEXT, "Cyra"), "select", WAITING_COOK_HELP)
 	second.manually_disabled = false
 	game.power_grid.recalculate(game.buildings)
@@ -840,7 +870,7 @@ func _test_grow_crisis_guards() -> void:
 	# With no stock or output, a new tray cannot rescue this zero runway.
 	_assert_step(game, _starving_next(TOO_LATE_FOOD_NEXT), "select", TOO_LATE_FOOD_HELP)
 	# Critical rest also diagnoses supply after the bunk requirement is satisfied.
-	game.residents[0].needs.food = 100.0
+	game.residents[0].needs.food = 50.0
 	game.residents[0].needs.rest = 14.0
 	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(21, 12))
 	_assert_step(game, _starving_next(TOO_LATE_FOOD_NEXT), "select", TOO_LATE_FOOD_HELP)
@@ -1382,7 +1412,7 @@ func _test_offline_rec_priority() -> void:
 					expected = _starving_next(ENABLE_COOK_NEXT)
 				"grow":
 					game.food_system.raw_food = 0
-					game.food_system.meals = VIABLE_GROW_TEST_MEALS
+					_set_grow_build_crisis(game)
 					expected = _starving_next(GROW_NEXT)
 			_assert_equal(game.player_orders._primary_next_step()["text"], expected, "lower priority branch is ready")
 			game.residents[0].needs.mood = 9.0
@@ -1585,7 +1615,9 @@ func _test_medical_priority() -> void:
 					expected = _starving_next(ENABLE_COOK_NEXT)
 				"grow":
 					game.food_system.raw_food = 0
-					game.food_system.meals = VIABLE_GROW_TEST_MEALS
+					_set_grow_build_crisis(game)
+					# Care concerns Bo while Ari retains the food deadline.
+					resident = game.residents[1]
 					expected = _starving_next(GROW_NEXT)
 			_assert_equal(game.player_orders._primary_next_step()["text"], expected, "lower priority branch is ready before medical")
 			if unfinished:
@@ -2014,7 +2046,7 @@ func _test_bunk_finish_before_food_work() -> void:
 				tool = "rec"
 			"grow":
 				game.food_system.raw_food = 0
-				game.food_system.meals = VIABLE_GROW_TEST_MEALS
+				_set_grow_build_crisis(game)
 				expected = GROW_NEXT
 				help = GROW_HELP
 				tool = "grow"
@@ -2023,10 +2055,14 @@ func _test_bunk_finish_before_food_work() -> void:
 		_assert_step(game, _starving_next(expected), tool, help)
 		var food_stock := game.food_system.meals
 		game.food_system.meals = NONFOOD_TEST_MEALS
+		if food_step == "grow":
+			game.residents[0].needs.health = 100.0
 		_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
 		_assert_equal(bunk.add_delivery(bunk.get_cost()), bunk.get_cost(), "food priority bunk receives salvage")
 		_assert_true(bunk.apply_build_work(bunk.get_build_time()), "real construction resolves bunk shortage while food runway is safe")
 		game.food_system.meals = food_stock
+		if food_step == "grow":
+			game.residents[0].needs.health = 20.0
 		_assert_step(game, _starving_next(expected), tool, help)
 		_dispose(game)
 
@@ -2183,8 +2219,7 @@ func _test_charge_finish_restore() -> void:
 					place_next = REC_CHARGE_NEXT
 					place_help = REC_CHARGE_HELP
 				"grow":
-					game.residents[0].needs.food = 19.0
-					game.food_system.meals = 4
+					_set_grow_power_crisis(game)
 					game.food_system.raw_food = 0
 					_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
 					consumer = _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(21, 12))
@@ -2223,11 +2258,11 @@ func _test_charge_finish_restore() -> void:
 			core.complete = false
 			if context == "grow":
 				# This artificial Core has no remaining work; keep the shorter lead urgent.
-				game.food_system.meals = 3
+				_set_grow_running_crisis(game)
 			_assert_step(game, _starving_next(GROW_CHARGE_NEXT, "Cyra") if context == "grow" else place_next, "generator", place_help)
 			core.complete = true
 			if context == "grow":
-				game.food_system.meals = 4
+				_set_grow_power_crisis(game)
 			var cell := Vector2i(25, 12)
 			_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, cell), "%s Charge blueprint placed" % context)
 			var charge := game.get_building_at(cell)
@@ -2236,14 +2271,18 @@ func _test_charge_finish_restore() -> void:
 			game.food_system.salvage = 0
 			if context == "grow":
 				# Funding adds dig work to the otherwise forty-second recovery window.
-				game.food_system.meals = VIABLE_GROW_TEST_MEALS
+				_set_grow_build_crisis(game)
+				# Bo can mine at full speed while Ari still gets only one ration.
+				game.residents[1].needs.food = 30.0
 			_assert_salvage_tip(game, 18, 0 if context == "progression" else 6, context in ["kitchen", "grow"])
+			if context == "grow":
+				_set_grow_build_crisis(game)
 			charge.delivered = charge.get_cost()
 			_assert_step(game, _starving_next(FINISH_CHARGE_NEXT) if context == "grow" else finish_next, "select", FINISH_CHARGE_HELP)
 			charge.delivered = 0
 			game.food_system.salvage = funded_stock
 			if context == "grow":
-				game.food_system.meals = 4
+				_set_grow_power_crisis(game)
 			_assert_step(game, finish_next, "select", FINISH_CHARGE_HELP)
 			game.active_tool = "dig"
 			game.player_orders.refresh()
@@ -2273,7 +2312,7 @@ func _test_charge_finish_restore() -> void:
 			_assert_true(charge.apply_build_work(charge.get_build_time()), "construction completes Charge")
 			if context == "grow":
 				# Once power is restored the next harvest has only a thirty-second window.
-				game.food_system.meals = 3
+				_set_grow_running_crisis(game)
 			game.power_grid.recalculate(game.buildings)
 			_assert_step(game, resumed_next, resumed_tool, resumed_help)
 			_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true), 2 if existing_charge else 1, "completed non-Core count")
@@ -2287,22 +2326,37 @@ func _test_charge_finish_priority() -> void:
 	game.residents[0].needs.food = 19.0
 	game.food_system.meals = 0
 	_assert_step(game, _starving_next(KITCHEN_NEXT), "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
-	game.residents[0].needs.food = 100.0
+	game.residents[0].needs.food = 50.0
 	game.residents[0].needs.mood = 9.0
-	# QA 2026-10-18b: an empty larder outranks the Rec tip even before anyone is critical.
+	# An empty larder outranks Rec before a critical food meter, inside the
+	# resident's actual food-death warning window (50 / 1.5 + 25 = 58.33 s).
 	_assert_step(game, _starving_next(KITCHEN_NEXT), "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
 	# QA 2026-10-18c #5: with no Nutrient Station and under 2.5 days of food, food leads.
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 50.0
 	game.food_system.meals = 1
 	_assert_step(game, _starving_next(KITCHEN_NEXT, "Bo"), "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 10.0
+		resident.needs.health = 40.0
+	game.residents[0].needs.food = 0.0
+	game.residents[0].needs.health = 20.0
 	game.food_system.meals = game.get_alive_count()
 	_assert_step(game, _starving_next(KITCHEN_NEXT), "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
+	for resident: VaultResident in game.residents:
+		resident.needs.health = 100.0
 	game.food_system.meals = NONFOOD_TEST_MEALS
 	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
 	game.food_system.meals = game.get_alive_count()
 	for resident: VaultResident in game.residents:
-		resident.needs.food = 60.0
+		resident.needs.food = 221.0 / 3.0
+	# Preserve the original 240 belly food + four meals. Ari gets one ration;
+	# the other three eat before his second, leaving his own runway at 57.67 s.
+	game.residents[0].needs.food = 19.0
+	game.residents[0].needs.health = 20.0
 	_assert_step(game, _starving_next(KITCHEN_NEXT), "kitchen", "Place and power a Nutrient Station so Cook can turn raw food into meals.")
-	_assert_true(is_equal_approx(game.player_orders._crew_food_days(), 2.0), "60 food each plus one meal each is 2 days")
+	_assert_true(is_equal_approx(game.player_orders._crew_food_days(), 2.0), "240 total food plus four meals is 2 days")
+	game.residents[0].needs.health = 100.0
 	game.food_system.meals = NONFOOD_TEST_MEALS
 	_assert_step(game, REC_NEXT, "rec", "Place a Rec Console so crew can recover mood.")
 	game.food_system.meals = NONFOOD_TEST_MEALS
@@ -2329,6 +2383,7 @@ func _test_charge_finish_priority() -> void:
 	game.residents[0].needs.rest = 28.0
 	_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
 	game.residents[0].needs.rest = 100.0
+	game.residents[0].needs.food = 50.0
 	game.food_system.meals = 0
 	_assert_equal(game.player_orders._primary_next_step()["text"], _starving_next(KITCHEN_NEXT), "zero runway warns before hunger or a mood break")
 	_dispose(game)
@@ -2488,8 +2543,8 @@ func _test_air_priority() -> void:
 	_dispose(game)
 
 
-func _assert_salvage_tip(game: VaultGame, shortfall: int, tiles: int, starving := false) -> void:
-	var next := "Next: YOU mark %d rock [E] · THEY fund the Charge Node" % tiles if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the Charge Node"
+func _assert_salvage_tip(game: VaultGame, shortfall: int, tiles: int, starving := false, build_word := "fund") -> void:
+	var next := "Next: YOU mark %d rock [E] · THEY %s the Charge Node" % [tiles, build_word] if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY %s the Charge Node" % build_word
 	_assert_step(game,
 		_starving_next(next) if starving else next,
 		"dig" if tiles > 0 else "select",

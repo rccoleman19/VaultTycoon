@@ -86,7 +86,12 @@ func _test_seek_job() -> void:
 func _test_comfort_next() -> void:
 	var game := _won()
 	game.start_keep_running()
+	# This vault has no powered Air Recycler, so salvage-aware Next would lead with reclamation.
+	# The fixture is about the keep-running pointer: start it as already taken (no salvage paid).
+	game.reclaim_active = true
 	_calm(game)
+	# Nothing banked yet: with salvage in hand, Next offers the spend nudge (build Rec Console) instead.
+	game.food_system.salvage = 0
 	game.player_orders.refresh()
 	_assert_equal(game.player_orders.objective_label.text, PlayerOrders.COMFORT_TEXT.next, "calm vault: Next points at the card")
 	game.residents[0].needs.health = 50.0

@@ -189,6 +189,36 @@ func _run() -> void:
 	quit(1 if _failure_count else 0)
 
 
+# Keep this deterministic ledger walk on its established player orders: it
+# deliberately does not buy the new optional salvage actions. Check those UI
+# offers separately, then drive the selected underlying chain step. This proves
+# that displaying the new advice does not change its simulation or milestones.
+var _salvage_advice_seen: Dictionary = {}
+
+
+func _walk_next(game: VaultGame) -> Dictionary:
+	var displayed: Dictionary = game.player_orders._primary_next_step()
+	var action := str(displayed.get("action", ""))
+	if action not in ["reclaim", "spend"]:
+		return displayed
+	var text := str(displayed.get("text", ""))
+	if not _salvage_advice_seen.has(text):
+		_salvage_advice_seen[text] = true
+		_assert_equal(str(displayed.get("tool", "")), "select", "salvage advice preserves Select during the nonacting ledger walk")
+		if action == "reclaim":
+			_assert_true("YOU begin reclamation · +18 · THEY fund the " in text, "walk sees the new reclamation funding text")
+			_assert_true("Reclamation: +18 salvage now, +18 every 30 s, 6 times" in str(displayed.get("help", "")), "walk reclamation advice explains its finite deliveries")
+		else:
+			_assert_true(text.begins_with("Next: YOU spend ") and (": build " in text or ": fit " in text), "walk sees the new spend action")
+	_assert_false(game.reclaim_active, "ignoring salvage advice never starts reclamation")
+	# This walk never queues a repeated placement: its retained blueprint
+	# identities and full tuple checks enforce that independently below.
+	_assert_true(displayed.get("in_progress", []).is_empty(), "ledger walk does not suppress another queued placement")
+	var selected: Dictionary = game.player_orders._primary_next_step_chain({})
+	_assert_false(selected.is_empty(), "salvage advice retains a selected underlying action")
+	return selected
+
+
 func _walk() -> void:
 	var game := _spawn_game()
 	game.begin_shift()
@@ -239,7 +269,7 @@ func _walk() -> void:
 		if game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged:
 			if not _resume_warning(game):
 				break
-		var step: Dictionary = game.player_orders._primary_next_step()
+		var step: Dictionary = _walk_next(game)
 		var tuple := [step.text, step.help, step.tool]
 		if tuple != _last_tuple:
 			_history.append("tick=%d elapsed=%.1f: %s" % [_tick, game.day_cycle.elapsed_seconds, str(tuple)])
@@ -258,7 +288,7 @@ func _walk() -> void:
 			game.step_simulation(VaultGame.SIMULATION_TICK) # Exactly one post-tip tick; no Day-7 action.
 			var oxygen_after: float = game.oxygen_system.oxygen
 			_check_state(game, originals)
-			var after: Dictionary = game.player_orders._primary_next_step()
+			var after: Dictionary = _walk_next(game)
 			_assert_equal([after.text, after.help, after.tool], DAY7, "same exact Day-7 tuple after one tick")
 			_assert_equal(game.active_tool, tool_before, "Day-7 observation/tick preserves active tool")
 			_assert_approximately(game.day_cycle.elapsed_seconds, _day7_tip_elapsed + VaultGame.SIMULATION_TICK, 0.00001, "exactly one post-tip tick")
@@ -384,7 +414,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 		_air_placements += 1
 		_assert_true(_air != null and not _air.complete and _air.get_cost() == 14, "one real incomplete Air costing 14")
 		_assert_equal(game.buildings.size(), 10, "ten buildings at Air placement")
-		var after := game.player_orders._primary_next_step()
+		var after := _walk_next(game)
 		_assert_equal([after.text, after.help, after.tool], FINISH_AIR, "Air placement immediately gives exact finish tuple")
 		return _failure_count == 0
 	if tuple == FINISH_NUTRIENT:
@@ -417,7 +447,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 		_kitchen_placements += 1
 		_assert_true(_kitchen != null and not _kitchen.complete and _kitchen.get_cost() == 10, "one real incomplete Kitchen costing 10")
 		_assert_equal(game.buildings.size(), 9, "nine buildings at Kitchen placement")
-		var after := game.player_orders._primary_next_step()
+		var after := _walk_next(game)
 		_assert_equal([after.text, after.help, after.tool], FINISH_NUTRIENT, "Kitchen placement immediately gives exact Nutrient finish tuple")
 		return _failure_count == 0
 	if tuple == FINISH_GROW:
@@ -437,7 +467,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			_grow = game.get_building_at(GROW_CELL)
 			_grow_placements += 1
 			_assert_true(_grow != null and not _grow.complete and _grow.get_cost() == 12, "one real incomplete Grow blueprint costing 12")
-			var after: Dictionary = game.player_orders._primary_next_step()
+			var after: Dictionary = _walk_next(game)
 			_assert_equal([after.text, after.help, after.tool], FINISH_GROW, "Grow placement immediately gives exact finish tuple")
 			return _failure_count == 0
 		if _grow.complete:
@@ -459,7 +489,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			_charge_placements += 1
 			_assert_true(_charge != null and not _charge.complete and not _charge.is_emergency_core, "one real incomplete non-Core Charge blueprint")
 			_assert_true(game.day_cycle.elapsed_seconds < 60.0, "Charge placed strictly before 60s")
-			var after: Dictionary = game.player_orders._primary_next_step()
+			var after: Dictionary = _walk_next(game)
 			_assert_equal([after.text, after.help, after.tool], FINISH_CHARGE, "Charge placement immediately gives exact finish tuple")
 			return _failure_count == 0
 		if _charge.complete:
@@ -949,7 +979,7 @@ func _observe_grow_derived_meal(game: VaultGame, originals: Array[VaultResident]
 			return false
 		game.step_simulation(VaultGame.SIMULATION_TICK)
 		_observe_grow_raw_haul(game)
-		var step: Dictionary = game.player_orders._primary_next_step()
+		var step: Dictionary = _walk_next(game)
 		var tip := [step.text, step.help, step.tool]
 		if tip != DAY7:
 			return _stop(game, "Day-7 tip left during grow-meal observe: %s" % str(tip))
@@ -1051,7 +1081,7 @@ func _hold_rec_place(game: VaultGame, originals: Array[VaultResident]) -> bool:
 		if not _check_intermediate_drain(game, originals):
 			_rec_hold_active = false
 			return false
-		var step: Dictionary = game.player_orders._primary_next_step()
+		var step: Dictionary = _walk_next(game)
 		var tip := _tip_tuple(step)
 		# Never place Charge — refuse even if tip asks.
 		if tip == CHARGE_FOR_REC:
@@ -1128,7 +1158,7 @@ func _hold_rec_place(game: VaultGame, originals: Array[VaultResident]) -> bool:
 		else:
 			game.step_simulation(VaultGame.SIMULATION_TICK)
 		# After step, detect Charge-for-Rec.
-		var after: Dictionary = game.player_orders._primary_next_step()
+		var after: Dictionary = _walk_next(game)
 		if _tip_tuple(after) == CHARGE_FOR_REC and _rec_charge_tip_elapsed < 0.0 and _rec != null and _rec.complete:
 			_rec_charge_tip_elapsed = game.day_cycle.elapsed_seconds
 	_rec_hold_active = false
@@ -1149,7 +1179,7 @@ func _hold_rec_place(game: VaultGame, originals: Array[VaultResident]) -> bool:
 	_assert_equal(game.power_grid.shed_demand, 1, "exactly 1 shed demand (Rec)")
 	_assert_true(_kitchen.powered and _grow.powered and _air.powered, "life support retained powered")
 	_assert_true(_rec_charge_tip_elapsed >= 0.0, "Charge-for-Rec tip observed after Rec complete (shed diagnosis)")
-	var end_tip := _tip_tuple(game.player_orders._primary_next_step())
+	var end_tip := _tip_tuple(_walk_next(game))
 	# Mood may rise above break after Rec completes, returning Day-7; Charge tip must have been seen.
 	_assert_true(end_tip == CHARGE_FOR_REC or end_tip == DAY7, "end tip Charge-for-Rec or Day-7 only; got %s" % str(end_tip))
 	_assert_true(end_tip != ["Next: YOU place a Charge Node · THEY supply/build", "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.", "generator"], "must not be generic progression Charge tip")
@@ -1181,7 +1211,7 @@ func _powered_rec_fund_tuple(game: VaultGame) -> Array:
 
 
 func _check_powered_rec_tip(game: VaultGame) -> bool:
-	var tip := _tip_tuple(game.player_orders._primary_next_step())
+	var tip := _tip_tuple(_walk_next(game))
 	if tip != _powered_rec_last_tip:
 		_powered_rec_history.append("%.1fs stage+%.1fs %s" % [game.day_cycle.elapsed_seconds, game.day_cycle.elapsed_seconds - _powered_rec_start, str(tip)])
 		_powered_rec_last_tip = tip
@@ -1289,7 +1319,7 @@ func _drive_powered_rec(game: VaultGame, originals: Array[VaultResident]) -> boo
 	if not _check_powered_rec_state(game, originals):
 		return false
 	while _powered_rec_ticks < int(round(POWERED_REC_STAGE / VaultGame.SIMULATION_TICK)):
-		var tip := _tip_tuple(game.player_orders._primary_next_step())
+		var tip := _tip_tuple(_walk_next(game))
 		var tool_before: String = game.active_tool
 		if _charge2 == null:
 			if tip == CHARGE_FOR_REC:
@@ -1309,7 +1339,7 @@ func _drive_powered_rec(game: VaultGame, originals: Array[VaultResident]) -> boo
 				return _stop(game, "no fresh live CHARGE_FOR_REC tuple within first 20s of Powered Rec stage")
 		# Re-read after placement and on every later tick. N comes only from
 		# this exact live mark tuple; no salvage-based designation fallback.
-		tip = _tip_tuple(game.player_orders._primary_next_step())
+		tip = _tip_tuple(_walk_next(game))
 		if _charge2 != null and not _charge2.complete and str(tip[0]).begins_with("Next: YOU mark "):
 			if tip != _powered_rec_fund_tuple(game) or tip[2] != "dig":
 				return _stop(game, "Powered Rec mark action lacks exact live fund tuple")
@@ -1454,7 +1484,7 @@ func _pick_day7_dig_zone(game: VaultGame, originals: Array[VaultResident]) -> vo
 
 
 func _hold_day7_designate(game: VaultGame, originals: Array[VaultResident]) -> bool:
-	var tip_now: Dictionary = game.player_orders._primary_next_step()
+	var tip_now: Dictionary = _walk_next(game)
 	_assert_equal([tip_now.text, tip_now.help, tip_now.tool], DAY7, "Day-7 designate tip present before dig+zone")
 	_assert_true(game.breach_system.is_sealed(), "hatch SEALED before designate hold")
 	_assert_equal(game.power_grid.supply, 9, "PWR supply 9 before designate")
@@ -1502,7 +1532,7 @@ func _hold_day7_designate(game: VaultGame, originals: Array[VaultResident]) -> b
 			_designate_dig_complete_elapsed = game.day_cycle.elapsed_seconds
 			if _designate_dig_progress_elapsed < 0.0:
 				_designate_dig_progress_elapsed = _designate_dig_complete_elapsed
-		var step: Dictionary = game.player_orders._primary_next_step()
+		var step: Dictionary = _walk_next(game)
 		var tip := [step.text, step.help, step.tool]
 		if tip != DAY7 and _designate_tip_left.is_empty():
 			_designate_tip_left = str(tip)
@@ -1520,7 +1550,7 @@ func _hold_day7_designate(game: VaultGame, originals: Array[VaultResident]) -> b
 	_assert_equal(_open_count, 0, "zero OPEN after designate")
 	_assert_false(game.day_cycle.completed, "not Day-7 victory after designate hold")
 	_assert_false(game.ended, "game remains running after designate hold")
-	var end_tip: Dictionary = game.player_orders._primary_next_step()
+	var end_tip: Dictionary = _walk_next(game)
 	var end_tuple := [end_tip.text, end_tip.help, end_tip.tool]
 	var dig_hauled := _designate_dig_progress_elapsed >= 0.0 or _designate_dig_complete_elapsed >= 0.0
 	dig_hauled = dig_hauled and _designate_haul_deposit_elapsed >= 0.0

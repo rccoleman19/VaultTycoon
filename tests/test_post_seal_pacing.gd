@@ -90,7 +90,7 @@ func _test_reclaim_gate() -> void:
 	_seal(game)
 	_assert_true(game.can_start_reclamation(), "offered after the seal")
 	game.player_orders.refresh()
-	_assert_equal(game.player_orders.reclaim_button.text, "Begin reclamation · +18 salvage", "button names the payout")
+	_assert_equal(game.player_orders.reclaim_button.text, "Reclamation available · +18 salvage", "button names availability and the payout")
 	_assert_false(game.player_orders.reclaim_button.disabled, "button live")
 	game.food_system.salvage = 0
 	game.player_orders.reclaim_button.pressed.emit()

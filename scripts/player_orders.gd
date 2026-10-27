@@ -3,6 +3,24 @@ extends CanvasLayer
 
 const DIG_SALVAGE_YIELD := 3
 const MAX_VISIBLE_ALERTS := 1
+const IDLE_CREW_WINDOW_S := 3.0
+const NEXT_HOLD_S := 2.0
+
+# Presentation state is sampled by refresh/the existing simulation-tip hook,
+# never by the Next selector. Instance IDs also distinguish loaded residents.
+var _idle_crew_since: Dictionary = {}
+var _idle_crew_sample_time := -1.0
+var _next_hold_signature: Array = []
+var _next_hold_since := -1.0
+var _next_hold_step: Dictionary = {}
+var _next_reclamation_kind := -1
+
+# Guidance reads retain the starvation name until fed or a nearer deadline.
+var _starving_resident_id := -1
+var _food_forecast_latched := false
+var _next_bunk_text := ""
+var _next_bunk_help := ""
+var _food_forecast_since := 0.0
 
 var game: VaultGame
 var root: Control
@@ -1066,6 +1084,7 @@ func _build_breach_warning() -> void:
 
 
 func refresh() -> void:
+	_update_idle_crew_tracking()
 	if game == null or clock_label == null:
 		return
 	clock_label.text = game.day_cycle.get_clock_text() if not game.keep_running else keep_running_clock_text()
@@ -1206,6 +1225,21 @@ func _salvage_dig_tiles(shortfall: int) -> int:
 	return _dig_tiles_after_rubble(shortfall, game.job_system.get_uncredited_rubble())
 
 
+# A funding tip may wait only for actual designated digging or enough rubble,
+# including salvage already being carried. Keep this rule shared by every fund tip.
+func _fund_salvage_step(name: String, shortfall: int, help: String, rubble := -1) -> Dictionary:
+	if rubble < 0:
+		rubble = game.job_system.get_uncredited_rubble()
+	var tiles := _dig_tiles_after_rubble(shortfall, rubble)
+	if game.map_grid.dig_marks.is_empty() and rubble < shortfall:
+		tiles = maxi(1, tiles)
+	return {
+		"text": "Next: YOU mark %d rock [E] · THEY fund the %s" % [tiles, name] if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the %s" % name,
+		"help": help,
+		"tool": "dig" if tiles > 0 else "select",
+	}
+
+
 func _dig_tiles_after_rubble(shortfall: int, rubble: int) -> int:
 	var after_rubble := shortfall - rubble
 	if after_rubble <= 0:
@@ -1218,8 +1252,17 @@ func _dig_tiles_after_rubble(shortfall: int, rubble: int) -> int:
 const FOOD_LEAD_DAYS := 2.5
 const FOOD_PER_DAY := 60.0
 const FOOD_PER_MEAL := 60.0
-# Non-food threats still use projected damage. Food uses the production runway below.
+# Food also compares production runway, but naming requires this own deadline.
 const NEXT_DEATH_WARNING_SECONDS := 60.0
+const STARVING_RUNWAY_S := NEXT_DEATH_WARNING_SECONDS
+const STARVING_SWITCH_S := 10.0
+const FOOD_SHORT_LABEL := "food runway short"
+# The forecast turns on at the runway trigger exactly as before. Once on it
+# holds until the runway clears the trigger by this much AND this long has
+# passed (whichever is later). A named resident (own death under
+# STARVING_RUNWAY_S) always overrides the hold.
+const FOOD_FORECAST_RELEASE_S := 15.0
+const FOOD_FORECAST_MIN_HOLD_S := 5.0
 
 # 03/4242 RELAY LUMEN: waiting for NO MEALS at 217.3 s left only 51 s
 # before Ari died at 268.3 s (CRITICAL at 230 s). Even an immediately placed
@@ -1392,13 +1435,9 @@ func _food_prebuild_step(kind: int, placement: Dictionary) -> Dictionary:
 	var shortfall := maxi(0, int(VaultBuilding.COSTS[kind]) + reserve - game.food_system.salvage)
 	if shortfall == 0:
 		return placement
-	var tiles := _salvage_dig_tiles(shortfall)
 	var name: String = VaultBuilding.KIND_NAMES[kind]
-	return _food_step({
-		"text": "Next: YOU mark %d rock [E] · THEY fund the %s" % [tiles, name] if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the %s" % name,
-		"help": "Fund the %s before placing it, keeping %d salvage for the hatch. Each dug rock yields %d salvage once hauled." % [name, reserve, DIG_SALVAGE_YIELD],
-		"tool": "dig" if tiles > 0 else "select",
-	})
+	return _food_step(_fund_salvage_step(name, shortfall,
+		"Fund the %s before placing it, keeping %d salvage for the hatch. Each dug rock yields %d salvage once hauled." % [name, reserve, DIG_SALVAGE_YIELD]))
 
 
 func _food_blueprint_in_progress(kind: int) -> bool:
@@ -1679,8 +1718,8 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 	var air_forecast := game.oxygen_system.net_rate < 0.0 and game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) == 0 and not care_window
 	var soonest := maxf(NEXT_DEATH_WARNING_SECONDS, air_lead + AIR_RECOVERY_MARGIN_SECONDS) if air_forecast else NEXT_DEATH_WARNING_SECONDS
 	var food_times := _food_depletion_times()
-	# Food's trigger is runway versus the fastest available recovery lead time.
-	# Projected food damage is used ONLY to choose which living name to show.
+	# A food forecast names someone only inside their own starvation window.
+	# Keep that name until fed unless another resident is at least 10 s closer.
 	var plan := _food_fix_plan()
 	var food_lead := float(plan.seconds) + _food_chain_work_lead(float(plan.seconds))
 	if not food_blocker.is_empty() and game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) == 0:
@@ -1689,12 +1728,20 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 		# food chain already counts its output in runway; optional future care
 		# must not add a construction delay to that existing production.
 		food_lead = maxf(food_lead, float(plan.seconds) + _food_worker_recovery_seconds())
-	var food_danger := _food_runway_seconds() < food_lead + FOOD_RUNWAY_MARGIN_SECONDS
+	var food_runway := _food_runway_seconds()
+	var food_trigger := food_lead + FOOD_RUNWAY_MARGIN_SECONDS
 	# Repeating an already-enabled Cook order cannot clear another life-support
 	# deadline. Once food work is running/waiting on its source, let an actionable
 	# air fix lead while its supply/build/haul window is still open.
 	var food_resident: VaultResident = null
 	var food_death := INF
+	# The food steps and their urgency follow the forecast and the nearest
+	# deadline. The NAME is separate: only a resident inside their own
+	# STARVING_RUNWAY_S, kept until fed unless another is STARVING_SWITCH_S closer.
+	var named_resident: VaultResident = null
+	var named_death := INF
+	var sticky_resident: VaultResident = null
+	var sticky_food_death := INF
 	for resident: VaultResident in game.residents:
 		if not resident.alive:
 			continue
@@ -1702,10 +1749,21 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 		if food_seconds < food_death:
 			food_resident = resident
 			food_death = food_seconds
+		if food_seconds < STARVING_RUNWAY_S and food_seconds < named_death:
+			named_resident = resident
+			named_death = food_seconds
+		if resident.resident_id == _starving_resident_id and food_seconds < STARVING_RUNWAY_S:
+			sticky_resident = resident
+			sticky_food_death = food_seconds
 		var seconds := _projected_death_seconds(resident, INF)
 		if seconds < soonest:
 			threatened = resident
 			soonest = seconds
+	if sticky_resident != null and named_death > sticky_food_death - STARVING_SWITCH_S:
+		named_resident = sticky_resident
+		named_death = sticky_food_death
+	_starving_resident_id = named_resident.resident_id if named_resident != null else -1
+	var food_danger := _food_forecast_with_hold(food_runway, food_trigger, named_resident != null)
 	# Pantry runway governs the crop cutoff. A produced-food rescue must also
 	# reach the named resident before their own starvation health runs out,
 	# including recovery if breaks currently block delivery or cooking.
@@ -1718,7 +1776,7 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 	var food_waiting := ("YOU leave Cook on" in str(plan.step.text) and food_blocker.is_empty()) or bool(plan.step.get("too_late", false))
 	var cause := ""
 	if food_danger and food_resident != null and (threatened == null or (food_death <= soonest and not food_waiting)):
-		threatened = food_resident
+		threatened = named_resident if named_resident != null else food_resident
 		soonest = food_death
 		cause = "food"
 	elif threatened != null:
@@ -1734,7 +1792,7 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 	var condition := "critical"
 	match cause:
 		"food":
-			condition = "starving"
+			condition = "starving" if named_resident != null else ""
 			if threatened.drafted:
 				step = _food_step({
 					"text": "Next: YOU undraft %s [R] · THEY eat/work" % threatened.resident_name,
@@ -1795,12 +1853,60 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 				}
 	if step.is_empty() or _next_build_is_suppressed(step, suppressed_builds):
 		return {}
-	step.text = "Next: %s %s · %s" % [threatened.resident_name, condition, str(step.text).trim_prefix("Next: ")]
+	if cause == "food" and named_resident == null:
+		if _is_food_chain_step(step):
+			step.text = _unnamed_food_text(step)
+		step["food_unnamed"] = true
+	else:
+		step.text = "Next: %s %s · %s" % [threatened.resident_name, condition, str(step.text).trim_prefix("Next: ")]
 	step["urgent"] = true
 	step["resident_id"] = threatened.resident_id
 	step["cause"] = cause
-	step["death_seconds"] = soonest
+	# A named step reports that resident's own deadline.
+	step["death_seconds"] = named_death if cause == "food" and named_resident != null else soonest
 	return step
+
+
+func _food_forecast_with_hold(runway: float, trigger: float, named: bool) -> bool:
+	var now := game.day_cycle.elapsed_seconds
+	if named:
+		_food_forecast_latched = false
+		return runway < trigger
+	if _food_forecast_latched and now < _food_forecast_since:
+		_food_forecast_latched = false
+	if _food_forecast_latched:
+		if runway >= trigger + FOOD_FORECAST_RELEASE_S and now - _food_forecast_since >= FOOD_FORECAST_MIN_HOLD_S:
+			_food_forecast_latched = false
+		return _food_forecast_latched or runway < trigger
+	if runway < trigger:
+		_food_forecast_latched = true
+		_food_forecast_since = now
+		return true
+	return false
+
+
+# The unnamed forecast prefix belongs only on steps that act on the food chain:
+# not on the Rec Console steps that keep food workers from breaking, and not on
+# unrelated blockers such as the hatch warning.
+# The unnamed tip always reads "food runway short · YOU <action> · THEY <effect>".
+# The too-late step names no action of its own, so it gets the standing one.
+func _unnamed_food_text(step: Dictionary) -> String:
+	var body := str(step.text).trim_prefix("Next: ")
+	if bool(step.get("too_late", false)) or not (body.begins_with("YOU ") and " · THEY " in body):
+		body = "YOU keep Cook + Haul on · THEY feed crew where possible"
+	return "Next: %s · %s" % [FOOD_SHORT_LABEL, body]
+
+
+func _is_food_chain_step(step: Dictionary) -> bool:
+	var text := str(step.get("text", "")).to_lower()
+	if str(step.get("tool", "")) == "rec" or "rec console" in text:
+		return false
+	if str(step.get("kind", "")) == STEP_KIND_FOOD:
+		return true
+	for word: String in ["nutrient station", "grow tray", "kitchen", "cook", "meal", "eat/work"]:
+		if word in text:
+			return true
+	return false
 
 
 func _urgency_interrupts_care(step: Dictionary) -> bool:
@@ -1825,6 +1931,15 @@ func _urgency_interrupts_care(step: Dictionary) -> bool:
 func _name_food_recovery(step: Dictionary, urgent_step: Dictionary) -> Dictionary:
 	var resident: VaultResident = null
 	if str(urgent_step.get("cause", "")) == "food":
+		if bool(urgent_step.get("food_unnamed", false)):
+			# Forecast only: no resident is inside their own runway yet.
+			if _is_food_chain_step(step):
+				step.text = _unnamed_food_text(step)
+			step["urgent"] = true
+			step["resident_id"] = int(urgent_step.resident_id)
+			step["cause"] = "food"
+			step["food_unnamed"] = true
+			return step
 		resident = game.get_resident_by_id(int(urgent_step.resident_id))
 	elif game.food_system.meals < game.get_alive_count():
 		# Existing crisis advice also names a crew member already below the
@@ -1898,13 +2013,9 @@ func _fund_blueprint_step(kind: int, food_work_blocker := false) -> Dictionary:
 		for building: VaultBuilding in game.buildings:
 			if not building.complete and building.kind != kind:
 				shortfall += maxi(0, building.get_cost() - building.delivered - game.job_system.get_build_supply_in_transit(building.building_id))
-	var tiles := _salvage_dig_tiles(shortfall)
 	var kind_name: String = VaultBuilding.KIND_NAMES[kind]
-	return {
-		"text": "Next: YOU mark %d rock [E] · THEY fund the %s" % [tiles, kind_name] if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the %s" % kind_name,
-		"help": "The %s blueprint is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [kind_name, shortfall, DIG_SALVAGE_YIELD],
-		"tool": "dig" if tiles > 0 else "select",
-	}
+	return _fund_salvage_step(kind_name, shortfall,
+		"The %s blueprint is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [kind_name, shortfall, DIG_SALVAGE_YIELD])
 
 
 func _breach_blocker_step() -> Dictionary:
@@ -1979,13 +2090,11 @@ func _breach_blocker_step() -> Dictionary:
 				"fund the hatch patch",
 				"The hatch patch is %d salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage." % shortfall,
 			)
-		var tiles := _dig_tiles_after_rubble(shortfall, rubble)
-		var covered := "Next: YOU leave Dig + Haul on · THEY fund the hatch patch" if has_digger else "Next: YOU leave Haul on · THEY fund the hatch patch"
-		return {
-			"text": "Next: YOU mark %d rock [E] · THEY fund the hatch patch" % tiles if tiles > 0 else covered,
-			"help": "The hatch patch is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [shortfall, DIG_SALVAGE_YIELD],
-			"tool": "dig" if tiles > 0 else "select",
-		}
+		var step := _fund_salvage_step("hatch patch", shortfall,
+			"The hatch patch is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [shortfall, DIG_SALVAGE_YIELD], rubble)
+		if not has_digger and str(step.tool) == "select":
+			step.text = "Next: YOU leave Haul on · THEY fund the hatch patch"
+		return step
 	return {}
 
 
@@ -2222,7 +2331,7 @@ func _primary_next_step() -> Dictionary:
 		in_progress.append(str(NEXT_BUILD_PROGRESS_NAMES[kind]))
 		step = _primary_next_step_chain(suppressed_builds)
 	if in_progress.is_empty():
-		return step
+		return _salvage_next_step(step)
 	if step.is_empty():
 		step = {
 			"text": "Next: %s · THEY finish it" % _next_in_progress_suffix(in_progress).trim_prefix(" · "),
@@ -2232,6 +2341,229 @@ func _primary_next_step() -> Dictionary:
 	else:
 		step.text = str(step.text) + _next_in_progress_suffix(in_progress)
 	step["in_progress"] = in_progress
+	return _salvage_next_step(step)
+
+
+func _update_idle_crew_tracking() -> void:
+	if game == null:
+		return
+	var now := _survival_tip_sim_time()
+	if now < _idle_crew_sample_time:
+		_idle_crew_since.clear()
+	_idle_crew_sample_time = now
+	var idle_ids: Dictionary = {}
+	for resident: VaultResident in game.residents:
+		if resident.alive and not resident.drafted and resident.state == "Idle":
+			var id := resident.get_instance_id()
+			idle_ids[id] = true
+			if not _idle_crew_since.has(id):
+				_idle_crew_since[id] = now
+	for id: int in _idle_crew_since.keys():
+		if not idle_ids.has(id):
+			_idle_crew_since.erase(id)
+
+
+func _has_idle_crew() -> bool:
+	var now := _survival_tip_sim_time()
+	for resident: VaultResident in game.residents:
+		if resident.alive and not resident.drafted and resident.state == "Idle":
+			var id := resident.get_instance_id()
+			if _idle_crew_since.has(id) and now - float(_idle_crew_since[id]) >= IDLE_CREW_WINDOW_S - 0.000001:
+				return true
+	return false
+
+
+func _salvage_crisis_live() -> bool:
+	if not _air_ready() or not game.oxygen_system.is_breathable():
+		return true
+	for resident: VaultResident in game.residents:
+		if resident.alive and (resident.needs.food < 20.0 or resident.needs.rest < 15.0):
+			return true
+	return false
+
+
+func _next_named_build_kind(step: Dictionary) -> int:
+	var kind := int(VaultGame.BUILD_KIND_BY_TOOL.get(str(step.get("tool", "")), -1))
+	if kind >= 0:
+		return kind
+	var text := str(step.get("text", "")).trim_suffix(_next_in_progress_suffix(step.get("in_progress", []))).to_lower()
+	# Match the funded/finished fixture, not another need in the resident prefix.
+	if " · they fund the " in text:
+		text = text.get_slice(" · they fund the ", 1)
+	for candidate: int in VaultBuilding.KIND_NAMES:
+		if str(VaultBuilding.KIND_NAMES[candidate]).to_lower() in text:
+			return candidate
+	if "bunks" in text:
+		return VaultBuilding.Kind.BED
+	if "med bed" in text:
+		return VaultBuilding.Kind.MEDICAL_BED
+	return -1
+
+
+# Presentation only, after urgency and queued-build suppression have chosen a step.
+# Keep the underlying signature separate from decoration, including urgency identity.
+func _salvage_next_step(step: Dictionary) -> Dictionary:
+	if step.is_empty() or game.ended:
+		_next_reclamation_kind = -1
+		_next_bunk_text = ""
+		_next_hold_signature.clear()
+		_next_hold_step.clear()
+		_next_hold_since = -1.0
+		return step
+	step = step.duplicate(true)
+	var held_bunk := _is_bunk_place_step(_next_hold_step)
+	var bunk_age := _survival_tip_sim_time() - _next_hold_since
+	if held_bunk and _is_unnamed_rec_blocker(step) and bunk_age >= 0.0 and bunk_age < NEXT_HOLD_S - 0.000001:
+		# The food-worker Rec blocker waits out the existing Next hold of the
+		# bunk step it would replace. No new urgency rule.
+		var held := _next_hold_step.duplicate(true)
+		_next_reclamation_kind = _next_named_build_kind(held)
+		return held
+	step = _stabilize_bunk_step(step)
+	var signature: Array = [step.get("text", ""), step.get("kind", ""), step.get("tool", ""),
+		step.get("action", ""), step.get("urgent", false), step.get("too_late", false),
+		step.get("resident_id", -1), step.get("cause", "")]
+	_next_reclamation_kind = _next_named_build_kind(step)
+	var now := _survival_tip_sim_time()
+	var held_valid := not (" · THEY fund the " in str(_next_hold_step.get("text", "")) and _next_kind_affordable(_next_named_build_kind(_next_hold_step)))
+	if str(_next_hold_step.get("action", "")) == "reclaim":
+		var held_kind := _next_named_build_kind(_next_hold_step)
+		held_valid = held_valid and game.can_start_reclamation() and not _next_kind_affordable(held_kind)
+	if signature == _next_hold_signature and held_valid and now >= _next_hold_since and now - _next_hold_since < NEXT_HOLD_S - 0.000001:
+		# Keep current diagnosis/deadline metadata while holding presentation only.
+		for field: String in ["text", "tool", "help", "action"]:
+			if _next_hold_step.has(field):
+				step[field] = _next_hold_step[field]
+			else:
+				step.erase(field)
+		_next_reclamation_kind = _next_named_build_kind(step)
+		return step
+	var result := _choose_salvage_next_step(step)
+	if now < _next_hold_since or signature != _next_hold_signature or not held_valid or str(result.get("text", "")) != str(_next_hold_step.get("text", "")) or str(result.get("action", "")) != str(_next_hold_step.get("action", "")):
+		_next_hold_since = now
+	_next_hold_signature = signature
+	_next_hold_step = result.duplicate(true)
+	_next_reclamation_kind = _next_named_build_kind(result)
+	return result
+
+
+# "place 1 bunk", "place 2 bunks" and "place bunks" are one step. Latch the
+# wording, not the information: a bunk step that states no count ("place bunks")
+# keeps the count text first shown, so 1 bunk <-> bunks never flips on its own.
+# A stated count ("place 2 bunks") is shown as built and becomes the latch, so a
+# real mid-episode count change (2 -> 1 after a placement) still reaches Next.
+func _is_bunk_place_step(step: Dictionary) -> bool:
+	return str(step.get("tool", "")) == "bed" and not bool(step.get("urgent", false)) and str(step.get("text", "")).begins_with("Next: YOU place ") and "bunk" in str(step.get("text", ""))
+
+
+func _bunk_step_states_count(step: Dictionary) -> bool:
+	var count_word := str(step.get("text", "")).trim_prefix("Next: YOU place ").get_slice(" ", 0)
+	return count_word.is_valid_int()
+
+
+func _stabilize_bunk_step(step: Dictionary) -> Dictionary:
+	if not _is_bunk_place_step(step):
+		_next_bunk_text = ""
+		_next_bunk_help = ""
+		return step
+	if _next_bunk_text.is_empty() or _bunk_step_states_count(step):
+		_next_bunk_text = str(step.text)
+		_next_bunk_help = str(step.get("help", ""))
+		return step
+	step.text = _next_bunk_text
+	if not _next_bunk_help.is_empty():
+		step["help"] = _next_bunk_help
+	return step
+
+
+func _is_unnamed_rec_blocker(step: Dictionary) -> bool:
+	return bool(step.get("food_unnamed", false)) and str(step.get("tool", "")) == "rec"
+
+
+func _next_kind_affordable(kind: int) -> bool:
+	return kind >= 0 and game.food_system.salvage - game.job_system.get_breach_salvage_reserve() >= int(VaultBuilding.COSTS[kind])
+
+
+# The presentation prefix comes from the step's fields, not segment position:
+# only a named urgent step carries "Next: <Name> <condition> · ", and an unnamed
+# food step carries the runway label only on food-chain steps.
+func _next_step_prefix(step: Dictionary) -> String:
+	var text := str(step.get("text", ""))
+	if not bool(step.get("urgent", false)):
+		return "Next: "
+	if bool(step.get("food_unnamed", false)):
+		var label := "Next: %s · " % FOOD_SHORT_LABEL
+		return label if text.begins_with(label) else "Next: "
+	return text.get_slice(" · ", 0) + " · "
+
+
+func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
+	var text := str(step.get("text", ""))
+	var danger := bool(step.get("urgent", false))
+	var prefix := _next_step_prefix(step)
+	var body := text.trim_prefix(prefix).get_slice(" · ", 0)
+	var funding := " · THEY fund the " in text
+	var placing := body.begins_with("YOU place ")
+	var kind := _next_named_build_kind(step)
+	var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
+	var affordable := _next_kind_affordable(kind)
+	if funding and affordable:
+		step.text = text.replace(" · THEY fund the ", " · THEY build the ")
+		if str(step.get("action", "")) == "reclaim":
+			step.erase("action")
+		# A previously decorated input must not keep the reclamation appendix.
+		step["help"] = str(step.get("help", "")).get_slice("\nReclamation:", 0)
+		return step
+	# No amount of salvage replaces an immediate switch, undraft, priority or cutoff.
+	var salvage_action := placing or (funding and (body.begins_with("YOU mark ") or body.begins_with("YOU leave ")))
+	if bool(step.get("too_late", false)) or (danger and not salvage_action):
+		return step
+	var idle := _has_idle_crew()
+	var sink := salvage_survival_sink(spendable) if idle else -1
+	# The recorded 05 food-worker recovery already places Rec. Express its
+	# affordable recovery as spending too, even though its kind is unchanged.
+	var food_rec_recovery := danger and str(step.get("cause", "")) == "food" and kind == VaultBuilding.Kind.RECREATION_CONSOLE and sink == kind
+	if idle and danger and placing and sink >= 0 and (sink != kind or food_rec_recovery):
+		return _next_spend_build(step, sink, prefix)
+	var short := kind >= 0 and not affordable and (funding or placing)
+	var reclaim_kind := kind
+	if idle and sink < 0 and (placing or (not danger and (_is_default_step(step) or body.begins_with("YOU leave ")))):
+		var candidates := _salvage_survival_candidates()
+		if not candidates.is_empty():
+			reclaim_kind = candidates[0]
+			short = not _next_kind_affordable(reclaim_kind)
+	if reclaim_kind < 0 and idle and _salvage_crisis_live():
+		# A passive crisis step has no fixture of its own. Name the live need.
+		reclaim_kind = VaultBuilding.Kind.AIR_RECYCLER if not _air_ready() or not game.oxygen_system.is_breathable() else VaultBuilding.Kind.BED
+		for resident: VaultResident in game.residents:
+			if resident.alive and resident.needs.food < 20.0 and reclaim_kind != VaultBuilding.Kind.AIR_RECYCLER:
+				reclaim_kind = VaultBuilding.Kind.KITCHEN if game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) == 0 else VaultBuilding.Kind.GROW_TRAY
+	var passive_crisis := idle and _salvage_crisis_live() and not _next_kind_affordable(reclaim_kind)
+	if game.can_start_reclamation() and reclaim_kind >= 0 and not _next_kind_affordable(reclaim_kind) and (short or passive_crisis):
+		_next_reclamation_kind = reclaim_kind
+		step.text = prefix + "YOU begin reclamation · +%d · THEY fund the %s" % [VaultGame.RECLAIM_START_SALVAGE, VaultBuilding.KIND_NAMES[reclaim_kind]] + _next_in_progress_suffix(step.get("in_progress", []))
+		step["tool"] = "select"
+		step["action"] = "reclaim"
+		step["help"] = str(step.get("help", "")) + "\nReclamation: +%d salvage now, +%d every %d s, %d times" % [VaultGame.RECLAIM_START_SALVAGE, VaultGame.RECLAIM_DELIVERY, roundi(VaultGame.RECLAIM_INTERVAL), VaultGame.RECLAIM_DELIVERIES]
+		return step
+	if danger or not idle or not (_is_default_step(step) or body.begins_with("YOU leave ")):
+		return step
+	# Preserve Mk II precedence on the non-danger path.
+	var target := _upgrade_offer_target()
+	if target != null and target.get_upgrade_cost() <= spendable:
+		step.text = "Next: YOU spend %d: fit %s Mk II" % [target.get_upgrade_cost(), ALSO_NAMES[target.kind]] + _next_in_progress_suffix(step.get("in_progress", []))
+		step["help"] = "Select the %s and fit Mk II in its inspector." % VaultBuilding.KIND_NAMES[target.kind]
+		step["tool"] = "select"
+		step["action"] = "spend"
+		return step
+	return _next_spend_build(step, sink, prefix) if sink >= 0 else step
+
+
+func _next_spend_build(step: Dictionary, sink: int, prefix: String) -> Dictionary:
+	step.text = prefix + "YOU spend %d: build %s · THEY craft" % [VaultBuilding.COSTS[sink], VaultBuilding.KIND_NAMES[sink]] + _next_in_progress_suffix(step.get("in_progress", []))
+	step["help"] = "Place a %s blueprint on free floor. Keep Haul + Craft above OFF so crew supply and build it." % VaultBuilding.KIND_NAMES[sink]
+	step["tool"] = "select"
+	step["action"] = "spend"
 	return step
 
 
@@ -3033,7 +3365,7 @@ func _alert_stated_by_next(alert: String, step: Dictionary) -> bool:
 	if alert.begins_with("POWER BROWNOUT"):
 		return "charge node" in text
 	if alert.begins_with("INJURED ") and "NO MED BED" in alert:
-		return "med bed" in text
+		return "med bed" in text or "medical bed" in text
 	if alert.begins_with("DARKNESS"):
 		return "lumen" in text
 	return false
@@ -3544,6 +3876,16 @@ func _reveal_fixture_controls() -> void:
 
 
 func clear_survival_tips() -> void:
+	_idle_crew_since.clear()
+	_idle_crew_sample_time = -1.0
+	_next_hold_signature.clear()
+	_next_hold_since = -1.0
+	_next_hold_step.clear()
+	_next_reclamation_kind = -1
+	_starving_resident_id = -1
+	_food_forecast_latched = false
+	_next_bunk_text = ""
+	_next_bunk_help = ""
 	_survival_tips.clear()
 	_survival_tip_details.clear()
 	_survival_tip_sample_left = 0.0
@@ -3554,6 +3896,7 @@ func clear_survival_tips() -> void:
 # Sample the very same selection used by the Next label, even without a HUD
 # refresh (headless simulation). UI refreshes also retain the exact shown step.
 func record_survival_tip(delta_seconds := 0.5) -> void:
+	_update_idle_crew_tracking()
 	if game.outcome != "" or game.ended:
 		return
 	_survival_tip_tick += 1
@@ -4194,6 +4537,61 @@ const NUDGE_TOOLS := {
 }
 
 
+# Use the same food runway as urgency selection, even when another threat
+# currently wins the resident ranking.
+func _salvage_food_crisis_live() -> bool:
+	if game.get_alive_count() == 0:
+		return false
+	var plan := _food_fix_plan()
+	var lead := float(plan.seconds) + _food_chain_work_lead(float(plan.seconds))
+	if not _food_work_blocker_step().is_empty() and game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) == 0:
+		lead = maxf(lead, float(plan.seconds) + _food_worker_recovery_seconds())
+	return _food_runway_seconds() < lead + FOOD_RUNWAY_MARGIN_SECONDS
+
+
+# Ordered survival needs, independent of their price. Keep this list so an
+# unaffordable first choice can name reclamation without hiding cheaper relief.
+func _salvage_survival_candidates() -> Array[int]:
+	var candidates: Array[int] = []
+	if game.ended or not game.breach_system.is_sealed():
+		return candidates
+	if game.annex_waiting_for_room() and game.annex_room_short() > 0:
+		return candidates
+	var food_crisis := _salvage_food_crisis_live()
+	var breaking := false
+	for resident: VaultResident in game.residents:
+		if resident.alive:
+			food_crisis = food_crisis or (resident.needs.food < 20.0 and game.food_system.meals < game.get_alive_count())
+			breaking = breaking or resident.needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD
+	var tray := _unpowered_tray()
+	if food_crisis and tray != null and game.power_grid.supply - game.power_grid.served < tray.get_base_power_demand():
+		candidates.append(VaultBuilding.Kind.GENERATOR)
+	if food_crisis and _count_kind(VaultBuilding.Kind.KITCHEN) == 0:
+		candidates.append(VaultBuilding.Kind.KITCHEN)
+	if food_crisis and game.food_system.raw_food >= NUDGE_RAW_PILE and _count_kind(VaultBuilding.Kind.KITCHEN) < 2:
+		candidates.append(VaultBuilding.Kind.KITCHEN)
+	if food_crisis and _count_kind(VaultBuilding.Kind.GROW_TRAY) < 2 and _air_ready():
+		if _planned_power_spare() < int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.GROW_TRAY]):
+			candidates.append(VaultBuilding.Kind.GENERATOR)
+		else:
+			candidates.append(VaultBuilding.Kind.GROW_TRAY)
+	if breaking and _count_kind(VaultBuilding.Kind.RECREATION_CONSOLE) == 0:
+		candidates.append(VaultBuilding.Kind.RECREATION_CONSOLE)
+	# The literal 05 probe has just vented a break (mood 11-13). Its existing
+	# food-work forecast still calls for Rec; keep that affordable recovery.
+	if food_crisis and _count_kind(VaultBuilding.Kind.RECREATION_CONSOLE) == 0 and _next_named_build_kind(_food_work_blocker_step()) == VaultBuilding.Kind.RECREATION_CONSOLE:
+		candidates.append(VaultBuilding.Kind.RECREATION_CONSOLE)
+	return candidates
+
+
+func salvage_survival_sink(spendable: int) -> int:
+	for candidate: int in _salvage_survival_candidates():
+		if int(VaultBuilding.COSTS[candidate]) <= spendable:
+			return candidate
+	var fallback := salvage_nudge_kind()
+	return fallback if fallback >= 0 and int(VaultBuilding.COSTS[fallback]) <= spendable else -1
+
+
 func salvage_nudge_kind() -> int:
 	if game.ended or not game.breach_system.is_sealed():
 		return -1
@@ -4341,7 +4739,7 @@ func _refresh_idle_start() -> void:
 		idle_start_button.text = IDLE_START_TEXT.air % int(VaultBuilding.COSTS[VaultBuilding.Kind.AIR_RECYCLER])
 	elif bunks:
 		idle_start_header.text = IDLE_START_TEXT.header_3
-		idle_start_button.text = IDLE_START_TEXT.bunks
+		idle_start_button.text = "Queue 2 bunks" if _next_kind_affordable(VaultBuilding.Kind.BED) else IDLE_START_TEXT.bunks
 
 
 func _on_idle_start_pressed() -> void:
@@ -4384,7 +4782,7 @@ const ALSO_NAMES := {
 func also_text() -> String:
 	if game.ended or not game.breach_system.is_sealed():
 		return ""
-	if game.can_start_reclamation():
+	if game.can_start_reclamation() and not _next_kind_affordable(_next_reclamation_kind):
 		# The idle-start step-3 card already offers reclamation; one prompt there is enough.
 		if game.idle_start_bunks_pending():
 			return ""
@@ -4442,6 +4840,8 @@ func _refresh_wing_orders() -> void:
 
 
 func reclaim_button_text() -> String:
+	if game.can_start_reclamation() and _next_kind_affordable(_next_reclamation_kind):
+		return "Reclamation available · +%d salvage" % VaultGame.RECLAIM_START_SALVAGE
 	if game.can_start_reclamation():
 		return "Begin reclamation · +%d salvage" % VaultGame.RECLAIM_START_SALVAGE
 	var left := VaultGame.RECLAIM_DELIVERIES - game.reclaim_paid
@@ -4639,6 +5039,8 @@ func note_keep_running_loss() -> void:
 
 
 func _is_latchable_step(step: Dictionary) -> bool:
+	if str(step.get("action", "")) in ["reclaim", "spend"]:
+		return false
 	if bool(step.get("urgent", false)):
 		return false
 	return str(step.get("tool", "")) in ["medical", "rec"] or (
@@ -4702,6 +5104,8 @@ func _food_step(step: Dictionary) -> Dictionary:
 
 
 func _is_default_step(step: Dictionary) -> bool:
+	if str(step.get("action", "")) in ["reclaim", "spend"]:
+		return false
 	if bool(step.get("urgent", false)):
 		return false
 	if str(step.get("kind", "")) in KEEP_RUNNING_PASS_KINDS:

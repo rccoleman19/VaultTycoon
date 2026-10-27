@@ -76,7 +76,7 @@ func _test_salvage_shortfall() -> void:
 	charge.delivered = 0
 	game.food_system.salvage = 18
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, Vector2i(27, 12)), "second Charge placed")
-	_assert_salvage_tip(game, 18, 6)
+	_assert_salvage_tip(game, 18, 6, false, "build")
 	_dispose(game)
 
 
@@ -233,6 +233,28 @@ func _test_salvage_real_recovery() -> void:
 const FALLBACK_DAY_SEVEN_NEXT := "Next: YOU designate needs · THEY hold Day 7"
 const FALLBACK_DAY_SEVEN_HELP := "Keep designating dig/build/stockpile. Defaults keep food, power, and air running."
 const FALLBACK_RECOVERY_BOUND := 120.0
+const FALLBACK_RECLAIM_HELP := "Reclamation: +18 salvage now, +18 every 30 s, 6 times"
+const FALLBACK_SPEND_GROW_NEXT := "Next: YOU spend 18: fit Grow Tray Mk II"
+const FALLBACK_SPEND_GROW_HELP := "Select the Grow Tray and fit Mk II in its inspector."
+
+
+# Reclamation changes the displayed action without hiding the existing funding
+# calculation. Check both so partial deliveries, cargo and queued digs retain
+# their exact shortfall and designation coverage.
+func _assert_fallback_fund(game: VaultGame, shortfall: int, tiles: int, kind: int = VaultBuilding.Kind.GENERATOR) -> void:
+	var name: String = VaultBuilding.KIND_NAMES[kind]
+	var fund_text := "Next: YOU mark %d rock [E] · THEY fund the %s" % [tiles, name] if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the %s" % name
+	var fund_help := "The %s blueprint is %d salvage short. Each dug rock tile yields 3 salvage once hauled." % [name, shortfall]
+	var funding: Dictionary = game.player_orders._fund_blueprint_step(kind)
+	_assert_equal(game.player_orders._salvage_shortfall(kind), shortfall, "fallback retains exact shared salvage shortfall")
+	_assert_equal(funding.text, fund_text, "fallback retains exact underlying dig/haul instruction")
+	_assert_equal(funding.tool, "dig" if tiles > 0 else "select", "fallback retains underlying funding tool")
+	_assert_equal(funding.help, fund_help, "fallback retains underlying funding explanation")
+	if game.can_start_reclamation():
+		_assert_step(game, "Next: YOU begin reclamation · +18 · THEY fund the %s" % name, "select", fund_help + "\n" + FALLBACK_RECLAIM_HELP)
+		_assert_equal(game.player_orders._primary_next_step().get("action", ""), "reclaim", "fallback exposes the available player reclamation action")
+	else:
+		_assert_step(game, fund_text, "dig" if tiles > 0 else "select", fund_help)
 
 
 func _fallback_ready_game() -> VaultGame:
@@ -255,6 +277,9 @@ func _fallback_ready_game() -> VaultGame:
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER), 1, "fallback fixture Air powered")
 	for resident: VaultResident in game.residents:
 		_assert_true(resident.needs.mood > 9.0, "fallback fixture is above the Rec crisis threshold")
+	game.player_orders.refresh()
+	game.day_cycle.elapsed_seconds += 3.0
+	game.player_orders.refresh()
 	return game
 
 
@@ -273,7 +298,7 @@ func _fallback_charge_game() -> VaultGame:
 
 func _test_fallback_day_seven_ready() -> void:
 	var game := _fallback_ready_game()
-	_assert_step(game, FALLBACK_DAY_SEVEN_NEXT, "select", FALLBACK_DAY_SEVEN_HELP)
+	_assert_step(game, FALLBACK_SPEND_GROW_NEXT, "select", FALLBACK_SPEND_GROW_HELP)
 	_dispose(game)
 
 
@@ -281,24 +306,24 @@ func _test_fallback_charge_moods_and_rec() -> void:
 	var game := _fallback_charge_game()
 	for mood in [9.0001, 12.0, 100.0, 9.0]:
 		game.residents[0].needs.mood = mood
-		_assert_salvage_tip(game, 18, 6)
+		_assert_fallback_fund(game, 18, 6)
 	game.residents[0].needs.mood = 100.0
 	var rec := game.get_building_at(Vector2i(26, 12))
 	rec.manually_disabled = true
 	game.power_grid.recalculate(game.buildings)
-	_assert_salvage_tip(game, 18, 6)
+	_assert_fallback_fund(game, 18, 6)
 	rec.manually_disabled = false
 	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(28, 12))
 	game.power_grid.recalculate(game.buildings)
 	_assert_true(rec.powered, "third staged Charge powers Rec beside short second Charge")
-	_assert_salvage_tip(game, 18, 6)
+	_assert_fallback_fund(game, 18, 6)
 	_assert_true(game._remove_building(rec, 0, "Staged absent Rec"), "remove Rec without salvage refund")
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 0, "fallback Rec absent")
-	_assert_salvage_tip(game, 18, 6)
+	_assert_fallback_fund(game, 18, 6)
 	game.set_tool("bed")
 	game.player_orders.refresh()
 	_assert_equal(game.active_tool, "bed", "fallback refresh preserves active build tool")
-	_assert_equal(game.player_orders.objective_label.text, "Next: YOU mark 6 rock [E] · THEY fund the Charge Node", "fallback refresh displays exact mark instruction")
+	_assert_equal(game.player_orders.objective_label.text, "Next: YOU begin reclamation · +18 · THEY fund the Charge Node", "fallback refresh leads with available reclamation")
 	_dispose(game)
 
 
@@ -306,19 +331,19 @@ func _test_fallback_recovery_variants() -> void:
 	var game := _fallback_charge_game()
 	for x in range(17, 19):
 		_assert_true(game.map_grid.queue_dig(Vector2i(x, 9)), "fallback two ordinary rock marks")
-	_assert_salvage_tip(game, 18, 4)
+	_assert_fallback_fund(game, 18, 4)
 	for x in range(19, 23):
 		_assert_true(game.map_grid.queue_dig(Vector2i(x, 9)), "fallback covering rock marks")
-	_assert_salvage_tip(game, 18, 0)
+	_assert_fallback_fund(game, 18, 0)
 	game.map_grid.dig_marks.clear()
 	game.job_system.queue_rubble(Vector2i(18, 10), 18)
-	_assert_salvage_tip(game, 18, 0)
+	_assert_fallback_fund(game, 18, 0)
 	_dispose(game)
 	game = _fallback_charge_game()
 	var charge := game.get_building_at(Vector2i(27, 12))
 	_assert_equal(charge.add_delivery(10), 10, "fallback Charge partially delivered ten of eighteen")
 	game.food_system.salvage = 2
-	_assert_salvage_tip(game, 6, 2)
+	_assert_fallback_fund(game, 6, 2)
 	var supply := game.job_system._find_matching_job(JobSystem.JobType.SUPPLY_BUILD, charge.cell, charge.building_id)
 	supply.in_transit = 4
 	var carrier: VaultResident = game.residents[0]
@@ -326,9 +351,9 @@ func _test_fallback_recovery_variants() -> void:
 	carrier.current_job_id = supply.id
 	carrier.carrying = 4
 	_assert_equal(game.job_system.get_build_supply_in_transit(charge.building_id), 4, "fallback cargo appears in job and carrier but counts once")
-	_assert_salvage_tip(game, 2, 1)
+	_assert_fallback_fund(game, 2, 1)
 	supply.in_transit = 0
-	_assert_salvage_tip(game, 2, 1)
+	_assert_fallback_fund(game, 2, 1)
 	carrier.clear_job()
 	carrier.carrying = 0
 	_assert_equal(charge.add_delivery(8), 8, "fallback remaining delivery completes supply")
@@ -343,9 +368,9 @@ func _test_fallback_funded_complete_cancelled() -> void:
 	var charge := game.get_building_at(Vector2i(27, 12))
 	game.food_system.salvage = 18
 	_assert_false(charge.is_supplied(), "funded fallback has stock but awaits delivery")
-	_assert_step(game, FALLBACK_DAY_SEVEN_NEXT, "select", FALLBACK_DAY_SEVEN_HELP)
+	_assert_step(game, FALLBACK_SPEND_GROW_NEXT, "select", FALLBACK_SPEND_GROW_HELP)
 	game.food_system.salvage = 0
-	_assert_salvage_tip(game, 18, 6)
+	_assert_fallback_fund(game, 18, 6)
 	charge.add_delivery(18)
 	_assert_true(charge.apply_build_work(8.0), "staged fallback Charge completes")
 	game.power_grid.recalculate(game.buildings)
@@ -354,6 +379,9 @@ func _test_fallback_funded_complete_cancelled() -> void:
 	game = _fallback_charge_game()
 	game.set_tool("cancel")
 	_assert_true(game.issue_order(Vector2i(27, 12)), "ordinary cancellation removes short blueprint")
+	game.player_orders.refresh()
+	game.day_cycle.elapsed_seconds += 3.0
+	game.player_orders.refresh()
 	_assert_step(game, FALLBACK_DAY_SEVEN_NEXT, "select", FALLBACK_DAY_SEVEN_HELP)
 	game.player_orders.refresh()
 	_assert_equal(game.active_tool, "cancel", "Day-7 refresh preserves cancellation tool")
@@ -369,7 +397,7 @@ func _test_fallback_other_kinds_and_order() -> void:
 		var game := _fallback_ready_game()
 		_assert_true(game.place_blueprint(sample.kind, Vector2i(26, 12)), "non-Charge fallback blueprint placed")
 		game.food_system.salvage = 0
-		_assert_step(game, "Next: YOU mark 3 rock [E] · THEY fund the %s" % sample.name, "dig", "The %s blueprint is 8 salvage short. Each dug rock tile yields 3 salvage once hauled." % sample.name)
+		_assert_fallback_fund(game, 8, 3, sample.kind)
 		_dispose(game)
 	for first_kind in [VaultBuilding.Kind.BED, VaultBuilding.Kind.MEDICAL_BED]:
 		var game := _fallback_ready_game()
@@ -381,8 +409,7 @@ func _test_fallback_other_kinds_and_order() -> void:
 		# Deliberately disagree with array order so the assertion tests building_id.
 		game.buildings.reverse()
 		game.food_system.salvage = 0
-		var name: String = VaultBuilding.KIND_NAMES[first_kind]
-		_assert_step(game, "Next: YOU mark 3 rock [E] · THEY fund the %s" % name, "dig", "The %s blueprint is 8 salvage short. Each dug rock tile yields 3 salvage once hauled." % name)
+		_assert_fallback_fund(game, 8, 3, first_kind)
 		_dispose(game)
 	var game := _fallback_ready_game()
 	var completed := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(26, 12))
@@ -393,6 +420,9 @@ func _test_fallback_other_kinds_and_order() -> void:
 	core.delivered = 0
 	game.food_system.salvage = 0
 	game.power_grid.recalculate(game.buildings)
+	game.player_orders.refresh()
+	game.day_cycle.elapsed_seconds += 3.0
+	game.player_orders.refresh()
 	_assert_step(game, FALLBACK_DAY_SEVEN_NEXT, "select", FALLBACK_DAY_SEVEN_HELP)
 	_dispose(game)
 
@@ -417,7 +447,7 @@ func _test_fallback_precedence() -> void:
 	game.power_grid.recalculate(game.buildings)
 	for resident: VaultResident in game.residents:
 		resident.needs.rest = 28.0
-	_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+	_assert_step(game, "Next: YOU begin reclamation · +18 · THEY fund the Bunk", "select", "Place bunks so tired undrafted crew have a bed.\n" + FALLBACK_RECLAIM_HELP)
 	_dispose(game)
 	game = _healthy_game()
 	# Isolate the opening/funding precedence from the food fixtures' dig lead.
@@ -440,15 +470,17 @@ func _test_fallback_real_recovery() -> void:
 	game.food_system.meals = 100
 	game.user_paused = false
 	_assert_true(FALLBACK_RECOVERY_BOUND <= 120.0, "fallback recovery bound is at most 120 simulation seconds")
-	_assert_salvage_tip(game, 18, 6)
-	var tip: Dictionary = game.player_orders._primary_next_step()
+	_assert_fallback_fund(game, 18, 6)
+	# This driver deliberately keeps its original dig orders instead of acting
+	# on the new reclamation text: UI advice must leave ordinary work unchanged.
+	var tip: Dictionary = game.player_orders._fund_blueprint_step(VaultBuilding.Kind.GENERATOR)
 	var count := int(String(tip.text).split(" ")[3])
-	_assert_equal(count, 6, "fallback recovery reads six rocks from live tip")
+	_assert_equal(count, 6, "fallback recovery still needs six rocks when the player keeps digging")
 	game.set_tool("dig")
 	for x in range(17, 17 + count):
 		_assert_true(game.issue_order(Vector2i(x, 9)), "fallback recovery ordinary reachable dig order")
 	game.set_tool("select")
-	_assert_salvage_tip(game, 18, 0)
+	_assert_fallback_fund(game, 18, 0)
 	var ticks := 0
 	var marks_done_at := -1.0
 	var funded_at := -1.0
@@ -466,15 +498,18 @@ func _test_fallback_real_recovery() -> void:
 			marks_done_at = elapsed
 		if funded_at < 0.0 and game.player_orders._salvage_shortfall(VaultBuilding.Kind.GENERATOR) == 0:
 			funded_at = elapsed
-			_assert_step(game, FALLBACK_DAY_SEVEN_NEXT, "select", FALLBACK_DAY_SEVEN_HELP)
+			var funded_step: Dictionary = game.player_orders._primary_next_step()
+			_assert_true(str(funded_step.text) in [FALLBACK_DAY_SEVEN_NEXT, FALLBACK_SPEND_GROW_NEXT], "funded Charge yields to the calm default or an affordable idle Mk II fit")
+			_assert_true(str(funded_step.get("action", "")) != "reclaim", "funded Charge stops asking for reclamation")
 		if charge.complete:
 			complete_at = elapsed
 	_assert_true(charge.complete, "fallback ordinary Dig Haul Supply Craft completes within declared bound")
 	_assert_true(ordinary_work, "fallback recovery stays undrafted and unforced every tick")
-	var allowed_tips := ["Next: YOU leave Dig + Haul on · THEY fund the Charge Node", FALLBACK_DAY_SEVEN_NEXT]
+	var allowed_tips := ["Next: YOU begin reclamation · +18 · THEY fund the Charge Node", FALLBACK_DAY_SEVEN_NEXT, FALLBACK_SPEND_GROW_NEXT]
 	for seen: String in tips_seen:
-		_assert_true(seen in allowed_tips, "fallback recovery tip per tick is leave Dig + Haul on or Day 7: %s" % seen)
+		_assert_true(seen in allowed_tips, "fallback recovery advice is reclamation until funded, then calm or an affordable fit: %s" % seen)
 	_assert_true(marks_done_at > 0.0 and funded_at >= marks_done_at and complete_at >= funded_at, "fallback recovery observes marks then funded then complete")
+	_assert_false(game.reclaim_active, "ignoring the new reclamation advice never starts it or changes the existing recovery")
 	_assert_step(game, FALLBACK_DAY_SEVEN_NEXT, "select", FALLBACK_DAY_SEVEN_HELP)
 	_assert_equal([game.power_grid.supply, game.power_grid.demand, game.power_grid.served], [16, 10, 10], "fallback recovery final PWR")
 	_assert_true(game.get_building_at(Vector2i(26, 12)).powered, "fallback recovery powers Rec")
@@ -501,5 +536,5 @@ func _test_fallback_mixed_skips() -> void:
 		game.food_system.salvage = 0
 		_assert_equal(game.player_orders._salvage_shortfall(VaultBuilding.Kind.GENERATOR), 18, "same-kind newer Charge remains eighteen short")
 		game.buildings.reverse()
-		_assert_step(game, "Next: YOU mark 3 rock [E] · THEY fund the Medical Bed", "dig", "The Medical Bed blueprint is 8 salvage short. Each dug rock tile yields 3 salvage once hauled.")
+		_assert_fallback_fund(game, 8, 3, VaultBuilding.Kind.MEDICAL_BED)
 		_dispose(game)

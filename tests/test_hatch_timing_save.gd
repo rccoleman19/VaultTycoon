@@ -233,6 +233,10 @@ func _test_sealed_history() -> void:
 			if source.breach_system.is_sealed():
 				break
 		_assert_true(source.breach_system.is_sealed(), "normal patch pipeline seals without stale jobs")
+		# Keep the existing named food warning real while comparing the HUD;
+		# a loaded run intentionally starts a fresh optional-spend idle window.
+		source.residents[0].needs.food = 40.0
+		source.food_system.meals = 0
 		var loaded := _round_trip(source)
 		if loaded != null:
 			_assert_equal(loaded.breach_system.has_opened(), opened, "ever-opened rating flag round trips")

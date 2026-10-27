@@ -57,11 +57,16 @@ func _test_offer() -> void:
 	_assert_false(game.comfort_pending(), "not on the win panel")
 	_assert_false(game.player_orders.comfort_box.visible, "no card on the win panel")
 	game.start_keep_running()
+	# This vault has no powered Air Recycler, so salvage-aware Next would lead with reclamation.
+	# The fixture is about the keep-running pointer: start it as already taken (no salvage paid).
+	game.reclaim_active = true
 	for resident: VaultResident in game.residents:
 		resident.needs.food = 100.0
 		resident.needs.rest = 100.0
 		resident.needs.mood = 100.0
 		resident.needs.health = 100.0
+	# Nothing banked yet: with salvage in hand, Next offers the spend nudge (build Rec Console) instead.
+	game.food_system.salvage = 0
 	game.food_system.meals = 20
 	game.player_orders.refresh()
 	_assert_true(game.comfort_pending(), "offered once the vault keeps running")
