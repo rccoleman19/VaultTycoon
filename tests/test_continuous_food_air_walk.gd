@@ -228,6 +228,13 @@ func _action_text(game: VaultGame, step: Dictionary) -> String:
 			var prefix := "Next: %s %s · " % [resident.resident_name, condition]
 			if text.begins_with(prefix) and bool(step.get("urgent", false)) and int(step.get("resident_id", -1)) == resident.resident_id:
 				return "Next: " + text.trim_prefix(prefix)
+	# Before any resident is inside their own 60 s runway the food step carries the
+	# unnamed prefix. Validate its flag, urgency and live resident the same way.
+	var unnamed := "Next: food runway short · "
+	if text.begins_with(unnamed) and bool(step.get("urgent", false)) and bool(step.get("food_unnamed", false)) and step.get("cause", "") == "food":
+		for resident: VaultResident in game.residents:
+			if resident.alive and int(step.get("resident_id", -1)) == resident.resident_id:
+				return "Next: " + text.trim_prefix(unnamed)
 	_fail_playthrough(game, "unrecognized or inconsistent resident-danger prefix")
 	return ""
 
