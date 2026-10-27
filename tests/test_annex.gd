@@ -73,16 +73,19 @@ func _test_card() -> void:
 	_assert_approximately(game.player_orders.annex_bar.value, 0.0, 0.0001, "empty bar")
 	_fed(game)
 	game.food_system.meals = 20
-	# This fixture has no ready Air, so the idle vault first leads with reclamation;
-	# take that one-time action so the comfort and Annex steps below are what is tested.
+	# Keep the idle fixture unchanged for the full sim-time window before guidance.
 	game.player_orders.refresh()
-	_assert_equal(game.player_orders.objective_label.text, "Next: YOU begin reclamation · +18 · THEY fund the Air Recycler", "an idle fixture without ready Air leads with reclamation")
+	game.keep_running_seconds += 3.0
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, "Next: YOU spend 8: build Rec Console · THEY craft", "an idle fixture with affordable Air names its useful comfort spend")
 	_assert_true(game.start_reclamation(), "begin reclamation before the comfort check")
 	game.player_orders.refresh()
 	# With salvage in hand the idle crew's comfort step is the spend nudge for the same Rec Console.
 	_assert_equal(game.player_orders.objective_label.text, "Next: YOU spend 8: build Rec Console · THEY craft", "comfort comes first")
 	_add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, game._annex_free_cells(1)[0])
 	_add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, game._annex_free_cells(1)[0])
+	game.player_orders.refresh()
+	game.keep_running_seconds += 3.0
 	game.player_orders.refresh()
 	_assert_equal(game.player_orders.objective_label.text, "Next: YOU set the meal reserve · THEY build the Annex", "then Next points at the Annex")
 	_dispose(game)

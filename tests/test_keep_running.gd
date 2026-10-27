@@ -3,7 +3,7 @@ extends "res://tests/test_runner.gd"
 # North star slice 1: KEEP RUNNING on the win panel continues the same vault past Day 7.
 
 const KR_SAVE := "user://test_keep_running.json"
-const RECLAIM_AIR := "Next: YOU begin reclamation · +18 · THEY fund the Air Recycler"
+const SPEND_REC := "Next: YOU spend 8: build Rec Console · THEY craft"
 
 
 func _run() -> void:
@@ -100,11 +100,13 @@ func _test_next_alerts() -> void:
 		resident.needs.health = 100.0
 	game.food_system.meals = 20
 	game.player_orders.refresh()
+	game.keep_running_seconds += 3.0
+	game.player_orders.refresh()
 	var next: String = game.player_orders.objective_label.text
 	_assert_false(next.contains("Day 7"), "no 'hold Day 7' text: %s" % next)
 	_assert_false(next.contains("VICTORY"), "no VICTORY PENDING in Next")
 	_assert_false(next.contains("check blockers"), "no 'check blockers' text")
-	_assert_equal(next, RECLAIM_AIR, "the idle vault without ready Air first names reclamation")
+	_assert_equal(next, SPEND_REC, "the idle vault with affordable Air names a useful comfort spend")
 	_assert_true(game.start_reclamation(), "follow the reclamation lead through the player API")
 	game.player_orders.refresh()
 	_assert_equal(game.player_orders.objective_label.text, "Next: YOU spend 8: build Rec Console · THEY craft", "after reclamation starts, the idle vault names an affordable comfort build")

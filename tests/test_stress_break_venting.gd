@@ -403,6 +403,9 @@ func _fallback_ready_game() -> VaultGame:
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY), 1, "Grow is powered")
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.KITCHEN), 1, "Nutrient is powered")
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER), 1, "Air is powered")
+	game.player_orders.refresh()
+	game.day_cycle.elapsed_seconds += 3.0
+	game.player_orders.refresh()
 	_assert_chain_step(game, DAY_SEVEN, "select", DAY_SEVEN_HELP)
 	_assert_step(game, SPEND_GROW, "select", SPEND_GROW_HELP, "spend")
 	return game

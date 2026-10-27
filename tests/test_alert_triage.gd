@@ -184,6 +184,9 @@ func _test_next_queued_only_fallback() -> void:
 	game.player_orders.show_breach_warning(false)
 	game.food_system.salvage = 100
 	var placed := game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(18, 12))
+	game.player_orders.refresh()
+	game.day_cycle.elapsed_seconds += 3.0
+	game.player_orders.refresh()
 	var step: Dictionary = game.player_orders._refresh_objective()
 	_assert_true(delivered == BreachSystem.PATCH_COST and sealed and placed,
 		"the hatch is really sealed and the only unmet build link has a real bunk blueprint")

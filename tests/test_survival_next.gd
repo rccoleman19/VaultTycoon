@@ -2488,8 +2488,8 @@ func _test_air_priority() -> void:
 	_dispose(game)
 
 
-func _assert_salvage_tip(game: VaultGame, shortfall: int, tiles: int, starving := false) -> void:
-	var next := "Next: YOU mark %d rock [E] · THEY fund the Charge Node" % tiles if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the Charge Node"
+func _assert_salvage_tip(game: VaultGame, shortfall: int, tiles: int, starving := false, build_word := "fund") -> void:
+	var next := "Next: YOU mark %d rock [E] · THEY %s the Charge Node" % [tiles, build_word] if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY %s the Charge Node" % build_word
 	_assert_step(game,
 		_starving_next(next) if starving else next,
 		"dig" if tiles > 0 else "select",

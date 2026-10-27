@@ -76,7 +76,7 @@ func _test_salvage_shortfall() -> void:
 	charge.delivered = 0
 	game.food_system.salvage = 18
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, Vector2i(27, 12)), "second Charge placed")
-	_assert_salvage_tip(game, 18, 6)
+	_assert_salvage_tip(game, 18, 6, false, "build")
 	_dispose(game)
 
 
@@ -277,6 +277,9 @@ func _fallback_ready_game() -> VaultGame:
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER), 1, "fallback fixture Air powered")
 	for resident: VaultResident in game.residents:
 		_assert_true(resident.needs.mood > 9.0, "fallback fixture is above the Rec crisis threshold")
+	game.player_orders.refresh()
+	game.day_cycle.elapsed_seconds += 3.0
+	game.player_orders.refresh()
 	return game
 
 
@@ -376,6 +379,9 @@ func _test_fallback_funded_complete_cancelled() -> void:
 	game = _fallback_charge_game()
 	game.set_tool("cancel")
 	_assert_true(game.issue_order(Vector2i(27, 12)), "ordinary cancellation removes short blueprint")
+	game.player_orders.refresh()
+	game.day_cycle.elapsed_seconds += 3.0
+	game.player_orders.refresh()
 	_assert_step(game, FALLBACK_DAY_SEVEN_NEXT, "select", FALLBACK_DAY_SEVEN_HELP)
 	game.player_orders.refresh()
 	_assert_equal(game.active_tool, "cancel", "Day-7 refresh preserves cancellation tool")
@@ -414,6 +420,9 @@ func _test_fallback_other_kinds_and_order() -> void:
 	core.delivered = 0
 	game.food_system.salvage = 0
 	game.power_grid.recalculate(game.buildings)
+	game.player_orders.refresh()
+	game.day_cycle.elapsed_seconds += 3.0
+	game.player_orders.refresh()
 	_assert_step(game, FALLBACK_DAY_SEVEN_NEXT, "select", FALLBACK_DAY_SEVEN_HELP)
 	_dispose(game)
 

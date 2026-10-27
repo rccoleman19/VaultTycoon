@@ -1,7 +1,7 @@
 extends "res://tests/test_runner.gd"
 
 # All fixtures use the real level-05 wing, real completed fixtures and hatch
-# sealing, but no elapsed simulation. New step fields are read with get(), so
+# sealing, with clock-only advances to qualify sustained idle. Step fields use get(), so
 # the exact same file can run against b70444f2 as a regression control.
 const AIR_CELL := Vector2i(25, 12)
 const RECLAIM_HELP := "Reclamation: +18 salvage now, +18 every 30 s, 6 times"
@@ -68,7 +68,18 @@ func _air_funding_wing() -> VaultGame:
 	return game
 
 
+func _sustain_idle(game: VaultGame) -> void:
+	# Observe the current state, then keep it unchanged for the full idle window.
+	game.player_orders.refresh()
+	if game.keep_running:
+		game.keep_running_seconds += 3.0
+	else:
+		game.day_cycle.elapsed_seconds += 3.0
+	game.player_orders.refresh()
+
+
 func _next_step(game: VaultGame) -> Dictionary:
+	_sustain_idle(game)
 	return game.player_orders._primary_next_step()
 
 
@@ -164,7 +175,10 @@ func _test_reclamation_lead() -> void:
 	game.reclaim_active = false
 	game.player_orders.alert_label.text = ""
 	step = _next_step(game)
-	_assert_reclaim(step, "Next: YOU begin reclamation · +18 · THEY fund the Bunk", "T1 idle crew plus real rest crisis reclaim even though existing bunks cover placement")
+	_assert_equal(str(step.get("text", "")), "Next: YOU spend 8: build Rec Console · THEY craft", "T1 affordable covered rest crisis directs idle crew to the useful Rec sink")
+	_assert_equal(str(step.get("tool", "")), "select", "T1 affordable covered rest crisis keeps Select")
+	_assert_equal(str(step.get("action", "")), "spend", "T1 affordable covered rest crisis exposes the actionable spend")
+	_assert_equal(str(step.get("help", "")), "Place a Rec Console blueprint on free floor. Keep Haul + Craft above OFF so crew supply and build it.", "T1 affordable covered rest crisis explains the selected Rec build")
 	for resident: VaultResident in game.residents:
 		resident.state = "Preparing meals"
 	step = _next_step(game)
@@ -280,6 +294,7 @@ func _test_spend_nudge() -> void:
 
 	game = _nudge_wing(8)
 	game.keep_running = true
+	_sustain_idle(game)
 	step = game.player_orders.keep_running_next_step()
 	_assert_equal(str(step.get("text", "")), "Next: YOU spend 8: build Rec Console · THEY craft", "T3 keep-running comfort/default routing preserves actionable spend advice")
 	_assert_equal(str(step.get("action", "")), "spend", "T3 keep-running preserves the structured spend action")

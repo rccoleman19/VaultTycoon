@@ -45,7 +45,14 @@ func _fund_help(short: int) -> String:
 	return "The Air Recycler blueprint is %d salvage short. Each dug rock tile yields 3 salvage once hauled." % short
 
 
+func _sustain_idle(game: VaultGame) -> void:
+	game.player_orders.refresh()
+	game.day_cycle.elapsed_seconds += 3.0
+	game.player_orders.refresh()
+
+
 func _assert_step(game: VaultGame, text: String, tool: String, help: String) -> void:
+	_sustain_idle(game)
 	var step: Dictionary = game.player_orders._primary_next_step()
 	_assert_equal(step["text"], text, "recommendation text")
 	_assert_equal(step["tool"], tool, "recommendation tool")

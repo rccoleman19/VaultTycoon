@@ -10,8 +10,10 @@ const ENABLE_HAUL := "Next: Ari starving · YOU enable Haul · THEY deliver food
 const ENABLE_TRAY := "Next: Ari starving · YOU enable a Grow Tray · THEY grow"
 const TOO_LATE := "Next: Ari starving · nothing lands in time · keep crew fed where possible"
 const PLACE_TRAY_CALM := "Next: YOU place Grow Tray · THEY haul output"
-const RECLAIM_AIR := "Next: YOU begin reclamation · +18 · THEY fund the Air Recycler"
-const RECLAIM_TRAY := "Next: YOU begin reclamation · +18 · THEY fund the Grow Tray"
+const ANNEX_NEXT := "Next: YOU set the meal reserve · THEY build the Annex"
+const STABLE_NEXT := "Next: YOU enjoy a stable vault · THEY run all of it"
+const COMFORT_NEXT := "Next: YOU tap comfort · THEY build Rec + Med"
+const OPENING_DIG_NEXT := "Next: YOU mark rock [E] · THEY dig on Dig defaults"
 
 
 func _run() -> void:
@@ -351,7 +353,7 @@ func _test_calm_no_tray() -> void:
 	_add_completed_building(game, VaultBuilding.Kind.BED, game._annex_free_cells(1)[0])
 	_add_completed_building(game, VaultBuilding.Kind.BED, game._annex_free_cells(1)[0])
 	game.power_grid.recalculate(game.buildings)
-	_assert_food_next(game, RECLAIM_TRAY, false, "calm, no Grow Tray, reclamation available")
+	_assert_food_next(game, PLACE_TRAY_CALM, false, "calm, no Grow Tray, its cost already covered")
 	_assert_true(game.start_reclamation(), "player starts reclamation for the missing Grow Tray")
 	_assert_food_next(game, PLACE_TRAY_CALM, false, "calm, no Grow Tray")
 	_dispose(game)
@@ -391,7 +393,7 @@ func _test_recovery() -> void:
 		_set_work(game, "cook", 3)
 		_calm(game)
 		game.food_system.meals = 20
-		_assert_equal(_next(game), RECLAIM_AIR, "fed again, idle crew without ready Air lead with reclamation (%s)" % _label(open))
+		_assert_equal(_next(game), STABLE_NEXT if open else ANNEX_NEXT, "fed again, affordable Air needs no reclamation (%s)" % _label(open))
 		_assert_true(game.start_reclamation(), "follow reclamation before the keep-running default (%s)" % _label(open))
 		var expected := PlayerOrders.ANNEX_TEXT.stable_next if open else PlayerOrders.ANNEX_TEXT.next
 		_assert_equal(_next(game), expected, "fed again, the %s Next returns" % ("stable" if open else "Annex"))
@@ -404,9 +406,9 @@ func _test_beats_latch() -> void:
 		if bed.kind == VaultBuilding.Kind.MEDICAL_BED:
 			game.deconstruct_building(bed.building_id)
 	# With no Med Bed at all the comfort card leads (Rec-45); an unfinished Med Bed blueprint keeps
-	# comfort satisfied, so the plain Med Bed suggestion latches. Reclamation leads first while
-	# the idle fixture lacks ready Air; consume that player action before checking comfort.
-	_assert_equal(_next(game), RECLAIM_AIR, "reclamation leads before the comfort card without ready Air")
+	# comfort satisfied, so the plain Med Bed suggestion latches. Affordable Air needs
+	# no reclamation lead; the comfort card owns this fixture before the player acts.
+	_assert_equal(_next(game), COMFORT_NEXT, "affordable Air preserves the comfort card guidance")
 	_assert_true(game.start_reclamation(), "player begins reclamation before the comfort-card check")
 	_assert_equal(_next(game), str(PlayerOrders.COMFORT_TEXT.next), "no Med Bed: Next points at the comfort card")
 	_starve(game)
@@ -442,8 +444,8 @@ func _test_opening_gives_way() -> void:
 	for open: bool in [false, true]:
 		var game := _vault(open)
 		var primary: Dictionary = game.player_orders._primary_next_step()
-		_assert_equal(str(primary.text), RECLAIM_AIR, "idle opening fixture without ready Air leads with reclamation (%s)" % _label(open))
-		_assert_equal(_next(game), RECLAIM_AIR, "reclamation leads before the keep-running default (%s)" % _label(open))
+		_assert_equal(str(primary.text), OPENING_DIG_NEXT, "affordable Air keeps the underlying opening dig instruction (%s)" % _label(open))
+		_assert_equal(_next(game), STABLE_NEXT if open else ANNEX_NEXT, "affordable Air preserves the keep-running default (%s)" % _label(open))
 		_assert_true(game.start_reclamation(), "player starts reclamation before checking opening-step precedence (%s)" % _label(open))
 		primary = game.player_orders._primary_next_step()
 		_assert_true(str(primary.text).begins_with("Next: YOU mark rock"), "the fixture's diagnosis is the opening dig (%s): %s" % [_label(open), primary.text])
