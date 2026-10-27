@@ -469,9 +469,30 @@ func _assert_no_starving(game: VaultGame, message: String) -> void:
 	var urgent: Dictionary = game.player_orders._resident_urgency_step()
 	var next := _next(game)
 	_assert_false("starving" in str(urgent.get("text", "")).to_lower(), message + " has no starving urgency")
-	_assert_true(str(urgent.get("cause", "")) != "food", message + " has no forecast food cause")
 	_assert_false("starving" in str(next.get("text", "")).to_lower(), message + " has no starving Next")
-	_assert_true(str(next.get("cause", "")) != "food", message + " leaves Next without food danger metadata")
+	_assert_equal(_sticky_id(game), -1, message + " names nobody")
+
+
+# The food steps stay on the forecast; only the NAME waits for a real runway.
+func _assert_unnamed_food(game: VaultGame, message: String) -> void:
+	_assert_no_starving(game, message)
+	var urgent: Dictionary = game.player_orders._resident_urgency_step()
+	var text := str(urgent.get("text", ""))
+	_assert_true(text.begins_with("Next: food runway short · YOU "), message + " shows the unnamed food step: " + text)
+	_assert_equal(str(urgent.get("cause", "")), "food", message + " keeps the food cause")
+	_assert_true(bool(urgent.get("urgent", false)), message + " keeps the food urgency")
+	_assert_true(bool(urgent.get("food_unnamed", false)), message + " flags the step unnamed")
+	_assert_true(int(urgent.get("resident_id", -1)) >= 0, message + " keeps a resident id for urgency handling")
+	var next_text := str(_next(game).get("text", ""))
+	_assert_true(next_text.begins_with("Next: food runway short · YOU "), message + " reaches the public Next unnamed: " + next_text)
+
+
+func _assert_no_food_cause(game: VaultGame, message: String) -> void:
+	game.player_orders.refresh()
+	_assert_false("starving" in str(game.player_orders._resident_urgency_step().get("text", "")), message + " shows no starving label in the urgent step")
+	_assert_false("starving" in _text(game), message + " shows no starving label in Next")
+	_assert_true(str(game.player_orders._resident_urgency_step().get("cause", "")) != "food", message + " has no forecast food cause")
+	_assert_true(str(_next(game).get("cause", "")) != "food", message + " leaves Next without food danger metadata")
 
 
 func _assert_starving_name(game: VaultGame, resident: VaultResident, message: String) -> Dictionary:
@@ -504,13 +525,21 @@ func _test_starving_runway() -> void:
 	_assert_equal(_orders_const(game, "STARVING_RUNWAY_S"), 60.0, "D1 starving uses the named 60-second runway constant")
 	_assert_equal(_orders_const(game, "STARVING_SWITCH_S"), 10.0, "D1 sticky selection uses the named ten-second switch constant")
 	var checkpoints := [[2.4, 30], [4.7, 17], [9.4, 8]]
+	# Full pantry: no forecast at all, so Next shows no food cause and no name.
 	for checkpoint: Array in checkpoints:
 		game.day_cycle.elapsed_seconds = float(checkpoint[0])
 		game.food_system.salvage = int(checkpoint[1])
 		_assert_equal(game.food_system.meals, 12, "D1 lead jitter keeps all twelve stored meals")
+		_assert_no_food_cause(game, "D1 %.1fs salvage %d full pantry" % [checkpoint[0], checkpoint[1]])
+	# Three stored meals: the forecast fires while every resident is still fed.
+	# The food steps stay (unnamed) at every lead value; nobody is named.
+	game.food_system.meals = 3
+	for checkpoint: Array in checkpoints:
+		game.day_cycle.elapsed_seconds = float(checkpoint[0])
+		game.food_system.salvage = int(checkpoint[1])
 		for resident: VaultResident in game.residents:
 			_assert_true(resident.needs.food >= 65.0 and resident.needs.food <= 86.0 and _food_death(game, resident) >= 60.0, "D1 %.1fs keeps %s fed and above the runway threshold" % [checkpoint[0], resident.resident_name])
-		_assert_no_starving(game, "D1 %.1fs salvage %d lead jitter" % [checkpoint[0], checkpoint[1]])
+		_assert_unnamed_food(game, "D1 %.1fs salvage %d lead jitter" % [checkpoint[0], checkpoint[1]])
 	game.food_system.meals = 3
 	var ari: VaultResident = game.residents[0]
 	ari.drafted = true
@@ -521,7 +550,7 @@ func _test_starving_runway() -> void:
 		var lead: float = float(plan.seconds) + game.player_orders._food_chain_work_lead(float(plan.seconds))
 		_assert_true(game.player_orders._food_runway_seconds() < lead + game.player_orders.FOOD_RUNWAY_MARGIN_SECONDS, "D1 %.1f-second boundary retains forecast food danger" % seconds)
 		if seconds >= 60.0:
-			_assert_no_starving(game, "D1 %.1f-second boundary" % seconds)
+			_assert_unnamed_food(game, "D1 %.1f-second boundary" % seconds)
 		else:
 			_assert_starving_name(game, ari, "D1 59-second boundary")
 	game.food_system.meals = 100
@@ -529,7 +558,7 @@ func _test_starving_runway() -> void:
 	var calm_lead: float = float(calm_plan.seconds) + game.player_orders._food_chain_work_lead(float(calm_plan.seconds))
 	_assert_true(_food_death(game, ari) < 60.0 and ari.needs.food > 20.0, "D1 stocked-pantry conjunction fixture retains a short personal runway without real-hunger relabeling")
 	_assert_false(game.player_orders._food_runway_seconds() < calm_lead + game.player_orders.FOOD_RUNWAY_MARGIN_SECONDS, "D1 stocked pantry removes forecast food danger")
-	_assert_no_starving(game, "D1 personal runway below sixty without forecast danger")
+	_assert_no_food_cause(game, "D1 personal runway below sixty without forecast danger")
 	# A food forecast without anyone below sixty must still yield to a real
 	# non-food emergency through the existing threatened-resident branch.
 	ari.drafted = false
@@ -556,7 +585,8 @@ func _test_starving_runway() -> void:
 
 func _test_starving_sticky_name() -> void:
 	var game := _starving_opening()
-	_assert_no_starving(game, "D2 every resident starts above the threshold")
+	game.food_system.meals = 3
+	_assert_unnamed_food(game, "D2 every resident starts above the threshold")
 	_assert_equal(_sticky_id(game), -1, "D2 healthy crew names nobody")
 	game.food_system.meals = 0
 	var ari: VaultResident = game.residents[0]
@@ -639,10 +669,11 @@ func _test_starving_opening_jitter() -> void:
 	for level: int in [3, 5]:
 		var game := _starving_opening(level)
 		_assert_equal(game.residents.size(), 5 if level == 3 else 4, "D4 %02d opening uses its real crew count" % level)
+		game.food_system.meals = 3
 		for salvage: int in [30, 17, 8, 20, 30, 8, 17, 20]:
 			game.food_system.salvage = salvage
 			_advance_clock(game, 0.7)
-			_assert_equal(game.food_system.meals, 12, "D4 %02d lead jitter leaves pantry stock constant" % level)
-			_assert_no_starving(game, "D4 %02d opening salvage %d" % [level, salvage])
+			_assert_equal(game.food_system.meals, 3, "D4 %02d lead jitter leaves pantry stock constant" % level)
+			_assert_unnamed_food(game, "D4 %02d opening salvage %d" % [level, salvage])
 			_assert_equal(_sticky_id(game), -1, "D4 %02d opening never retains a forecast resident name" % level)
 		_dispose(game)

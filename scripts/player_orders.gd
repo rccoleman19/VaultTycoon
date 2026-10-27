@@ -1750,6 +1750,7 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 			soonest = seconds
 	if sticky_resident != null and named_death > sticky_food_death - STARVING_SWITCH_S:
 		named_resident = sticky_resident
+		named_death = sticky_food_death
 	_starving_resident_id = named_resident.resident_id if named_resident != null else -1
 	# Pantry runway governs the crop cutoff. A produced-food rescue must also
 	# reach the named resident before their own starvation health runs out,
@@ -1848,7 +1849,8 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 	step["urgent"] = true
 	step["resident_id"] = threatened.resident_id
 	step["cause"] = cause
-	step["death_seconds"] = soonest
+	# A named step reports that resident's own deadline.
+	step["death_seconds"] = named_death if cause == "food" and named_resident != null else soonest
 	return step
 
 
