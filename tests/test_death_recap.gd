@@ -5,6 +5,47 @@ extends "res://tests/test_runner.gd"
 const FRAME_SECONDS := 1.0 / 30.0
 const FRAME_CAP := 9000
 
+# Observe the real selector/sampler, independently of what the recap retains.
+# Tick observations include the final pre-damage selection even when the
+# half-second retention cadence skips that particular simulation tick.
+class SamplingOrders extends PlayerOrders:
+	var first_actionable := {}
+	var sampled_steps: Array[Dictionary] = []
+	var tick_steps: Array[Dictionary] = []
+
+	func clear_survival_tips() -> void:
+		first_actionable.clear()
+		sampled_steps.clear()
+		tick_steps.clear()
+		super.clear_survival_tips()
+
+	func record_survival_tip(delta_seconds := 0.5) -> void:
+		if game.outcome == "" and not game.ended:
+			var step := keep_running_next_step() if game.keep_running else _primary_next_step()
+			tick_steps.append(_observation(step))
+		super.record_survival_tip(delta_seconds)
+
+	func _remember_survival_tip(step: Dictionary) -> void:
+		if game.outcome == "" and not game.ended:
+			var observation := _observation(step)
+			sampled_steps.append(observation)
+			var resident := game.get_resident_by_id(int(step.get("resident_id", -1)))
+			var text := str(step.get("text", ""))
+			if resident != null and resident.alive and not bool(step.get("too_late", false)) and not bool(step.get("recovering", false)) and text.begins_with("Next: ") and resident.resident_name in text:
+				if not first_actionable.has(resident.resident_id):
+					first_actionable[resident.resident_id] = observation
+		super._remember_survival_tip(step)
+
+	func _observation(step: Dictionary) -> Dictionary:
+		return {
+			"text": str(step.get("text", "")),
+			"resident_id": int(step.get("resident_id", -1)),
+			"cause": str(step.get("cause", "")),
+			"too_late": bool(step.get("too_late", false)),
+			"recovering": bool(step.get("recovering", false)),
+			"seconds": game.keep_running_seconds if game.keep_running else game.day_cycle.elapsed_seconds,
+		}
+
 var _paths: Array[String] = []
 var _frame := 0
 var _breach_seen_frame := -1
@@ -22,11 +63,15 @@ func _run() -> void:
 	_case("b", _test_retry_exact_checkpoint)
 	_case("c", _test_player_slot_isolation)
 	_case("d", _test_cap_and_resume_are_not_wins)
-	_case("e", _test_last_actionable_tip)
+	_case("e", _test_first_actionable_tip)
 	_case("f", _test_loss_and_death_save_load)
 	_case("g", _test_keep_running_day_checkpoints)
 	_case("h", _test_real_death_clock)
 	_case("i", _test_mid_tick_death_clock)
+	_case("j", _test_earlier_tip_and_reload)
+	_case("k", _test_real_first_tip)
+	_case("l", _test_fatal_tick_tip_is_not_saving)
+	_case("m", _test_tip_cause_and_resets)
 	for path: String in _paths:
 		_remove_test_save(path)
 	print("DEATH RECAP TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
@@ -51,7 +96,7 @@ func _path(label: String) -> String:
 	return path
 
 
-func _game(sublevel := 3, relay := false, tutorial := false) -> VaultGame:
+func _game(sublevel := 3, relay := false, tutorial := false, observe_tips := false) -> VaultGame:
 	_player_path = _path("save")
 	_checkpoint_path = _path("checkpoint")
 	_records_path = _path("records")
@@ -61,6 +106,8 @@ func _game(sublevel := 3, relay := false, tutorial := false) -> VaultGame:
 		store.path = _records_path
 		_assert_true(store.record(0x0B01, true, 3, 9, 7, true), "earned record unlocks RELAY LUMEN")
 	var game := MAIN_SCENE.instantiate() as VaultGame
+	if observe_tips:
+		game.get_node("PlayerOrders").set_script(SamplingOrders)
 	game.records_path = _records_path
 	if "save_path" in game:
 		game.set("save_path", _autosave_path)
@@ -120,7 +167,7 @@ func _assert_recap(game: VaultGame) -> void:
 	var orders := game.player_orders
 	_assert_true(orders.outcome_panel.visible, "death recap panel is visible")
 	var recap := _recap(game)
-	_assert_true(not recap.is_empty(), "death records resident, cause, simulation time and last tip")
+	_assert_true(not recap.is_empty(), "death records resident, cause, simulation time and first saving tip")
 	var dead := game.get_resident_by_id(int(recap.get("resident_id", -1)))
 	if dead == null:
 		dead = _first_dead(game)
@@ -131,7 +178,8 @@ func _assert_recap(game: VaultGame) -> void:
 	var clock := str(recap.get("time", ""))
 	_assert_true("DAY " in clock and ":" in clock and clock in body, "recap displays the HUD-style day and clock")
 	var tip := str(recap.get("tip", ""))
-	_assert_true((tip.begins_with("Next: ") and tip in body) or ("no tip" in body.to_lower() and "saved" in body.to_lower()), "recap shows one recorded Next tip or plainly says no tip could save them")
+	var saving_line := "This would have saved %s: %s" % [str(recap.get("name", "")), tip.trim_prefix("Next: ")]
+	_assert_true((tip.begins_with("Next: ") and saving_line in body) or (tip.is_empty() and "No tip could have saved them." in body), "recap explains the first saving tip or plainly says no tip could save them")
 	_assert_false("nothing lands in time" in tip, "too_late is never recorded as an actionable tip")
 	var resume := _button(orders, "outcome_resume_button")
 	var can_resume := game.get_alive_count() > 0 and game.outcome == "death"
@@ -268,7 +316,7 @@ func _test_cap_and_resume_are_not_wins() -> void:
 	_dispose(game)
 
 
-func _test_last_actionable_tip() -> void:
+func _test_first_actionable_tip() -> void:
 	var game := _game()
 	game.begin_shift()
 	# An available kitchen makes the fixture exercise the existing rescue
@@ -292,8 +340,8 @@ func _test_last_actionable_tip() -> void:
 	game.step_simulation(VaultGame.SIMULATION_TICK)
 	_assert_true(game.player_orders.has_method("death_recap_for"), "headless sampling can retrieve a resident's saved live Next tip")
 	if game.player_orders.has_method("death_recap_for"):
-		var sampled: Dictionary = game.player_orders.call("death_recap_for", target)
-		_assert_equal(str(sampled.get("tip", "")), str(live_step.get("text", "")), "simulation sampling retains the exact actionable tip without UI refresh")
+		var sampled: Dictionary = game.player_orders.get("_survival_tips")
+		_assert_equal(str(sampled.get(target.resident_id, "")), str(live_step.get("text", "")), "simulation sampling retains the exact actionable tip without UI refresh")
 	game.player_orders.refresh()
 	var next: String = game.player_orders.objective_label.text
 	_assert_true(next.begins_with("Next: ") and target.resident_name in next and "undraft" in next, "live Next names the drafted starving resident and a real rescue action")
@@ -313,8 +361,175 @@ func _test_last_actionable_tip() -> void:
 	if game.player_orders.has_method("record_survival_tip"):
 		game.player_orders.call("record_survival_tip")
 	_force_starvation(game, target)
-	_assert_equal(str(_recap(game).get("tip", "")), next, "recap preserves the last actionable exact Next label for the dead resident")
-	_assert_true(next in game.player_orders.outcome_text.text, "recap displays that exact recorded live Next string")
+	_assert_equal(str(_recap(game).get("tip", "")), str(live_step.get("text", "")), "recap preserves the earliest actionable exact Next label for the dead resident")
+	_assert_true(_saving_line(target, str(live_step.get("text", ""))) in game.player_orders.outcome_text.text, "recap identifies the earliest live Next action as what would have saved the resident")
+	_dispose(game)
+
+
+func _saving_line(resident: VaultResident, tip: String) -> String:
+	return "This would have saved %s: %s" % [resident.resident_name, tip.trim_prefix("Next: ")]
+
+
+func _saving_tip_fixture(game: VaultGame) -> Dictionary:
+	var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(21, 17))
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(25, 16))
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(kitchen.powered, "saving-tip fixture starts with a powered kitchen")
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.mood = 100.0
+	var target: VaultResident = game.residents[0]
+	target.needs.food = 0.0
+	target.drafted = true
+	game.food_system.meals = 0
+	game.food_system.raw_food = FoodSystem.COOK_INPUT
+	return {"target": target, "kitchen": kitchen}
+
+
+func _assert_tip_round_trip(game: VaultGame) -> void:
+	var recap := _recap(game).duplicate(true)
+	var body := game.player_orders.outcome_text.text
+	_assert_true(game.save_game(false, _player_path), "saving-tip death snapshot saves through SaveLoad")
+	game.new_game(false, 4242, game.sublevel)
+	_assert_true(game.load_game(_player_path), "saving-tip death snapshot loads through SaveLoad")
+	game.player_orders.refresh()
+	_assert_equal(_recap(game).get("tip", "missing"), recap.get("tip", ""), "Load preserves the raw earliest saving tip")
+	_assert_equal(game.player_orders.outcome_text.text, body, "Load preserves the complete saving-tip recap text")
+
+
+func _test_earlier_tip_and_reload() -> void:
+	var game := _game(3, false, false, true)
+	game.begin_shift()
+	var fixture := _saving_tip_fixture(game)
+	var target: VaultResident = fixture.target
+	var kitchen: VaultBuilding = fixture.kitchen
+	var observer := game.player_orders as SamplingOrders
+	# No HUD refresh: the real pre-damage sampler must retain the first tip.
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	var first: Dictionary = observer.first_actionable.get(target.resident_id, {})
+	var earlier := str(first.get("text", ""))
+	_assert_true(earlier.begins_with("Next: ") and target.resident_name in earlier and "undraft" in earlier, "first real sample names the resident and the available food rescue")
+	_assert_equal(first.get("cause", ""), "food", "first saving tip is the food-runway warning")
+	# The same resident now needs a different food intervention. Sampling it
+	# must not erase the first warning while there was still time to rescue.
+	target.drafted = false
+	kitchen.manually_disabled = true
+	game.power_grid.recalculate(game.buildings)
+	var later_step := game.player_orders._primary_next_step()
+	var later := str(later_step.get("text", ""))
+	_assert_true(later.begins_with("Next: ") and later != earlier and target.resident_name in later, "changed situation has a different named live Next tip")
+	_assert_true(not bool(later_step.get("too_late", false)) and not bool(later_step.get("recovering", false)), "later tip is still actionable")
+	_assert_equal(later_step.get("cause", ""), "food", "both tips concern the eventual starvation cause")
+	game.step_simulation(1.0)
+	var later_was_sampled := false
+	for sample: Dictionary in observer.sampled_steps:
+		if str(sample.text) == later:
+			later_was_sampled = true
+	_assert_true(later_was_sampled, "real simulation cadence samples the distinct later actionable tip")
+	_force_starvation(game, target)
+	_assert_equal(game.outcome, "death", "earlier-tip fixture ends in a real resident death")
+	_assert_equal(_recap(game).get("tip", ""), earlier, "recap retains the earliest raw Next string instead of the later actionable sample")
+	var body := game.player_orders.outcome_text.text
+	_assert_true(_saving_line(target, earlier) in body, "panel says This would have saved the named resident with the earliest action")
+	_assert_false(later in body or later.trim_prefix("Next: ") in body, "panel excludes the later actionable tip")
+	_assert_false("Next: " in body, "saving-tip panel strips the live label's Next prefix")
+	_assert_tip_round_trip(game)
+	_dispose(game)
+
+
+func _test_real_first_tip() -> void:
+	# The unmodified a03 player replay: no needs, clock, health or damage edits.
+	var game := _game(3, true, true, true)
+	var observer := game.player_orders as SamplingOrders
+	for frame in range(1, FRAME_CAP + 1):
+		_frame = frame
+		_engaged(game)
+		_advance_frame(game)
+		if game.outcome != "":
+			break
+	_assert_equal(game.outcome, "death", "real saving-tip replay reaches death before the frame cap")
+	var target := _first_dead(game)
+	_assert_true(target != null, "real saving-tip replay has a dead resident")
+	if target == null:
+		_dispose(game)
+		return
+	# Evidence comes from the wrapper at sampling time, never from the recap.
+	var first: Dictionary = observer.first_actionable.get(target.resident_id, {})
+	var earlier := str(first.get("text", ""))
+	_assert_true(earlier.begins_with("Next: ") and target.resident_name in earlier, "observer captured the dead resident's first-ever actionable live tip")
+	_assert_true(not observer.tick_steps.is_empty(), "observer captured real pre-damage tick selections")
+	var final: Dictionary = observer.tick_steps.back() if not observer.tick_steps.is_empty() else {}
+	_assert_approximately(float(final.get("seconds", -1.0)), game.day_cycle.elapsed_seconds, 0.000001, "final observed selection belongs to the fatal tick")
+	_assert_true(float(first.get("seconds", INF)) < float(final.get("seconds", -1.0)), "first-ever saving tip predates the fatal tick")
+	_assert_true(earlier != str(final.get("text", "")), "first-ever saving tip differs from the final tick's live selection")
+	_assert_equal(_recap(game).get("tip", ""), earlier, "real-play recap retains the independently observed first-ever tip")
+	_assert_true(_saving_line(target, earlier) in game.player_orders.outcome_text.text, "real-play panel explains which first warning would have saved the resident")
+	_assert_true(str(_recap(game).get("tip", "")) != str(final.get("text", "")), "real-play recap never uses the fatal tick's tip")
+	print("[SAVING TIP REAL] first=%.1fs %s / death=%.1fs %s" % [float(first.get("seconds", -1.0)), earlier, float(final.get("seconds", -1.0)), str(final.get("text", ""))])
+	_assert_tip_round_trip(game)
+	_dispose(game)
+
+
+func _test_fatal_tick_tip_is_not_saving() -> void:
+	var game := _game(3, false, false, true)
+	game.begin_shift()
+	var observer := game.player_orders as SamplingOrders
+	_assert_true(observer.first_actionable.is_empty(), "no actionable tip has been shown before the fatal-tick fixture")
+	var fixture := _saving_tip_fixture(game)
+	var target: VaultResident = fixture.target
+	game.job_system.release_resident(target)
+	target.drafted = true
+	target.needs.food = 0.0
+	target.needs.rest = 100.0
+	target.needs.mood = 100.0
+	target.needs.health = 0.1
+	# Do not refresh the HUD: first sampling happens in this actual death tick.
+	game._simulation_step(VaultGame.SIMULATION_TICK)
+	_assert_equal(game.outcome, "death", "fatal-tick fixture dies inside advance_needs")
+	var first: Dictionary = observer.first_actionable.get(target.resident_id, {})
+	_assert_true(str(first.get("text", "")).begins_with("Next: ") and "undraft" in str(first.get("text", "")), "real fatal-tick sampler encounters an otherwise actionable named tip")
+	_assert_approximately(float(first.get("seconds", -1.0)), game.day_cycle.elapsed_seconds, 0.000001, "first actionable sample occurs at the frozen death time")
+	_assert_equal(_recap(game).get("tip", "missing"), "", "a tip first sampled on the death tick is excluded from the recap")
+	_assert_true("No tip could have saved them." in game.player_orders.outcome_text.text, "death without an earlier actionable tip shows the existing no-tip line")
+	_assert_false("This would have saved" in game.player_orders.outcome_text.text, "fatal-tick-only tip never claims it could save the resident")
+	_assert_false(str(first.get("text", "missing")) in game.player_orders.outcome_text.text, "fatal-tick live tip is absent from the panel")
+	_assert_tip_round_trip(game)
+	_dispose(game)
+
+
+func _test_tip_cause_and_resets() -> void:
+	var game := _game(3, false, false, true)
+	game.begin_shift()
+	var clean := game.create_snapshot()
+	var fixture := _saving_tip_fixture(game)
+	var target: VaultResident = fixture.target
+	var observer := game.player_orders as SamplingOrders
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	var first: Dictionary = observer.first_actionable.get(target.resident_id, {})
+	_assert_equal(first.get("cause", ""), "food", "cause-matching fixture first records a hunger warning")
+	target.needs.food = 100.0
+	target.needs.rest = 0.0
+	target.needs.mood = 100.0
+	target.needs.health = 0.01
+	target.advance_needs(VaultGame.SIMULATION_TICK / DayCycle.SECONDS_PER_DAY, true, false)
+	_assert_equal(_recap(game).get("cause", ""), "exhaustion", "a different threat actually kills the warned resident")
+	_assert_equal(_recap(game).get("tip", "missing"), "", "a hunger tip is not offered as a rescue for exhaustion")
+	_assert_true("No tip could have saved them." in game.player_orders.outcome_text.text, "unrelated earliest warning uses the no-tip line")
+	_assert_false("This would have saved" in game.player_orders.outcome_text.text, "unrelated warning never claims it would save this death")
+	game.new_game(false, 4242, 3)
+	game.begin_shift()
+	_force_starvation(game, game.residents[0])
+	_assert_equal(_recap(game).get("tip", "missing"), "", "new_game clears the prior resident's earliest warning")
+	_assert_true(game.apply_snapshot(clean), "live snapshot restores through the normal load path")
+	fixture = _saving_tip_fixture(game)
+	target = fixture.target
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	_assert_true(observer.first_actionable.has(target.resident_id), "load-clear fixture records another real warning")
+	_assert_true(game.apply_snapshot(clean), "applying a live snapshot clears warning history again")
+	_force_starvation(game, game.residents[0])
+	_assert_equal(_recap(game).get("tip", "missing"), "", "apply_snapshot clears prior earliest warning and its metadata")
+	_assert_true("No tip could have saved them." in game.player_orders.outcome_text.text, "restored live game cannot inherit another timeline's saving tip")
 	_dispose(game)
 
 

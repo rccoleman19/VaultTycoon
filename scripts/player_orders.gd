@@ -104,7 +104,10 @@ var _outcome_backdrop: ColorRect
 var _outcome_legacy_row: HBoxContainer
 var _outcome_recap_row: HBoxContainer
 var _survival_tips := {}
+var _survival_tip_details := {}
 var _survival_tip_sample_left := 0.0
+var _survival_tip_tick := 0
+var _sampling_survival_tip := false
 var work_priorities_overlay: Control
 var work_priorities_panel: PanelContainer
 var work_priorities_button: Button
@@ -3277,7 +3280,10 @@ func _reveal_fixture_controls() -> void:
 
 func clear_survival_tips() -> void:
 	_survival_tips.clear()
+	_survival_tip_details.clear()
 	_survival_tip_sample_left = 0.0
+	_survival_tip_tick = 0
+	_sampling_survival_tip = false
 
 
 # Sample the very same selection used by the Next label, even without a HUD
@@ -3285,11 +3291,14 @@ func clear_survival_tips() -> void:
 func record_survival_tip(delta_seconds := 0.5) -> void:
 	if game.outcome != "" or game.ended:
 		return
+	_survival_tip_tick += 1
 	_survival_tip_sample_left -= maxf(0.0, delta_seconds)
 	if _survival_tip_sample_left > 0.0:
 		return
 	_survival_tip_sample_left = 0.5
+	_sampling_survival_tip = true
 	_remember_survival_tip(keep_running_next_step() if game.keep_running else _primary_next_step())
+	_sampling_survival_tip = false
 
 
 func _remember_survival_tip(step: Dictionary) -> void:
@@ -3297,8 +3306,37 @@ func _remember_survival_tip(step: Dictionary) -> void:
 		return
 	var resident := game.get_resident_by_id(int(step.get("resident_id", -1)))
 	var tip := str(step.get("text", ""))
-	if resident != null and resident.alive and tip.begins_with("Next: ") and resident.resident_name in tip:
+	if resident != null and resident.alive and tip.begins_with("Next: ") and resident.resident_name in tip and not _survival_tips.has(resident.resident_id):
+		# Retain the first saving opportunity, before later symptoms narrow the
+		# advice to an action that may no longer have enough time to work.
 		_survival_tips[resident.resident_id] = tip
+		_survival_tip_details[resident.resident_id] = {
+			"cause": str(step.get("cause", step.get("kind", ""))),
+			"elapsed_seconds": _survival_tip_sim_time(),
+			# A newly shown UI tip belongs to the upcoming simulation tick.
+			"tick": _survival_tip_tick if _sampling_survival_tip else _survival_tip_tick + 1,
+		}
+
+
+func _survival_tip_sim_time() -> float:
+	return game.day_cycle.elapsed_seconds + (game.keep_running_seconds if game.keep_running else 0.0)
+
+
+func _saving_tip_for(resident: VaultResident) -> String:
+	var first: Dictionary = _survival_tip_details.get(resident.resident_id, {})
+	if first.is_empty():
+		return ""
+	# Damage and the death signal run before this tick advances the clock.
+	# Require an earlier sim time, including for tips first shown by a UI
+	# refresh. Only the capped Day 7 clock needs the simulation tick fallback.
+	if float(first.elapsed_seconds) >= _survival_tip_sim_time():
+		var clock_capped := game.day_cycle.completed and not game.keep_running
+		if not clock_capped or int(first.tick) >= _survival_tip_tick:
+			return ""
+	var cause: String = ["food", "rest", "mood", "air", ""][_resident_loss_cause(resident)]
+	if cause.is_empty() or str(first.cause) != cause:
+		return ""
+	return str(_survival_tips.get(resident.resident_id, ""))
 
 
 func death_recap_for(resident: VaultResident) -> Dictionary:
@@ -3315,7 +3353,7 @@ func death_recap_for(resident: VaultResident) -> Dictionary:
 		"cause": ["starvation", "exhaustion", "despair", "suffocation", "unknown causes"][_resident_loss_cause(resident)],
 		"time": clock,
 		"elapsed_seconds": game.keep_running_seconds if game.keep_running else game.day_cycle.elapsed_seconds,
-		"tip": str(_survival_tips.get(resident.resident_id, "")),
+		"tip": _saving_tip_for(resident),
 	}
 
 
@@ -3360,10 +3398,11 @@ func show_outcome(won: bool, survivors: int) -> void:
 					recap = death_recap_for(resident)
 		var prefix := "No residents remain alive.\n\n" if survivors <= 0 else ""
 		var tip := str(recap.get("tip", ""))
+		var saving_tip := "This would have saved %s: %s" % [recap.get("name", "A resident"), tip.trim_prefix("Next: ")] if not tip.is_empty() else "No tip could have saved them."
 		outcome_text.text = "%s%s died of %s.\n%s\n\n%s" % [
 			prefix, recap.get("name", "A resident"), recap.get("cause", "unknown causes"),
 			recap.get("time", game.day_cycle.get_clock_text()),
-			tip if not tip.is_empty() else "No tip could have saved them.",
+			saving_tip,
 		]
 	outcome_record.text = record_line(won)
 	outcome_record.visible = not resumable and not outcome_record.text.is_empty()
