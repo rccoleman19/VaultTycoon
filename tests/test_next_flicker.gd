@@ -25,6 +25,8 @@ func _run() -> void:
 	_run_case("D7 the food forecast holds without an on-off flip and releases on schedule", _test_forecast_hold)
 	_run_case("D8 a named death overrides the forecast hold", _test_forecast_named_override)
 	_run_case("D9 the unnamed prefix goes only on food-chain steps", _test_prefix_food_chain_only)
+	_run_case("D10 place 1 bunk, place 2 bunks and place bunks are one stable step", _test_bunk_text_stable)
+	_run_case("D11 the food-worker Rec blocker waits out the Next hold of a bunk step", _test_rec_blocker_hold)
 	print("NEXT FLICKER TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -802,4 +804,69 @@ func _test_prefix_food_chain_only() -> void:
 		for text: String in ["Next: YOU place a Rec Console · THEY recover mood", "Next: YOU leave Haul + Craft on · THEY finish the Rec Console", "Next: YOU acknowledge warning · then undraft crew [R]", "Next: YOU place Air Recycler · THEY craft it", "Next: YOU place bunks · THEY craft"]:
 			_assert_false(orders._is_food_chain_step({"text": text}), "D9 never prefixes: " + text)
 		_assert_false(orders._is_food_chain_step({"text": "Next: YOU place a Rec Console · THEY recover mood", "kind": "food", "tool": "rec"}), "D9 a food-kinded Rec blocker step is not a food-chain step")
+	_dispose(game)
+
+
+const BUNK_ONE := {"text": "Next: YOU place 1 bunk · THEY craft from Craft", "help": "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.", "tool": "bed"}
+const BUNK_TWO := {"text": "Next: YOU place 2 bunks · THEY craft from Craft", "help": "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.", "tool": "bed"}
+const BUNK_CRISIS := {"text": "Next: YOU place bunks · THEY craft", "help": "Place bunks so tired undrafted crew have a bed.", "tool": "bed"}
+const REC_BLOCKER := {"text": "Next: YOU place a Rec Console · THEY recover mood", "tool": "rec", "kind": "food", "urgent": true, "cause": "food", "resident_id": 1, "food_unnamed": true}
+const GENERATOR_STEP := {"text": "Next: YOU mark rock [E] · THEY dig on Dig defaults", "tool": "dig"}
+
+
+# Bare clock advance: refresh() would feed the live step through the presentation latch.
+func _tick(game: VaultGame, seconds: float) -> void:
+	game.day_cycle.elapsed_seconds += seconds
+
+
+func _test_bunk_text_stable() -> void:
+	var game := _nudge_wing()
+	game.player_orders.clear_survival_tips()
+	var first := str(_present(game, BUNK_TWO).get("text", ""))
+	_assert_equal(first, BUNK_TWO.text, "D10 the first bunk wording is shown as built")
+	for variant: Dictionary in [BUNK_ONE, BUNK_CRISIS, BUNK_TWO, BUNK_CRISIS, BUNK_ONE]:
+		_tick(game, 3.0)
+		var shown := _present(game, variant)
+		_assert_equal(str(shown.get("text", "")), BUNK_TWO.text, "D10 a count or tier change alone keeps the text (%s)" % variant.text)
+		_assert_equal(str(shown.get("help", "")), str(BUNK_TWO.help), "D10 the help stays with the held text")
+		_assert_equal(str(shown.get("tool", "")), "bed", "D10 the tool is unchanged")
+	# A different step kind ends the latch, and a later bunk step starts a fresh one.
+	_tick(game, 3.0)
+	_assert_equal(str(_present(game, GENERATOR_STEP).get("text", "")), GENERATOR_STEP.text, "D10 a different step kind is shown as built")
+	_tick(game, 3.0)
+	_assert_equal(str(_present(game, BUNK_ONE).get("text", "")), BUNK_ONE.text, "D10 after leaving the bunk step a new bunk step starts fresh")
+	# An urgent, named bunk step is a different step and is never rewritten.
+	var named := {"text": "Next: Ari exhausted · YOU place bunks · THEY craft", "tool": "bed", "urgent": true, "resident_id": 1}
+	_tick(game, 3.0)
+	_assert_equal(str(_present(game, named).get("text", "")), named.text, "D10 an urgent named bunk step keeps its own text")
+	_dispose(game)
+
+
+func _test_rec_blocker_hold() -> void:
+	var game := _nudge_wing()
+	game.player_orders.clear_survival_tips()
+	_tick(game, 1.0)
+	_present(game, BUNK_TWO)
+	_tick(game, 0.5)
+	var held := _present(game, REC_BLOCKER)
+	_assert_equal(str(held.get("text", "")), BUNK_TWO.text, "D11 the Rec blocker does not interject 0.5 s into a bunk step")
+	_assert_false(bool(held.get("urgent", false)), "D11 the held bunk step is not urgent")
+	_tick(game, 1.4)
+	_assert_equal(str(_present(game, REC_BLOCKER).get("text", "")), BUNK_TWO.text, "D11 the hold still covers 1.9 s")
+	_tick(game, 0.1)
+	var shown := _present(game, REC_BLOCKER)
+	_assert_equal(str(shown.get("text", "")), REC_BLOCKER.text, "D11 the Rec blocker shows once the 2 s hold has expired")
+	_assert_true(bool(shown.get("urgent", false)) and str(shown.get("cause", "")) == "food", "D11 the released blocker keeps its urgent food flags")
+	# A blocker over a non-bunk step is not delayed.
+	game.player_orders.clear_survival_tips()
+	_present(game, GENERATOR_STEP)
+	_tick(game, 0.5)
+	_assert_equal(str(_present(game, REC_BLOCKER).get("text", "")), REC_BLOCKER.text, "D11 the hold applies only over a bunk step")
+	# A blocker without the unnamed food flag is another step and is not held.
+	game.player_orders.clear_survival_tips()
+	_present(game, BUNK_TWO)
+	_tick(game, 0.5)
+	var plain := REC_BLOCKER.duplicate(true)
+	plain.erase("food_unnamed")
+	_assert_equal(str(_present(game, plain).get("text", "")), REC_BLOCKER.text, "D11 only the unnamed food blocker waits")
 	_dispose(game)

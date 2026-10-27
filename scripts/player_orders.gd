@@ -18,6 +18,8 @@ var _next_reclamation_kind := -1
 # Guidance reads retain the starvation name until fed or a nearer deadline.
 var _starving_resident_id := -1
 var _food_forecast_latched := false
+var _next_bunk_text := ""
+var _next_bunk_help := ""
 var _food_forecast_since := 0.0
 
 var game: VaultGame
@@ -2394,11 +2396,21 @@ func _next_named_build_kind(step: Dictionary) -> int:
 func _salvage_next_step(step: Dictionary) -> Dictionary:
 	if step.is_empty() or game.ended:
 		_next_reclamation_kind = -1
+		_next_bunk_text = ""
 		_next_hold_signature.clear()
 		_next_hold_step.clear()
 		_next_hold_since = -1.0
 		return step
 	step = step.duplicate(true)
+	var held_bunk := _is_bunk_place_step(_next_hold_step)
+	var bunk_age := _survival_tip_sim_time() - _next_hold_since
+	if held_bunk and _is_unnamed_rec_blocker(step) and bunk_age >= 0.0 and bunk_age < NEXT_HOLD_S - 0.000001:
+		# The food-worker Rec blocker waits out the existing Next hold of the
+		# bunk step it would replace. No new urgency rule.
+		var held := _next_hold_step.duplicate(true)
+		_next_reclamation_kind = _next_named_build_kind(held)
+		return held
+	step = _stabilize_bunk_step(step)
 	var signature: Array = [step.get("text", ""), step.get("kind", ""), step.get("tool", ""),
 		step.get("action", ""), step.get("urgent", false), step.get("too_late", false),
 		step.get("resident_id", -1), step.get("cause", "")]
@@ -2424,6 +2436,31 @@ func _salvage_next_step(step: Dictionary) -> Dictionary:
 	_next_hold_step = result.duplicate(true)
 	_next_reclamation_kind = _next_named_build_kind(result)
 	return result
+
+
+# "place 1 bunk", "place 2 bunks" and "place bunks" are one step: a count change
+# alone keeps the text first shown until Next leaves the bunk step.
+func _is_bunk_place_step(step: Dictionary) -> bool:
+	return str(step.get("tool", "")) == "bed" and not bool(step.get("urgent", false)) and str(step.get("text", "")).begins_with("Next: YOU place ") and "bunk" in str(step.get("text", ""))
+
+
+func _stabilize_bunk_step(step: Dictionary) -> Dictionary:
+	if not _is_bunk_place_step(step):
+		_next_bunk_text = ""
+		_next_bunk_help = ""
+		return step
+	if _next_bunk_text.is_empty():
+		_next_bunk_text = str(step.text)
+		_next_bunk_help = str(step.get("help", ""))
+	else:
+		step.text = _next_bunk_text
+		if not _next_bunk_help.is_empty():
+			step["help"] = _next_bunk_help
+	return step
+
+
+func _is_unnamed_rec_blocker(step: Dictionary) -> bool:
+	return bool(step.get("food_unnamed", false)) and str(step.get("tool", "")) == "rec"
 
 
 func _next_kind_affordable(kind: int) -> bool:
@@ -3817,6 +3854,8 @@ func clear_survival_tips() -> void:
 	_next_reclamation_kind = -1
 	_starving_resident_id = -1
 	_food_forecast_latched = false
+	_next_bunk_text = ""
+	_next_bunk_help = ""
 	_survival_tips.clear()
 	_survival_tip_details.clear()
 	_survival_tip_sample_left = 0.0
