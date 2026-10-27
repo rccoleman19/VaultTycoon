@@ -1371,6 +1371,9 @@ func _mark_floodlight() -> void:
 	for building: VaultBuilding in buildings:
 		building.shed_first = wing_perk in [PERK_FLOODLIGHT, PERK_RELAY_LUMEN] and building.building_id == FLOODLIGHT_BUILDING_ID and building.kind == VaultBuilding.Kind.LAMP and building.cell == cell
 		building.self_powered = wing_perk == PERK_RELAY_LUMEN and building.shed_first
+		if building.self_powered:
+			# Older saves could disable this Lumen while it was still a grid consumer.
+			building.manually_disabled = false
 
 
 # Only {"version": 1, "id": <known perk>} on a seeded wing; NONE is never written.
