@@ -292,7 +292,10 @@ func _test_starvation_not_injury() -> void:
 	_assert_false("INJURED" in text, "starving crew are not counted as injured")
 	_assert_true("NO MEALS" in text, "an empty larder says NO MEALS")
 	_assert_false("LOW MEALS" in text, "and not LOW MEALS")
-	_assert_true("CRITICAL: Ari" in game.player_orders.all_alerts, "the starving resident still generates a CRITICAL alert")
+	_assert_true("Ari starving" in game.player_orders.objective_label.text, "Next already names roster-first Ari's starvation")
+	_assert_true("CRITICAL: Bo" in game.player_orders.all_alerts and "CRITICAL: Ari" not in game.player_orders.all_alerts,
+		"the first uncovered starving resident still generates a CRITICAL alert")
+	_assert_true("CRITICAL: Bo" in game.player_orders.alert_list, "Bo's uncovered starvation warning survives Next dedupe")
 	game.food_system.meals = 2
 	game.player_orders.refresh()
 	text = "  ·  ".join(game.player_orders.all_alerts)

@@ -2924,15 +2924,21 @@ func _refresh_alerts(step: Dictionary) -> void:
 	var cook_enabled := _has_eligible_worker("cook")
 	if not cook_enabled:
 		alerts.append("NO COOK ENABLED")
-	var critical_resident: VaultResident = null
-	var critical_seconds := INF
+	var critical_residents: Array[VaultResident] = []
 	for resident: VaultResident in game.residents:
 		if resident.alive and (resident.needs.food < 20.0 or resident.needs.rest < 15.0):
 			var seconds := _projected_death_seconds(resident, INF)
-			if critical_resident == null or seconds < critical_seconds:
+			var index := critical_residents.size()
+			while index > 0 and seconds < _projected_death_seconds(critical_residents[index - 1], INF):
+				index -= 1
+			critical_residents.insert(index, resident)
+	if not critical_residents.is_empty():
+		# Keep the first-ranked fallback when Next already covers everyone.
+		var critical_resident: VaultResident = critical_residents[0]
+		for resident: VaultResident in critical_residents:
+			if not _alert_stated_by_next("CRITICAL: %s" % resident.resident_name, step):
 				critical_resident = resident
-				critical_seconds = seconds
-	if critical_resident != null:
+				break
 		alerts.append("CRITICAL: %s" % critical_resident.resident_name)
 	all_alerts = _order_alerts_by_urgency(alerts)
 	for alert: String in all_alerts:
@@ -2962,11 +2968,10 @@ func _refresh_alert_details() -> void:
 
 func _alert_urgency_seconds(alert: String) -> float:
 	if alert.begins_with("CRITICAL: "):
-		var soonest := INF
 		for resident: VaultResident in game.residents:
-			if resident.alive and (resident.needs.food < 20.0 or resident.needs.rest < 15.0):
-				soonest = minf(soonest, _projected_death_seconds(resident, INF))
-		return soonest
+			if resident.alive and alert == "CRITICAL: %s" % resident.resident_name:
+				return _projected_death_seconds(resident, INF)
+		return INF
 	if alert.begins_with("OXYGEN "):
 		if game.oxygen_system.is_critical():
 			return 0.0

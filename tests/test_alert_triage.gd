@@ -17,6 +17,9 @@ func _run() -> void:
 	_run_case("the alert bar caps visible alerts at one and counts the rest", _test_alerts_cap_one_visible)
 	_run_case("alerts rank by death runway and name the most urgent critical resident", _test_alerts_rank_by_urgency)
 	_run_case("alerts already stated by the displayed Next tip are removed everywhere", _test_alerts_no_duplicate_with_next)
+	_run_case("mixed starvation and exhaustion keeps CRITICAL Ari outside Next", _test_alerts_uncovered_critical_resident)
+	_run_case("only critical Bo stays deduped by Next", _test_alerts_only_critical_resident_covered)
+	_run_case("all critical residents covered by Next keep the first-ranked fallback", _test_alerts_all_critical_residents_covered)
 	_run_case("DETAILS expands the ranked alerts hidden by the alert cap", _test_alerts_details_expands_more)
 	print("ALERT TRIAGE TESTS: %s — %d cases, %d assertions, %d failures" % [
 		"FAIL" if _failure_count else "PASS", _case_count, _assertion_count, _failure_count])
@@ -319,11 +322,10 @@ func _triage_expected_key(game: VaultGame, alert: String) -> float:
 	# the new alert sorter. CRITICAL's current-food threshold is a warning rule;
 	# its death projection deliberately uses INF, exactly as Next does.
 	if alert.begins_with("CRITICAL: "):
-		var earliest := INF
 		for resident: VaultResident in game.residents:
-			if resident.alive and (resident.needs.food < 20.0 or resident.needs.rest < 15.0):
-				earliest = minf(earliest, game.player_orders._projected_death_seconds(resident, INF))
-		return earliest
+			if resident.alive and alert == "CRITICAL: %s" % resident.resident_name:
+				return game.player_orders._projected_death_seconds(resident, INF)
+		return INF
 	if alert.begins_with("OXYGEN "):
 		if game.oxygen_system.is_critical():
 			return 0.0
@@ -490,6 +492,9 @@ func _test_alerts_rank_by_urgency() -> void:
 	bo.needs.health = 15.0
 	orders = game.player_orders
 	orders.refresh()
+	# Isolate the unchanged candidate ranking from Next coverage. The mixed
+	# regression below separately exercises selection with the real built step.
+	orders._refresh_alerts({})
 	generated = _triage_alerts(orders, "all_alerts")
 	_assert_true(orders._projected_death_seconds(bo, INF) < orders._projected_death_seconds(ari, INF),
 		"both residents meet the critical rule and Bo's real death projection is sooner")
@@ -498,9 +503,112 @@ func _test_alerts_rank_by_urgency() -> void:
 	_assert_triage_sorted(game, generated, "two critical residents")
 	bo.needs.health = 60.0
 	orders.refresh()
+	orders._refresh_alerts({})
 	generated = _triage_alerts(orders, "all_alerts")
 	_assert_true("CRITICAL: Ari" in generated and "CRITICAL: Bo" not in generated,
 		"CRITICAL switches names when the other resident's death runway becomes shortest")
+	_dispose(game)
+
+
+func _test_alerts_uncovered_critical_resident() -> void:
+	var game := _triage_game()
+	var ari: VaultResident = game.residents[0]
+	var bo: VaultResident = game.residents[1]
+	ari.drafted = true
+	ari.needs.food = 0.0
+	ari.needs.health = 100.0
+	bo.drafted = true
+	bo.needs.rest = 0.0
+	bo.needs.health = 30.0
+	game.food_system.meals = 24
+	game.step_simulation(VaultGame.SIMULATION_TICK)
+	var orders := game.player_orders
+	orders.refresh()
+	_assert_equal(game.food_system.meals, 24, "stored meals remain unavailable to drafted Ari")
+	_assert_approximately(ari.needs.health, 99.6, 0.0001, "one real starvation tick leaves Ari at 99.6 HP")
+	var depletion: Dictionary = orders._food_depletion_times()
+	var food_deadline := orders._projected_death_seconds(ari, float(depletion[ari.resident_id]))
+	_assert_approximately(food_deadline, 24.9, 0.0001, "Ari's food-inclusive projection leaves a 24.9 s starvation runway")
+	_assert_equal(orders.objective_label.text, "Next: Bo exhausted · YOU undraft Bo [R] · THEY rest",
+		"Next keeps its existing exhaustion ranking and exact undraft-Bo action")
+	var step: Dictionary = orders._refresh_objective()
+	_assert_true(orders._alert_stated_by_next("CRITICAL: Bo", step)
+		and not orders._alert_stated_by_next("CRITICAL: Ari", step),
+		"the real built Next step covers Bo and leaves Ari uncovered")
+	var ari_deadline := orders._projected_death_seconds(ari, INF)
+	var bo_deadline := orders._projected_death_seconds(bo, INF)
+	_assert_true(bo_deadline < ari_deadline, "the unchanged critical projection ranks Bo before Ari")
+	var generated := _triage_alerts(orders, "all_alerts")
+	var visible := _triage_alerts(orders, "alert_list")
+	_assert_true("CRITICAL: Ari" in generated and "CRITICAL: Bo" not in generated,
+		"the generated CRITICAL warning names uncovered Ari after skipping covered Bo")
+	_assert_true("CRITICAL: Ari" in visible, "CRITICAL: Ari survives Next dedupe in the showable alerts")
+	_assert_approximately(orders._alert_urgency_seconds("CRITICAL: Ari"), ari_deadline, 0.0001,
+		"CRITICAL: Ari uses Ari's existing projection, rather than Bo's earlier deadline")
+	_assert_triage_sorted(game, generated, "mixed critical residents")
+	_assert_triage_count_and_bar(game, visible, _triage_hidden(orders))
+	if not orders.details_box.visible:
+		orders._toggle_details_rail()
+	var more := _triage_more(orders)
+	var ari_visible := "CRITICAL: Ari" in orders.alert_label.text
+	if more != null:
+		ari_visible = ari_visible or (more.is_visible_in_tree() and "CRITICAL: Ari" in more.text)
+	_assert_true(ari_visible, "the alert bar or expanded DETAILS visibly names CRITICAL: Ari")
+	_assert_false("Ari" not in orders.objective_label.text and not ari_visible,
+		"Ari must not be hidden everywhere while Next names Bo")
+	# Count the killing tick too: resident death pauses before day_cycle advances.
+	var ticks_to_death := 0
+	while ari.alive and ticks_to_death < 260:
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		ticks_to_death += 1
+	_assert_false(ari.alive, "drafted Ari actually dies while the stored meals cannot reach her")
+	_assert_approximately(ticks_to_death * VaultGame.SIMULATION_TICK, 24.9, VaultGame.SIMULATION_TICK + 0.0001,
+		"the actual fixed-tick starvation runway matches the projected 24.9 s")
+	_dispose(game)
+
+
+func _test_alerts_only_critical_resident_covered() -> void:
+	var game := _triage_game()
+	var bo: VaultResident = game.residents[1]
+	bo.drafted = true
+	bo.needs.rest = 0.0
+	bo.needs.health = 30.0
+	var orders := game.player_orders
+	orders.refresh()
+	_assert_equal(orders.objective_label.text, "Next: Bo exhausted · YOU undraft Bo [R] · THEY rest",
+		"Bo-only control retains the existing exact Next action")
+	_assert_next_alert_omitted(game, "CRITICAL: Bo", "only critical resident is already named")
+	_assert_equal(orders.alert_label.text, "DRAFTED CREW 1 · AUTO WORK PAUSED  ·  +1 more",
+		"deduping Bo exposes the same next unrelated alert and count")
+	_dispose(game)
+
+
+func _test_alerts_all_critical_residents_covered() -> void:
+	var game := _triage_game()
+	var ari: VaultResident = game.residents[0]
+	var bo: VaultResident = game.residents[1]
+	ari.needs.rest = 0.0
+	ari.needs.health = 60.0
+	bo.drafted = true
+	bo.needs.rest = 0.0
+	bo.needs.health = 30.0
+	var orders := game.player_orders
+	var step: Dictionary = orders._refresh_objective()
+	_assert_true(int(step.get("resident_id", -1)) == bo.resident_id and bool(step.get("urgent", false)),
+		"the built Next step initially covers the first-ranked Bo")
+	# Next currently names one urgent resident. Decorate its real built step to
+	# exercise the existing text rule when every critical resident is stated.
+	step["text"] = str(step.get("text", "")) + " · Ari exhausted"
+	orders.objective_label.text = str(step["text"])
+	orders._refresh_alerts(step)
+	_assert_true(orders._alert_stated_by_next("CRITICAL: Ari", step)
+		and orders._alert_stated_by_next("CRITICAL: Bo", step), "both critical candidates are stated by the displayed step")
+	var generated := _triage_alerts(orders, "all_alerts")
+	_assert_true("CRITICAL: Bo" in generated and "CRITICAL: Ari" not in generated,
+		"when every candidate is covered, the fallback keeps first-ranked Bo rather than roster-first Ari")
+	_assert_next_alert_omitted(game, "CRITICAL: Bo", "all critical candidates are already named")
+	_assert_approximately(orders._alert_urgency_seconds("CRITICAL: Bo"), orders._projected_death_seconds(bo, INF), 0.0001,
+		"the covered fallback keeps the first-ranked resident's urgency")
 	_dispose(game)
 
 
