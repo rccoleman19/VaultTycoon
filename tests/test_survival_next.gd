@@ -1877,7 +1877,7 @@ func _test_bunk_finish_restore() -> void:
 
 func _test_bunk_finish_deficit() -> void:
 	# Tired crew, free finished bunks, unfinished bunks, expected recommendation.
-	for row in [[2, 1, 1, FINISH_BUNK_NEXT], [3, 0, 1, BUNK_NEXT], [3, 0, 2, BUNK_NEXT], [3, 0, 3, FINISH_BUNK_NEXT], [1, 1, 1, DIG_NEXT]]:
+	for row in [[2, 1, 1, FINISH_BUNK_NEXT], [3, 0, 1, DIG_NEXT + " · bunks in progress"], [3, 0, 2, DIG_NEXT + " · bunks in progress"], [3, 0, 3, FINISH_BUNK_NEXT], [1, 1, 1, DIG_NEXT]]:
 		var game := _healthy_game()
 		for index in range(row[0]):
 			game.residents[index].needs.rest = 28.0
@@ -1887,8 +1887,9 @@ func _test_bunk_finish_deficit() -> void:
 			_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(23 + index, 12)), "deficit case has real bunk blueprint")
 		if row[3] == FINISH_BUNK_NEXT:
 			_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
-		elif row[3] == BUNK_NEXT:
-			_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+		elif row[3] == DIG_NEXT + " · bunks in progress":
+			_assert_step(game, row[3], "dig", "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional.")
+			_assert_equal(game.player_orders._primary_next_step().get("in_progress", []), ["bunks"], "a partial bunk queue advances the chain with structured progress")
 		else:
 			_assert_dig(game, "spare blueprint does not interrupt when finished bunks meet need")
 		_dispose(game)
@@ -1908,7 +1909,8 @@ func _test_bunk_finish_occupied() -> void:
 		game.player_orders.refresh()
 		_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "one awake tired resident still needs a free completed bunk")
 		game.residents[2].needs.rest = 28.0
-		_assert_step(game, BUNK_NEXT, "bed", "Place bunks so tired undrafted crew have a bed.")
+		_assert_step(game, DIG_NEXT + " · bunks in progress", "dig", "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional.")
+		_assert_equal(game.player_orders._primary_next_step().get("in_progress", []), ["bunks"], "the occupied-bunk deficit keeps the queued bunk in structured progress")
 		game.player_orders.refresh()
 		_assert_true("BED SHORTAGE" in game.player_orders.alert_label.text, "two awake tired residents still need free completed bunks")
 		_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(22, 12)), "second blueprint covers remaining occupied-bunk shortage")
@@ -2031,19 +2033,23 @@ func _test_bunk_finish_before_food_work() -> void:
 
 func _test_progression_bunk_deficit() -> void:
 	# Completed bunks, unfinished bunks, expected recommendation.
-	for row in [[0, 0, PLACE_TWO_BUNKS_NEXT], [0, 1, PLACE_ONE_BUNKS_NEXT], [1, 0, PLACE_ONE_BUNKS_NEXT], [0, 2, FINISH_BUNK_NEXT], [1, 1, FINISH_BUNK_NEXT], [0, 3, FINISH_BUNK_NEXT], [2, 0, PROGRESSION_CHARGE_NEXT], [2, 1, PROGRESSION_CHARGE_NEXT]]:
+	for row in [[0, 0, PLACE_TWO_BUNKS_NEXT], [0, 1, PROGRESSION_CHARGE_NEXT + " · bunks in progress"], [1, 0, PLACE_ONE_BUNKS_NEXT], [0, 2, FINISH_BUNK_NEXT], [1, 1, FINISH_BUNK_NEXT], [0, 3, FINISH_BUNK_NEXT], [2, 0, PROGRESSION_CHARGE_NEXT], [2, 1, PROGRESSION_CHARGE_NEXT]]:
 		var game := _progression_bunk_game()
 		for index in range(row[0]):
 			_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(17 + index, 10))
 		for index in range(row[1]):
 			_assert_true(game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(20 + index, 10)), "progression deficit case places a real bunk blueprint")
-		match row[2]:
-			PLACE_ONE_BUNKS_NEXT, PLACE_TWO_BUNKS_NEXT:
-				_assert_step(game, row[2], "bed", PLACE_TWO_BUNKS_HELP)
-			FINISH_BUNK_NEXT:
-				_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
-			PROGRESSION_CHARGE_NEXT:
-				_assert_step(game, PROGRESSION_CHARGE_NEXT, "generator", PROGRESSION_CHARGE_HELP)
+		if row[2] == PROGRESSION_CHARGE_NEXT + " · bunks in progress":
+			_assert_step(game, row[2], "generator", PROGRESSION_CHARGE_HELP)
+			_assert_equal(game.player_orders._primary_next_step().get("in_progress", []), ["bunks"], "one queued progression bunk advances to Charge with structured progress")
+		else:
+			match row[2]:
+				PLACE_ONE_BUNKS_NEXT, PLACE_TWO_BUNKS_NEXT:
+					_assert_step(game, row[2], "bed", PLACE_TWO_BUNKS_HELP)
+				FINISH_BUNK_NEXT:
+					_assert_step(game, FINISH_BUNK_NEXT, "select", FINISH_BUNK_HELP)
+				PROGRESSION_CHARGE_NEXT:
+					_assert_step(game, PROGRESSION_CHARGE_NEXT, "generator", PROGRESSION_CHARGE_HELP)
 		_dispose(game)
 
 

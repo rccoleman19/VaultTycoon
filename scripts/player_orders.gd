@@ -1644,7 +1644,7 @@ func _food_worker_recovery_seconds() -> float:
 	return recovery + FOOD_WORK_RECOVERY_SECONDS
 
 
-func _resident_urgency_step() -> Dictionary:
+func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 	var threatened: VaultResident = null
 	var air_lead := _food_fixture_seconds(VaultBuilding.Kind.AIR_RECYCLER)
 	var food_blocker := _food_work_blocker_step()
@@ -1769,7 +1769,7 @@ func _resident_urgency_step() -> Dictionary:
 					"help": "Undraft crew so they can recover mood. Place and power a Rec Console for recreation.",
 					"tool": "select" if threatened.drafted else "rec",
 				}
-	if step.is_empty():
+	if step.is_empty() or _next_build_is_suppressed(step, suppressed_builds):
 		return {}
 	step.text = "Next: %s %s · %s" % [threatened.resident_name, condition, str(step.text).trim_prefix("Next: ")]
 	step["urgent"] = true
@@ -2154,7 +2154,64 @@ func _watch_hatch_step() -> Dictionary:
 	}
 
 
+const NEXT_BUILD_PROGRESS_NAMES := {
+	VaultBuilding.Kind.BED: "bunks",
+	VaultBuilding.Kind.LAMP: "Lumens",
+	VaultBuilding.Kind.GENERATOR: "Charge Nodes",
+	VaultBuilding.Kind.GROW_TRAY: "Grow Trays",
+	VaultBuilding.Kind.KITCHEN: "Nutrient Stations",
+	VaultBuilding.Kind.STOCKPILE: "Salvage Bays",
+	VaultBuilding.Kind.AIR_RECYCLER: "Air Recyclers",
+	VaultBuilding.Kind.RECREATION_CONSOLE: "Rec Consoles",
+	VaultBuilding.Kind.MEDICAL_BED: "Med Beds",
+}
+
+
+func _next_build_is_suppressed(step: Dictionary, suppressed_builds: Dictionary) -> bool:
+	var kind := int(VaultGame.BUILD_KIND_BY_TOOL.get(str(step.get("tool", "")), -1))
+	return suppressed_builds.has(kind)
+
+
+func _next_in_progress_suffix(names: Array) -> String:
+	var suffix := ""
+	for display_name: String in names:
+		suffix += " · %s in progress" % display_name
+	return suffix
+
+
+# Only skip a build link when the selected placement actually repeats a queued
+# blueprint. Existing finish/funding tips still return unchanged on the first pass.
 func _primary_next_step() -> Dictionary:
+	var suppressed_builds: Dictionary = {}
+	var in_progress: Array[String] = []
+	var step := _primary_next_step_chain(suppressed_builds)
+	while not step.is_empty():
+		var kind := int(VaultGame.BUILD_KIND_BY_TOOL.get(str(step.get("tool", "")), -1))
+		var queued := false
+		for building: VaultBuilding in game.buildings:
+			if building.kind == kind and not building.complete and not building.is_emergency_core:
+				queued = true
+				break
+		if not queued:
+			break
+		suppressed_builds[kind] = true
+		in_progress.append(str(NEXT_BUILD_PROGRESS_NAMES[kind]))
+		step = _primary_next_step_chain(suppressed_builds)
+	if in_progress.is_empty():
+		return step
+	if step.is_empty():
+		step = {
+			"text": "Next: %s · THEY finish it" % _next_in_progress_suffix(in_progress).trim_prefix(" · "),
+			"help": "Keep Haul + Craft above OFF so crew supply and finish the blueprints.",
+			"tool": "select",
+		}
+	else:
+		step.text = str(step.text) + _next_in_progress_suffix(in_progress)
+	step["in_progress"] = in_progress
+	return step
+
+
+func _primary_next_step_chain(suppressed_builds: Dictionary) -> Dictionary:
 	var critical_resident := false
 	var mood_break_risk := false
 	var rec_wanted := false
@@ -2170,7 +2227,7 @@ func _primary_next_step() -> Dictionary:
 			rec_wanted = true
 		if resident.needs.wants_medical_care() and resident.medical_bed_id < 0:
 			injured_without_reservation = true
-	var urgent_step := _resident_urgency_step()
+	var urgent_step := _resident_urgency_step(suppressed_builds)
 	var breach_blocker := _breach_blocker_step()
 	if not breach_blocker.is_empty():
 		_hold_mood_break_tip(mood_break_risk, rec_wanted)
@@ -2191,7 +2248,7 @@ func _primary_next_step() -> Dictionary:
 	if unfed_larder_break or ((critical_resident or empty_larder_break) and game.food_system.meals < game.get_alive_count()):
 		_hold_mood_break_tip(mood_break_risk, rec_wanted)
 		var kitchen_step := _kitchen_recovery_step()
-		if not kitchen_step.is_empty():
+		if not kitchen_step.is_empty() and not _next_build_is_suppressed(kitchen_step, suppressed_builds):
 			# Existing kitchen crisis advice already leads optional builds. Keep its
 			# wording unless a different threat, undrafting or ready meals take priority.
 			if not interrupts_care or (
@@ -2205,7 +2262,7 @@ func _primary_next_step() -> Dictionary:
 		_hold_mood_break_tip(mood_break_risk, rec_wanted)
 		return urgent_step
 	mood_break_risk = _hold_mood_break_tip(mood_break_risk, rec_wanted)
-	if mood_break_risk and game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) < 1:
+	if mood_break_risk and game.get_completed_building_count(VaultBuilding.Kind.RECREATION_CONSOLE) < 1 and not suppressed_builds.has(VaultBuilding.Kind.RECREATION_CONSOLE):
 		var unfinished_rec := 0
 		for rec: VaultBuilding in game.buildings:
 			if rec.kind == VaultBuilding.Kind.RECREATION_CONSOLE and not rec.complete:
@@ -2223,13 +2280,13 @@ func _primary_next_step() -> Dictionary:
 		}
 	if mood_break_risk:
 		var offline_rec_step := _offline_rec_step()
-		if not offline_rec_step.is_empty():
+		if not offline_rec_step.is_empty() and not _next_build_is_suppressed(offline_rec_step, suppressed_builds):
 			return offline_rec_step
 	var free_medical := 0
 	for bed: VaultBuilding in game.buildings:
 		if bed.kind == VaultBuilding.Kind.MEDICAL_BED and bed.complete and not bed.manually_disabled and bed.reserved_by < 0:
 			free_medical += 1
-	if injured_without_reservation and free_medical == 0:
+	if injured_without_reservation and free_medical == 0 and not suppressed_builds.has(VaultBuilding.Kind.MEDICAL_BED):
 		var free_disabled_medical := false
 		var unfinished_medical := false
 		for bed: VaultBuilding in game.buildings:
@@ -2272,7 +2329,7 @@ func _primary_next_step() -> Dictionary:
 			free_bunks += 1
 		if building.kind == VaultBuilding.Kind.BED and not building.complete:
 			unfinished_bunks += 1
-	if residents_needing_bunks > free_bunks:
+	if residents_needing_bunks > free_bunks and not suppressed_builds.has(VaultBuilding.Kind.BED):
 		if unfinished_bunks >= (residents_needing_bunks - free_bunks):
 			return {
 				"text": "Next: YOU leave Haul + Craft on · THEY finish the bunks",
@@ -2285,7 +2342,9 @@ func _primary_next_step() -> Dictionary:
 			"tool": "bed",
 		}
 	if critical_resident and game.food_system.meals < game.get_alive_count() and game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) >= 1:
-		return _name_food_recovery(_meal_recovery_step(), urgent_step)
+		var meal_step := _meal_recovery_step()
+		if not _next_build_is_suppressed(meal_step, suppressed_builds):
+			return _name_food_recovery(meal_step, urgent_step)
 	if game.breach_system.is_response_active():
 		# Covered WARNING/OPEN (the blocker step found nothing missing): survival
 		# tips above still win, but no build-order tip until the hatch seals.
@@ -2308,7 +2367,7 @@ func _primary_next_step() -> Dictionary:
 			"tool": "dig",
 		}
 	var completed_bunks := game.get_completed_building_count(VaultBuilding.Kind.BED)
-	if completed_bunks < 2:
+	if completed_bunks < 2 and not suppressed_builds.has(VaultBuilding.Kind.BED):
 		var deficit := 2 - completed_bunks - unfinished_bunks
 		if unfinished_bunks >= (2 - completed_bunks):
 			return {
@@ -2321,7 +2380,7 @@ func _primary_next_step() -> Dictionary:
 			"help": "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.",
 			"tool": "bed",
 		}
-	if game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) < 1:
+	if game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) < 1 and not suppressed_builds.has(VaultBuilding.Kind.GENERATOR):
 		if _unfinished_charge_count() > 0:
 			return _charge_finish_step()
 		return {
@@ -2338,7 +2397,7 @@ func _primary_next_step() -> Dictionary:
 		and haul_ok
 	)
 	if not food_ready:
-		if game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY) < 1:
+		if game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY) < 1 and not suppressed_builds.has(VaultBuilding.Kind.GROW_TRAY):
 			for tray: VaultBuilding in game.buildings:
 				if tray.kind == VaultBuilding.Kind.GROW_TRAY and not tray.complete:
 					return _food_step({
@@ -2351,7 +2410,7 @@ func _primary_next_step() -> Dictionary:
 				"help": "Designate GROW and keep it powered. Haul defaults move raw food to stock.",
 				"tool": "grow",
 			})
-		if game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) < 1:
+		if game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) < 1 and not suppressed_builds.has(VaultBuilding.Kind.KITCHEN):
 			var unfinished_kitchens := 0
 			for kitchen: VaultBuilding in game.buildings:
 				if kitchen.kind == VaultBuilding.Kind.KITCHEN and not kitchen.complete:
@@ -2381,7 +2440,7 @@ func _primary_next_step() -> Dictionary:
 				if not enabled_shed:
 					food_capacity_short = false
 					break
-		if food_capacity_short:
+		if food_capacity_short and not suppressed_builds.has(VaultBuilding.Kind.GENERATOR):
 			if _unfinished_charge_count() > 0:
 				return _food_step(_charge_finish_step())
 			return _food_step({
@@ -2395,7 +2454,7 @@ func _primary_next_step() -> Dictionary:
 			"tool": "select",
 		})
 	var air_step := _air_recovery_step()
-	if not air_step.is_empty():
+	if not air_step.is_empty() and not _next_build_is_suppressed(air_step, suppressed_builds):
 		return air_step
 	var hatch_ready := (
 		game.breach_system.is_sealed()
@@ -2429,13 +2488,17 @@ func _primary_next_step() -> Dictionary:
 			return _fund_blueprint_step(oldest_short_blueprint.kind)
 		if rec_wanted:
 			var offline_rec_step := _offline_rec_step()
-			if not offline_rec_step.is_empty():
+			if not offline_rec_step.is_empty() and not _next_build_is_suppressed(offline_rec_step, suppressed_builds):
 				return offline_rec_step
+		if not suppressed_builds.is_empty():
+			return {}
 		return {
 			"text": "Next: YOU designate needs · THEY hold Day 7",
 			"help": "Keep designating dig/build/stockpile. Defaults keep food, power, and air running.",
 			"tool": "select",
 		}
+	if not suppressed_builds.is_empty():
+		return {}
 	return {
 		"text": "Next: YOU check blockers · THEY idle on defaults",
 		"help": "Seal and breathable O2 remain required at Day 7.",
@@ -3374,6 +3437,8 @@ func _remember_survival_tip(step: Dictionary) -> void:
 		return
 	var resident := game.get_resident_by_id(int(step.get("resident_id", -1)))
 	var tip := str(step.get("text", ""))
+	# Queued work is HUD context, not part of the action that could save them.
+	tip = tip.trim_suffix(_next_in_progress_suffix(step.get("in_progress", [])))
 	if resident != null and resident.alive and tip.begins_with("Next: ") and resident.resident_name in tip and not _survival_tips.has(resident.resident_id):
 		# Retain the first saving opportunity, before later symptoms narrow the
 		# advice to an action that may no longer have enough time to work.
