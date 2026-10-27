@@ -122,6 +122,7 @@ var outcome_title: Label
 var outcome_text: Label
 var outcome_grade: Label
 var outcome_record: Label
+var outcome_best: Label
 var outcome_resume_button: Button
 var outcome_retry_button: Button
 var outcome_retry_reason: Label
@@ -940,6 +941,12 @@ func _build_outcome() -> void:
 	outcome_record.add_theme_color_override("font_color", Color("efc56b"))
 	outcome_record.visible = false
 	content.add_child(outcome_record)
+	outcome_best = Label.new()
+	outcome_best.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	outcome_best.add_theme_font_size_override("font_size", 14)
+	outcome_best.add_theme_color_override("font_color", Color("efc56b"))
+	outcome_best.visible = false
+	content.add_child(outcome_best)
 	outcome_text = Label.new()
 	outcome_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	outcome_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -4069,6 +4076,8 @@ func show_outcome(won: bool, survivors: int) -> void:
 			recap.get("time", game.day_cycle.get_clock_text()),
 			saving_tip,
 		]
+	outcome_best.text = best_line(true)
+	outcome_best.visible = not outcome_best.text.is_empty()
 	outcome_record.text = record_line(won)
 	outcome_record.visible = not resumable and not outcome_record.text.is_empty()
 	_show_keep_running_button(won)
@@ -4123,6 +4132,21 @@ func record_line(won: bool) -> String:
 	if fresh and game.finish_record.has("unlocked"):
 		var level := int(game.finish_record.unlocked)
 		text += "\nSUBLEVEL %02d UNLOCKED · %s" % [level, VaultGame.sublevel_modifier(level).get("name", "")]
+	return text
+
+
+# Read-only on both LOAD and recoverable death recaps. Only _record_finish submits.
+func best_line(finish := false) -> String:
+	if not game.best_enabled():
+		return ""
+	var fresh: bool = finish and game.ended and not game.finish_best.is_empty()
+	var best: Dictionary = game.finish_best.current if fresh else game.wing_best().get_best(game.wing_seed, game.sublevel)
+	if best.is_empty():
+		return ""
+	var text := "Best: WIN" if best.won else "Best: DAY %d · %.1fs" % [best.day, fmod(float(best.elapsed), DayCycle.SECONDS_PER_DAY)]
+	text += " · %d survived" % best.survivors.size()
+	if fresh and bool(game.finish_best.new_best):
+		text += " · NEW BEST"
 	return text
 
 
@@ -4328,15 +4352,19 @@ func briefing_record_text() -> String:
 	if not game.records_enabled():
 		return ""
 	var record := game.wing_records().get_record(game.wing_seed, game.sublevel)
-	if record.is_empty():
-		return ""
-	var parts: Array[String] = ["RECORD %s" % wing_id(game.wing_seed, game.sublevel)]
-	if record.best_stars != null:
-		parts.append("BEST %s%s" % ["★".repeat(int(record.best_stars)), "☆".repeat(3 - int(record.best_stars))])
-	parts.append("FURTHEST DAY %d" % int(record.best_day))
-	if bool(record.annex):
-		parts.append("ANNEX")
-	return " · ".join(parts)
+	var lines: Array[String] = []
+	if not record.is_empty():
+		var parts: Array[String] = ["RECORD %s" % wing_id(game.wing_seed, game.sublevel)]
+		if record.best_stars != null:
+			parts.append("BEST %s%s" % ["★".repeat(int(record.best_stars)), "☆".repeat(3 - int(record.best_stars))])
+		parts.append("FURTHEST DAY %d" % int(record.best_day))
+		if bool(record.annex):
+			parts.append("ANNEX")
+		lines.append(" · ".join(parts))
+	var best := best_line()
+	if not best.is_empty():
+		lines.append(best)
+	return "\n".join(lines)
 
 
 # ◀ goes one sublevel deeper (down to the deepest unlocked), ▶ one shallower (up to 07). The wing is
