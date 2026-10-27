@@ -3,6 +3,7 @@ extends "res://tests/test_runner.gd"
 # North star slice 1: KEEP RUNNING on the win panel continues the same vault past Day 7.
 
 const KR_SAVE := "user://test_keep_running.json"
+const RECLAIM_AIR := "Next: YOU begin reclamation · +18 · THEY fund the Air Recycler"
 
 
 func _run() -> void:
@@ -103,13 +104,16 @@ func _test_next_alerts() -> void:
 	_assert_false(next.contains("Day 7"), "no 'hold Day 7' text: %s" % next)
 	_assert_false(next.contains("VICTORY"), "no VICTORY PENDING in Next")
 	_assert_false(next.contains("check blockers"), "no 'check blockers' text")
-	_assert_equal(next, str(game.player_orders.keep_running_default_step().text), "a calm vault shows the keep-running Next")
+	_assert_equal(next, RECLAIM_AIR, "the idle vault without ready Air first names reclamation")
+	_assert_true(game.start_reclamation(), "follow the reclamation lead through the player API")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.objective_label.text, "Next: YOU spend 8: build Rec Console · THEY craft", "after reclamation starts, the idle vault names an affordable comfort build")
 	_assert_false("  ·  ".join(game.player_orders.all_alerts).contains("VICTORY PENDING"), "no VICTORY PENDING alert")
 	game.status_message_left = 0.0
 	game.player_orders.refresh()
 	var help: String = game.player_orders.tool_status.text
 	_assert_false(help.contains("Day 7"), "the help line drops the Day 7 text: %s" % help)
-	_assert_equal(help, "SELECT // Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job.", "the calm help line is the plain select help that fits the bar")
+	_assert_equal(help, "SELECT // Place a Rec Console blueprint on free floor. Keep Haul + Craft above OFF so crew supply and build it. Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job.", "the idle spend help names the Rec Console action and retains select controls")
 	game.oxygen_system.oxygen = 10.0
 	game.player_orders.refresh()
 	_assert_false(game.player_orders.objective_label.text.begins_with("VICTORY PENDING"), "low O2 does not bring back VICTORY PENDING")
@@ -120,6 +124,8 @@ func _test_next_alerts() -> void:
 func _test_latch() -> void:
 	var game := _won()
 	game.start_keep_running()
+	# Resolve the one-time reclamation action before exercising the care latch.
+	_assert_true(game.start_reclamation(), "player has begun reclamation before the latch fixture")
 	# The comfort card (slice 4) owns Rec/Med while it is offered; queue its pieces so the latch shows.
 	_add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, game._annex_free_cells(1)[0])
 	game.place_blueprint(VaultBuilding.Kind.MEDICAL_BED, game._annex_free_cells(1)[0])

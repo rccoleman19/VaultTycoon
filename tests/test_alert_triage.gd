@@ -187,8 +187,8 @@ func _test_next_queued_only_fallback() -> void:
 	var step: Dictionary = game.player_orders._refresh_objective()
 	_assert_true(delivered == BreachSystem.PATCH_COST and sealed and placed,
 		"the hatch is really sealed and the only unmet build link has a real bunk blueprint")
-	_assert_equal(game.player_orders.objective_label.text, "Next: bunks in progress · THEY finish it",
-		"a fully covered chain leaves the short queued-only fallback")
+	_assert_equal(game.player_orders.objective_label.text, "Next: YOU spend 18: fit Grow Tray Mk II · bunks in progress",
+		"an idle covered chain offers the affordable fit and retains queued construction")
 	_assert_equal(step.get("in_progress", []), ["bunks"], "the fallback retains structured queued-kind names")
 	_assert_equal(str(step.get("tool", "")), "select", "queued-only fallback keeps Select available")
 	_dispose(game)

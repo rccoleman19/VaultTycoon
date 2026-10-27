@@ -7,6 +7,9 @@ const CHARGE_FOR_REC := "Next: YOU place a Charge Node · THEY power the Rec Con
 const CHARGE_FOR_REC_HELP := "The grid lacks available power for the Rec Console. Place a Charge Node to add 7 power."
 const DAY_SEVEN := "Next: YOU designate needs · THEY hold Day 7"
 const DAY_SEVEN_HELP := "Keep designating dig/build/stockpile. Defaults keep food, power, and air running."
+const SPEND_GROW := "Next: YOU spend 18: fit Grow Tray Mk II"
+const SPEND_GROW_HELP := "Select the Grow Tray and fit Mk II in its inspector."
+const RECLAIM_HELP := "Reclamation: +18 salvage now, +18 every 30 s, 6 times"
 const ENABLE_REC := "Next: YOU enable a Rec Console · THEY recover mood"
 const ENABLE_REC_HELP := "Select a completed Rec Console and click ENABLE so crew can recover mood."
 const FINISH_CHARGE := "Next: YOU leave Haul + Craft on · THEY finish the Charge Node"
@@ -40,16 +43,16 @@ func _run() -> void:
 	_run_case("inspector exact rounded break line and normal factors afterward", _test_inspector)
 	_run_case("death mid-break clears the timer and the corpse shows no live factors", _test_death)
 	_run_case("echo mood thirty-five uses exact Charge tuple", _test_echo_threshold)
-	_run_case("echo above thirty-five returns exact Day-7 tuple", _test_echo_above)
+	_run_case("echo above thirty-five allows the exact Grow Mk II spend tuple", _test_echo_above)
 	_run_case("echo mood nine preserves high branch", _test_echo_high)
 	_run_case("echo ignores the only low-mood resident when dead", _test_echo_dead)
 	_run_case("echo includes drafted low-mood resident", _test_echo_drafted)
 	_run_case("echo all Recs disabled returns enable tuple", _test_echo_disabled)
 	_run_case("short Charge fund fallback outranks echo", _test_echo_short)
-	_run_case("echo funded undelivered Charge uses finish tuple", _test_echo_funded)
-	_run_case("powered Rec returns Day-7 tuple", _test_echo_powered)
+	_run_case("echo funded undelivered Charge keeps its finish chain and allows idle spend", _test_echo_funded)
+	_run_case("powered Rec returns the default chain and allows idle spend", _test_echo_powered)
 	_run_case("medical crisis outranks echo", _test_echo_injured)
-	_run_case("bunk crisis outranks echo", _test_echo_bunks)
+	_run_case("bunk care outranks echo in the chain and allows idle spend", _test_echo_bunks)
 	_run_case("echo refresh preserves active build tool", _test_echo_refresh)
 	print("STRESS BREAK VENTING TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
@@ -400,7 +403,8 @@ func _fallback_ready_game() -> VaultGame:
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY), 1, "Grow is powered")
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.KITCHEN), 1, "Nutrient is powered")
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER), 1, "Air is powered")
-	_assert_step(game, DAY_SEVEN, "select", DAY_SEVEN_HELP)
+	_assert_chain_step(game, DAY_SEVEN, "select", DAY_SEVEN_HELP)
+	_assert_step(game, SPEND_GROW, "select", SPEND_GROW_HELP, "spend")
 	return game
 
 
@@ -423,7 +427,8 @@ func _test_echo_threshold() -> void:
 
 func _test_echo_above() -> void:
 	var game := _echo_game(35.0001)
-	_assert_step(game, DAY_SEVEN, "select", DAY_SEVEN_HELP)
+	_assert_chain_step(game, DAY_SEVEN, "select", DAY_SEVEN_HELP)
+	_assert_step(game, SPEND_GROW, "select", SPEND_GROW_HELP, "spend")
 	game.free()
 
 
@@ -437,7 +442,8 @@ func _test_echo_dead() -> void:
 	var game := _echo_game(100.0)
 	game.residents[0].needs.mood = 20.0
 	game.residents[0].kill()
-	_assert_step(game, DAY_SEVEN, "select", DAY_SEVEN_HELP)
+	_assert_chain_step(game, DAY_SEVEN, "select", DAY_SEVEN_HELP)
+	_assert_step(game, SPEND_GROW, "select", SPEND_GROW_HELP, "spend")
 	game.free()
 
 
@@ -461,7 +467,8 @@ func _test_echo_short() -> void:
 	var game := _echo_game(20.0)
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, Vector2i(27, 12)), "short Charge blueprint placed")
 	game.food_system.salvage = 0
-	_assert_step(game, "Next: YOU mark 6 rock [E] · THEY fund the Charge Node", "dig", "The Charge Node blueprint is 18 salvage short. Each dug rock tile yields 3 salvage once hauled.")
+	_assert_chain_step(game, "Next: YOU mark 6 rock [E] · THEY fund the Charge Node", "dig", "The Charge Node blueprint is 18 salvage short. Each dug rock tile yields 3 salvage once hauled.")
+	_assert_step(game, "Next: YOU begin reclamation · +18 · THEY fund the Charge Node", "select", "The Charge Node blueprint is 18 salvage short. Each dug rock tile yields 3 salvage once hauled.\n" + RECLAIM_HELP, "reclaim")
 	game.free()
 
 
@@ -471,7 +478,8 @@ func _test_echo_funded() -> void:
 	var charge: VaultBuilding = game.get_building_at(Vector2i(27, 12))
 	game.food_system.salvage = charge.get_cost()
 	_assert_true(not charge.complete and charge.delivered == 0, "funded Charge remains completely undelivered")
-	_assert_step(game, FINISH_CHARGE, "select", FINISH_CHARGE_HELP)
+	_assert_chain_step(game, FINISH_CHARGE, "select", FINISH_CHARGE_HELP)
+	_assert_step(game, SPEND_GROW, "select", SPEND_GROW_HELP, "spend")
 	game.free()
 
 
@@ -480,7 +488,8 @@ func _test_echo_powered() -> void:
 	_add_completed(game, VaultBuilding.Kind.GENERATOR, Vector2i(27, 12))
 	game.power_grid.recalculate(game.buildings)
 	_assert_true(game.get_building_at(Vector2i(26, 12)).powered, "additional Charge powers Rec")
-	_assert_step(game, DAY_SEVEN, "select", DAY_SEVEN_HELP)
+	_assert_chain_step(game, DAY_SEVEN, "select", DAY_SEVEN_HELP)
+	_assert_step(game, SPEND_GROW, "select", SPEND_GROW_HELP, "spend")
 	game.free()
 
 
@@ -495,7 +504,8 @@ func _test_echo_bunks() -> void:
 	var game := _echo_game(20.0)
 	for resident: VaultResident in game.residents:
 		resident.needs.rest = 25.0
-	_assert_step(game, "Next: YOU place bunks · THEY craft", "bed", "Place bunks so tired undrafted crew have a bed.")
+	_assert_chain_step(game, "Next: YOU place bunks · THEY craft", "bed", "Place bunks so tired undrafted crew have a bed.")
+	_assert_step(game, SPEND_GROW, "select", SPEND_GROW_HELP, "spend")
 	game.free()
 
 
@@ -509,11 +519,22 @@ func _test_echo_refresh() -> void:
 	game.free()
 
 
-func _assert_step(game: VaultGame, text: String, tool: String, help: String) -> void:
+# Late-shift salvage advice decorates the chosen action after this chain. Keep
+# the original Rec threshold/precedence checks, and verify the displayed tuple
+# separately where an idle spend or reclamation lead legitimately replaces it.
+func _assert_chain_step(game: VaultGame, text: String, tool: String, help: String) -> void:
+	var step: Dictionary = game.player_orders._primary_next_step_chain({})
+	_assert_equal(step.get("text"), text, "exact chosen chain text before salvage advice")
+	_assert_equal(step.get("tool"), tool, "exact chosen chain tool before salvage advice")
+	_assert_equal(step.get("help"), help, "exact chosen chain help before salvage advice")
+
+
+func _assert_step(game: VaultGame, text: String, tool: String, help: String, action := "") -> void:
 	var step: Dictionary = game.player_orders._primary_next_step()
 	_assert_equal(step.get("text"), text, "exact Next text")
 	_assert_equal(step.get("tool"), tool, "exact suggested tool")
 	_assert_equal(step.get("help"), help, "exact Next help")
+	_assert_equal(str(step.get("action", "")), action, "exact Next action")
 
 
 func _assert_true(condition: bool, message: String) -> void:

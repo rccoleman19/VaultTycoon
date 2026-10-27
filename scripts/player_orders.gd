@@ -1206,6 +1206,21 @@ func _salvage_dig_tiles(shortfall: int) -> int:
 	return _dig_tiles_after_rubble(shortfall, game.job_system.get_uncredited_rubble())
 
 
+# A funding tip may wait only for actual designated digging or enough rubble,
+# including salvage already being carried. Keep this rule shared by every fund tip.
+func _fund_salvage_step(name: String, shortfall: int, help: String, rubble := -1) -> Dictionary:
+	if rubble < 0:
+		rubble = game.job_system.get_uncredited_rubble()
+	var tiles := _dig_tiles_after_rubble(shortfall, rubble)
+	if game.map_grid.dig_marks.is_empty() and rubble < shortfall:
+		tiles = maxi(1, tiles)
+	return {
+		"text": "Next: YOU mark %d rock [E] · THEY fund the %s" % [tiles, name] if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the %s" % name,
+		"help": help,
+		"tool": "dig" if tiles > 0 else "select",
+	}
+
+
 func _dig_tiles_after_rubble(shortfall: int, rubble: int) -> int:
 	var after_rubble := shortfall - rubble
 	if after_rubble <= 0:
@@ -1392,13 +1407,9 @@ func _food_prebuild_step(kind: int, placement: Dictionary) -> Dictionary:
 	var shortfall := maxi(0, int(VaultBuilding.COSTS[kind]) + reserve - game.food_system.salvage)
 	if shortfall == 0:
 		return placement
-	var tiles := _salvage_dig_tiles(shortfall)
 	var name: String = VaultBuilding.KIND_NAMES[kind]
-	return _food_step({
-		"text": "Next: YOU mark %d rock [E] · THEY fund the %s" % [tiles, name] if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the %s" % name,
-		"help": "Fund the %s before placing it, keeping %d salvage for the hatch. Each dug rock yields %d salvage once hauled." % [name, reserve, DIG_SALVAGE_YIELD],
-		"tool": "dig" if tiles > 0 else "select",
-	})
+	return _food_step(_fund_salvage_step(name, shortfall,
+		"Fund the %s before placing it, keeping %d salvage for the hatch. Each dug rock yields %d salvage once hauled." % [name, reserve, DIG_SALVAGE_YIELD]))
 
 
 func _food_blueprint_in_progress(kind: int) -> bool:
@@ -1898,13 +1909,9 @@ func _fund_blueprint_step(kind: int, food_work_blocker := false) -> Dictionary:
 		for building: VaultBuilding in game.buildings:
 			if not building.complete and building.kind != kind:
 				shortfall += maxi(0, building.get_cost() - building.delivered - game.job_system.get_build_supply_in_transit(building.building_id))
-	var tiles := _salvage_dig_tiles(shortfall)
 	var kind_name: String = VaultBuilding.KIND_NAMES[kind]
-	return {
-		"text": "Next: YOU mark %d rock [E] · THEY fund the %s" % [tiles, kind_name] if tiles > 0 else "Next: YOU leave Dig + Haul on · THEY fund the %s" % kind_name,
-		"help": "The %s blueprint is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [kind_name, shortfall, DIG_SALVAGE_YIELD],
-		"tool": "dig" if tiles > 0 else "select",
-	}
+	return _fund_salvage_step(kind_name, shortfall,
+		"The %s blueprint is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [kind_name, shortfall, DIG_SALVAGE_YIELD])
 
 
 func _breach_blocker_step() -> Dictionary:
@@ -1979,13 +1986,11 @@ func _breach_blocker_step() -> Dictionary:
 				"fund the hatch patch",
 				"The hatch patch is %d salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage." % shortfall,
 			)
-		var tiles := _dig_tiles_after_rubble(shortfall, rubble)
-		var covered := "Next: YOU leave Dig + Haul on · THEY fund the hatch patch" if has_digger else "Next: YOU leave Haul on · THEY fund the hatch patch"
-		return {
-			"text": "Next: YOU mark %d rock [E] · THEY fund the hatch patch" % tiles if tiles > 0 else covered,
-			"help": "The hatch patch is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [shortfall, DIG_SALVAGE_YIELD],
-			"tool": "dig" if tiles > 0 else "select",
-		}
+		var step := _fund_salvage_step("hatch patch", shortfall,
+			"The hatch patch is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [shortfall, DIG_SALVAGE_YIELD], rubble)
+		if not has_digger and str(step.tool) == "select":
+			step.text = "Next: YOU leave Haul on · THEY fund the hatch patch"
+		return step
 	return {}
 
 
@@ -2222,7 +2227,7 @@ func _primary_next_step() -> Dictionary:
 		in_progress.append(str(NEXT_BUILD_PROGRESS_NAMES[kind]))
 		step = _primary_next_step_chain(suppressed_builds)
 	if in_progress.is_empty():
-		return step
+		return _salvage_next_step(step)
 	if step.is_empty():
 		step = {
 			"text": "Next: %s · THEY finish it" % _next_in_progress_suffix(in_progress).trim_prefix(" · "),
@@ -2232,6 +2237,90 @@ func _primary_next_step() -> Dictionary:
 	else:
 		step.text = str(step.text) + _next_in_progress_suffix(in_progress)
 	step["in_progress"] = in_progress
+	return _salvage_next_step(step)
+
+
+func _has_idle_crew() -> bool:
+	for resident: VaultResident in game.residents:
+		if resident.alive and not resident.drafted and resident.state == "Idle":
+			return true
+	return false
+
+
+func _salvage_crisis_live() -> bool:
+	if not _air_ready() or not game.oxygen_system.is_breathable():
+		return true
+	for resident: VaultResident in game.residents:
+		if resident.alive and (resident.needs.food < 20.0 or resident.needs.rest < 15.0):
+			return true
+	return false
+
+
+func _next_named_build_kind(step: Dictionary) -> int:
+	var kind := int(VaultGame.BUILD_KIND_BY_TOOL.get(str(step.get("tool", "")), -1))
+	if kind >= 0:
+		return kind
+	var text := str(step.get("text", "")).trim_suffix(_next_in_progress_suffix(step.get("in_progress", []))).to_lower()
+	# Match the funded/finished fixture, not another need in the resident prefix.
+	if " · they fund the " in text:
+		text = text.get_slice(" · they fund the ", 1)
+	for candidate: int in VaultBuilding.KIND_NAMES:
+		if str(VaultBuilding.KIND_NAMES[candidate]).to_lower() in text:
+			return candidate
+	if "bunks" in text:
+		return VaultBuilding.Kind.BED
+	if "med bed" in text:
+		return VaultBuilding.Kind.MEDICAL_BED
+	return -1
+
+
+# Presentation only, after urgency and queued-build suppression have chosen a step.
+# Keep its resident/cause/kind metadata so alert dedupe and saving-tip tracking agree.
+func _salvage_next_step(step: Dictionary) -> Dictionary:
+	if step.is_empty() or game.ended:
+		return step
+	var text := str(step.get("text", ""))
+	var danger := bool(step.get("urgent", false))
+	var body := text.get_slice(" · ", 1) if danger else text.trim_prefix("Next: ").get_slice(" · ", 0)
+	var funding := " · THEY fund the " in text
+	var placing := body.begins_with("YOU place ")
+	# No amount of salvage replaces an immediate switch, undraft, priority or cutoff.
+	var salvage_action := placing or (funding and (body.begins_with("YOU mark ") or body.begins_with("YOU leave ")))
+	if bool(step.get("too_late", false)) or (danger and not salvage_action):
+		return step
+	var kind := _next_named_build_kind(step)
+	var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
+	var short := funding or (placing and kind >= 0 and int(VaultBuilding.COSTS[kind]) > spendable)
+	var idle := _has_idle_crew()
+	if game.can_start_reclamation() and (short or (idle and _salvage_crisis_live())):
+		if kind < 0:
+			# A passive crisis step has no fixture of its own. Name the live need
+			# from simulation state, without feeding the alert bar back into Next.
+			kind = VaultBuilding.Kind.AIR_RECYCLER if not _air_ready() or not game.oxygen_system.is_breathable() else VaultBuilding.Kind.BED
+			for resident: VaultResident in game.residents:
+				if resident.alive and resident.needs.food < 20.0 and kind != VaultBuilding.Kind.AIR_RECYCLER:
+					kind = VaultBuilding.Kind.KITCHEN if game.get_completed_building_count(VaultBuilding.Kind.KITCHEN) == 0 else VaultBuilding.Kind.GROW_TRAY
+		var prefix := text.get_slice(" · ", 0) + " · " if danger else "Next: "
+		step.text = prefix + "YOU begin reclamation · +%d · THEY fund the %s" % [VaultGame.RECLAIM_START_SALVAGE, VaultBuilding.KIND_NAMES[kind]] + _next_in_progress_suffix(step.get("in_progress", []))
+		step["tool"] = "select"
+		step["action"] = "reclaim"
+		step["help"] = str(step.get("help", "")) + "\nReclamation: +%d salvage now, +%d every %d s, %d times" % [VaultGame.RECLAIM_START_SALVAGE, VaultGame.RECLAIM_DELIVERY, roundi(VaultGame.RECLAIM_INTERVAL), VaultGame.RECLAIM_DELIVERIES]
+		return step
+	if danger or not idle or not (_is_default_step(step) or body.begins_with("YOU leave ")):
+		return step
+	var target := _upgrade_offer_target()
+	if target != null and target.get_upgrade_cost() <= spendable:
+		step.text = "Next: YOU spend %d: fit %s Mk II" % [target.get_upgrade_cost(), ALSO_NAMES[target.kind]]
+		step["help"] = "Select the %s and fit Mk II in its inspector." % VaultBuilding.KIND_NAMES[target.kind]
+	else:
+		var sink := salvage_nudge_kind()
+		if sink < 0 or int(VaultBuilding.COSTS[sink]) > spendable:
+			return step
+		step.text = "Next: YOU spend %d: build %s · THEY craft" % [VaultBuilding.COSTS[sink], VaultBuilding.KIND_NAMES[sink]]
+		step["help"] = "Place a %s blueprint on free floor. Keep Haul + Craft above OFF so crew supply and build it." % VaultBuilding.KIND_NAMES[sink]
+	step.text += _next_in_progress_suffix(step.get("in_progress", []))
+	step["tool"] = "select"
+	step["action"] = "spend"
 	return step
 
 
@@ -3033,7 +3122,7 @@ func _alert_stated_by_next(alert: String, step: Dictionary) -> bool:
 	if alert.begins_with("POWER BROWNOUT"):
 		return "charge node" in text
 	if alert.begins_with("INJURED ") and "NO MED BED" in alert:
-		return "med bed" in text
+		return "med bed" in text or "medical bed" in text
 	if alert.begins_with("DARKNESS"):
 		return "lumen" in text
 	return false
@@ -4639,6 +4728,8 @@ func note_keep_running_loss() -> void:
 
 
 func _is_latchable_step(step: Dictionary) -> bool:
+	if str(step.get("action", "")) in ["reclaim", "spend"]:
+		return false
 	if bool(step.get("urgent", false)):
 		return false
 	return str(step.get("tool", "")) in ["medical", "rec"] or (
@@ -4702,6 +4793,8 @@ func _food_step(step: Dictionary) -> Dictionary:
 
 
 func _is_default_step(step: Dictionary) -> bool:
+	if str(step.get("action", "")) in ["reclaim", "spend"]:
+		return false
 	if bool(step.get("urgent", false)):
 		return false
 	if str(step.get("kind", "")) in KEEP_RUNNING_PASS_KINDS:

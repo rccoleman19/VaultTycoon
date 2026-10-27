@@ -15,7 +15,7 @@ func _run() -> void:
 	_run_case("03 engaged RELAY LUMEN names Ari's starvation before optional builds", _test_engaged_relay_lumen)
 	_run_case("03 no-shed RELAY LUMEN rejects late tray steps and uses timely food", _test_no_shed_relay_lumen)
 	_run_case("food runway warns before full bellies become a projected death", _test_food_runway_trigger)
-	_run_case("05 idle kitchen crisis keeps its action and names Ari's starvation", _test_idle_kitchen_prefix)
+	_run_case("05 idle kitchen crisis names Ari and reclaims salvage for the kitchen", _test_idle_kitchen_prefix)
 	_run_case("food production blocked by stress breaks keeps a named actionable recovery", _test_food_work_blocker)
 	_run_case("projected starvation ranks every living resident, including current health", _test_most_threatened_food)
 	_run_case("available raw food with Cook OFF names the starving resident and Cook fix", _test_enable_cook)
@@ -267,8 +267,8 @@ func _test_idle_kitchen_prefix() -> void:
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.KITCHEN), 0,
 		"idle replay still needs its first Nutrient Station")
 	_assert_equal(game.player_orders.objective_label.text,
-		"Next: Ari starving · YOU place a Nutrient Station · THEY cook",
-		"05 idle kitchen crisis retains its action and gains Ari's danger prefix")
+		"Next: Ari starving · YOU begin reclamation · +18 · THEY fund the Nutrient Station",
+		"05 idle kitchen crisis retains Ari's danger prefix and leads with available reclamation")
 	_dispose(game)
 
 
