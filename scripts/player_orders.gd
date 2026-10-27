@@ -494,6 +494,8 @@ func _build_interface() -> void:
 	bottom_panel.offset_right = -VaultGame.RIGHT_PANEL_WIDTH - 8.0
 	bottom_panel.offset_top = -72.0
 	bottom_panel.offset_bottom = -8.0
+	# Two help lines grow the rail up, not off the bottom of the screen.
+	bottom_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	bottom_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	bottom_panel.add_theme_stylebox_override("panel", _panel_style(Color("121b21"), Color("45616a")))
 	root.add_child(bottom_panel)
@@ -585,6 +587,9 @@ func _build_interface() -> void:
 		architect_tab_buttons[category[0]] = tab
 	tool_status = Label.new()
 	tool_status.text = "SELECT"
+	# A long help line must not widen the rail under the right panel (playtest finding 5).
+	tool_status.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	tool_status.mouse_filter = Control.MOUSE_FILTER_PASS
 	tool_status.add_theme_color_override("font_color", Color("efc56b"))
 	bottom_content.add_child(tool_status)
 
@@ -1125,6 +1130,7 @@ func refresh() -> void:
 		else:
 			active_help = select_help
 	tool_status.text = "%s // %s" % [tool_label, active_help]
+	tool_status.tooltip_text = tool_status.text
 	var suggested := str(step.get("tool", ""))
 	_open_suggested_tab(suggested)
 	for key: String in command_buttons:
@@ -3257,8 +3263,15 @@ func _refresh_alerts(step: Dictionary) -> void:
 	var medical_beds_built := game.get_completed_building_count(VaultBuilding.Kind.MEDICAL_BED)
 	if medical_beds_built > 0:
 		alerts.append("INJURED %d · MED BEDS FREE %d" % [injured, free_medical])
-	elif injured > 0:
-		alerts.append("INJURED %d · NO MED BED" % injured)
+	else:
+		# F5a: NO MED BED names a Med Bed need, so a scratch above the seek threshold
+		# (no Med Bed wanted yet) stays out of it; the HUD injured count is unchanged.
+		var needing_med_bed := 0
+		for resident: VaultResident in game.residents:
+			if _counts_as_injured(resident) and resident.needs.wants_medical_care():
+				needing_med_bed += 1
+		if needing_med_bed > 0:
+			alerts.append("INJURED %d · NO MED BED" % needing_med_bed)
 	var lowest_mood_resident: VaultResident = null
 	var recreation_needed := false
 	for resident: VaultResident in game.residents:
