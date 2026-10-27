@@ -2263,13 +2263,45 @@ func _save_day_checkpoint() -> bool:
 	return bool(save_load.save_snapshot(create_snapshot(), checkpoint_path).ok)
 
 
+# Read-only: inspect the same snapshot Retry will apply, including backup recovery.
+func day_checkpoint_retry_status() -> Dictionary:
+	var result := save_load.load_snapshot(checkpoint_path)
+	result["reason"] = "No day checkpoint available"
+	if not bool(result.ok):
+		return result
+	var snapshot: Dictionary = result.snapshot
+	result.ok = false
+	if not _is_snapshot_shape_valid(snapshot):
+		return result
+	if _snapshot_wing_seed(snapshot) != wing_seed:
+		result.reason = "No checkpoint for this wing"
+		return result
+	if _snapshot_sublevel(snapshot) != sublevel:
+		result.reason = "No checkpoint for this wing"
+		return result
+	if snapshot.has(KEEP_RUNNING_KEY) != keep_running:
+		result.reason = "Checkpoint is from another time"
+		return result
+	var checkpoint_elapsed := float(snapshot[KEEP_RUNNING_KEY].seconds) if keep_running else float(snapshot.get("day", {}).get("elapsed_seconds", 0.0))
+	var current_elapsed := keep_running_seconds if keep_running else day_cycle.elapsed_seconds
+	if checkpoint_elapsed > current_elapsed:
+		result.reason = "Checkpoint is from a later time"
+		return result
+	result.ok = true
+	result.reason = ""
+	return result
+
+
 func can_retry_day_checkpoint() -> bool:
-	return FileAccess.file_exists(checkpoint_path) or FileAccess.file_exists(checkpoint_path + ".bak")
+	return bool(day_checkpoint_retry_status().ok)
 
 
 func retry_day_checkpoint() -> bool:
-	var result := save_load.load_snapshot(checkpoint_path)
-	if not bool(result.ok) or not apply_snapshot(result.snapshot):
+	var result := day_checkpoint_retry_status()
+	# Callers can bypass the disabled recap button. Refuse before changing any state.
+	if not bool(result.ok):
+		return false
+	if not apply_snapshot(result.snapshot):
 		status_message = "Could not restore the day checkpoint."
 		status_message_left = 5.0
 		return false

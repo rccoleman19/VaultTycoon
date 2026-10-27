@@ -70,6 +70,7 @@ run_godot_check next-tip-warning --script res://tests/test_next_tip_warning.gd
 run_godot_check next-urgency-rank --script res://tests/test_next_urgency_rank.gd
 run_godot_check alert-triage --script res://tests/test_alert_triage.gd
 run_godot_check death-recap --script res://tests/test_death_recap.gd
+run_godot_check retry-checkpoint-match --script res://tests/test_retry_checkpoint_match.gd
 run_godot_check medical --script res://tests/test_medical.gd
 run_godot_check medical-next-threshold --script res://tests/test_medical_next_threshold.gd
 run_godot_check survival-next --script res://tests/test_survival_next.gd
