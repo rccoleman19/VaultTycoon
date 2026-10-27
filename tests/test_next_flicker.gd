@@ -20,6 +20,7 @@ func _run() -> void:
 	_run_case("D2 starving names stay stable through sub-ten-second rank changes", _test_starving_sticky_name)
 	_run_case("D3 starving names switch at ten seconds and clear after feeding", _test_starving_switch)
 	_run_case("D4 healthy 03/05 openings never name a forecast starvation", _test_starving_opening_jitter)
+	_run_case("D5 a hatch warning keeps the unnamed food forecast on its blocker step", _test_unnamed_over_breach)
 	print("NEXT FLICKER TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -676,4 +677,26 @@ func _test_starving_opening_jitter() -> void:
 			_assert_equal(game.food_system.meals, 3, "D4 %02d lead jitter leaves pantry stock constant" % level)
 			_assert_unnamed_food(game, "D4 %02d opening salvage %d" % [level, salvage])
 			_assert_equal(_sticky_id(game), -1, "D4 %02d opening never retains a forecast resident name" % level)
+		_dispose(game)
+
+
+func _test_unnamed_over_breach() -> void:
+	for level: int in [3, 5]:
+		var game := _starving_opening(level)
+		game.food_system.meals = 3
+		game.breach_system.reset()
+		game.day_cycle.elapsed_seconds = game.breach_system.warning_at
+		game.breach_system.advance(0.0, game.day_cycle.elapsed_seconds)
+		for resident: VaultResident in game.residents:
+			resident.drafted = true
+		game.player_orders.refresh()
+		var blocker: Dictionary = game.player_orders._breach_blocker_step()
+		_assert_false(blocker.is_empty(), "D5 %02d drafted crew leave a hatch blocker step" % level)
+		var step := _next(game)
+		var text := str(step.get("text", ""))
+		_assert_true(text.begins_with("Next: food runway short · "), "D5 %02d blocker step keeps the unnamed food prefix (%s)" % [level, text])
+		_assert_false("starving" in text, "D5 %02d blocker step names nobody" % level)
+		_assert_equal(str(step.get("cause", "")), "food", "D5 %02d blocker step keeps the food cause" % level)
+		_assert_true(bool(step.get("food_unnamed", false)), "D5 %02d blocker step is flagged unnamed" % level)
+		_assert_equal(_sticky_id(game), -1, "D5 %02d blocker step retains no name" % level)
 		_dispose(game)
