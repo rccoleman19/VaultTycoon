@@ -20,7 +20,11 @@ func _run() -> void:
 	_run_case("D2 starving names stay stable through sub-ten-second rank changes", _test_starving_sticky_name)
 	_run_case("D3 starving names switch at ten seconds and clear after feeding", _test_starving_switch)
 	_run_case("D4 healthy 03/05 openings never name a forecast starvation", _test_starving_opening_jitter)
-	_run_case("D5 a hatch warning keeps the unnamed food forecast on its blocker step", _test_unnamed_over_breach)
+	_run_case("D5 a hatch warning keeps the unnamed food forecast without prefixing the hatch step", _test_unnamed_over_breach)
+	_run_case("D6 the food forecast onset matches the unheld runway trigger", _test_forecast_onset)
+	_run_case("D7 the food forecast holds without an on-off flip and releases on schedule", _test_forecast_hold)
+	_run_case("D8 a named death overrides the forecast hold", _test_forecast_named_override)
+	_run_case("D9 the unnamed prefix goes only on food-chain steps", _test_prefix_food_chain_only)
 	print("NEXT FLICKER TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -694,9 +698,108 @@ func _test_unnamed_over_breach() -> void:
 		_assert_false(blocker.is_empty(), "D5 %02d drafted crew leave a hatch blocker step" % level)
 		var step := _next(game)
 		var text := str(step.get("text", ""))
-		_assert_true(text.begins_with("Next: food runway short · "), "D5 %02d blocker step keeps the unnamed food prefix (%s)" % [level, text])
+		_assert_false("food runway short" in text, "D5 %02d hatch blocker step is not prefixed as a food step (%s)" % [level, text])
+		_assert_true("undraft crew" in text or "acknowledge warning" in text, "D5 %02d hatch blocker step still leads (%s)" % [level, text])
 		_assert_false("starving" in text, "D5 %02d blocker step names nobody" % level)
 		_assert_equal(str(step.get("cause", "")), "food", "D5 %02d blocker step keeps the food cause" % level)
 		_assert_true(bool(step.get("food_unnamed", false)), "D5 %02d blocker step is flagged unnamed" % level)
 		_assert_equal(_sticky_id(game), -1, "D5 %02d blocker step retains no name" % level)
 		_dispose(game)
+
+
+func _raw_forecast(game: VaultGame) -> bool:
+	var plan: Dictionary = game.player_orders._food_fix_plan()
+	var lead: float = float(plan.seconds) + game.player_orders._food_chain_work_lead(float(plan.seconds))
+	return game.player_orders._food_runway_seconds() < lead + game.player_orders.FOOD_RUNWAY_MARGIN_SECONDS
+
+
+func _food_cause(game: VaultGame) -> String:
+	return str(game.player_orders._resident_urgency_step().get("cause", ""))
+
+
+func _test_forecast_onset() -> void:
+	var onsets := 0
+	for level: int in [3, 5]:
+		for meals: int in [3, 4, 5, 6, 8, 12]:
+			for salvage: int in [30, 17, 8]:
+				var game := _starving_opening(level)
+				game.food_system.meals = meals
+				game.food_system.salvage = salvage
+				var raw := _raw_forecast(game)
+				onsets += 1 if raw else 0
+				_assert_equal(_food_cause(game) == "food", raw, "D6 %02d meals %d salvage %d first observation matches the unheld trigger" % [level, meals, salvage])
+				_dispose(game)
+	_assert_true(onsets > 6, "D6 the grid exercises both sides of the trigger")
+
+
+func _test_forecast_hold() -> void:
+	var game := _starving_opening(5)
+	game.food_system.meals = 5
+	game.food_system.salvage = 8
+	_assert_true(_raw_forecast(game), "D7 salvage 8 starts the forecast")
+	_assert_equal(_food_cause(game), "food", "D7 onset shows the forecast")
+	# Lead jitter that drops below the trigger must not flip the step off.
+	var flips := 0
+	var was_on := true
+	for salvage: int in [30, 17, 30, 8, 17, 30, 20, 8, 30]:
+		game.food_system.salvage = salvage
+		_advance_clock(game, 0.5)
+		var on := _food_cause(game) == "food"
+		flips += 1 if was_on and not on else 0
+		was_on = on
+	_assert_equal(flips, 0, "D7 no on-off flip through 4.5 seconds of lead jitter")
+	# Salvage 30 gives runway 50 against trigger 37.5: below trigger + 15, so it
+	# still holds long after the minimum hold.
+	game.food_system.salvage = 30
+	_advance_clock(game, 20.0)
+	_assert_false(_raw_forecast(game), "D7 runway has cleared the trigger itself")
+	_assert_equal(_food_cause(game), "food", "D7 holds while the runway is inside trigger plus fifteen")
+	# Clearing trigger + 15 releases it.
+	game.food_system.meals = 6
+	_assert_equal(_food_cause(game), "", "D7 releases once the runway clears the trigger by fifteen seconds")
+	# A new onset after release starts a fresh hold with its own minimum.
+	game.food_system.meals = 5
+	game.food_system.salvage = 8
+	_advance_clock(game, 0.1)
+	_assert_equal(_food_cause(game), "food", "D7 a second onset fires at the unheld trigger")
+	game.food_system.meals = 12
+	_advance_clock(game, 2.0)
+	_assert_equal(_food_cause(game), "food", "D7 minimum hold keeps a fully cleared runway on for five seconds")
+	_advance_clock(game, 3.5)
+	_assert_equal(_food_cause(game), "", "D7 releases after the minimum hold once the runway clears by fifteen")
+	_dispose(game)
+
+
+func _test_forecast_named_override() -> void:
+	var game := _starving_opening(5)
+	game.food_system.meals = 5
+	game.food_system.salvage = 8
+	_assert_equal(_food_cause(game), "food", "D8 hold starts on the forecast")
+	# Everyone gets a stocked pantry, but one resident sits inside their own 60 s runway.
+	game.food_system.meals = 100
+	game.food_system.salvage = 30
+	var ari: VaultResident = game.residents[0]
+	ari.drafted = true
+	_set_food_death(ari, 40.0)
+	_assert_true(_food_death(game, ari) < 60.0, "D8 a drafted resident cannot eat and sits under sixty seconds")
+	_advance_clock(game, 0.2)
+	_assert_false(_raw_forecast(game), "D8 the unheld forecast is off with a stocked pantry")
+	_assert_false(_food_cause(game) == "food", "D8 a named death does not extend the hold past the unheld trigger")
+	# With the forecast truly on, the named death names that resident.
+	game.food_system.meals = 3
+	_assert_true(_raw_forecast(game), "D8 forecast is back on")
+	_assert_starving_name(game, ari, "D8 under-sixty death overrides the unnamed hold")
+	_dispose(game)
+
+
+func _test_prefix_food_chain_only() -> void:
+	var game := _starving_opening(5)
+	var orders = game.player_orders
+	_assert_true(orders.has_method("_is_food_chain_step"), "D9 the food-chain step predicate exists")
+	if orders.has_method("_is_food_chain_step"):
+		for text: String in ["Next: YOU place a Nutrient Station · THEY cook", "Next: YOU place Grow Tray · THEY haul output", "Next: YOU begin reclamation · +18 · THEY fund the Nutrient Station", "Next: YOU undraft Ari [R] · THEY eat/work", "Next: YOU leave Cook on · THEY make meals"]:
+			_assert_true(orders._is_food_chain_step({"text": text}), "D9 prefixes food-chain step: " + text)
+		for text: String in ["Next: YOU place a Rec Console · THEY recover mood", "Next: YOU leave Haul + Craft on · THEY finish the Rec Console", "Next: YOU acknowledge warning · then undraft crew [R]", "Next: YOU place Air Recycler · THEY craft it", "Next: YOU place bunks · THEY craft"]:
+			_assert_false(orders._is_food_chain_step({"text": text}), "D9 never prefixes: " + text)
+		_assert_false(orders._is_food_chain_step({"text": "Next: YOU place a Rec Console · THEY recover mood", "kind": "food", "tool": "rec"}), "D9 a food-kinded Rec blocker step is not a food-chain step")
+	_dispose(game)

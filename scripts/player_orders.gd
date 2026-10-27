@@ -17,6 +17,8 @@ var _next_reclamation_kind := -1
 
 # Guidance reads retain the starvation name until fed or a nearer deadline.
 var _starving_resident_id := -1
+var _food_forecast_latched := false
+var _food_forecast_since := 0.0
 
 var game: VaultGame
 var root: Control
@@ -1253,6 +1255,12 @@ const NEXT_DEATH_WARNING_SECONDS := 60.0
 const STARVING_RUNWAY_S := NEXT_DEATH_WARNING_SECONDS
 const STARVING_SWITCH_S := 10.0
 const FOOD_SHORT_LABEL := "food runway short"
+# The forecast turns on at the runway trigger exactly as before. Once on it
+# holds until the runway clears the trigger by this much AND this long has
+# passed (whichever is later). A named resident (own death under
+# STARVING_RUNWAY_S) always overrides the hold.
+const FOOD_FORECAST_RELEASE_S := 15.0
+const FOOD_FORECAST_MIN_HOLD_S := 5.0
 
 # 03/4242 RELAY LUMEN: waiting for NO MEALS at 217.3 s left only 51 s
 # before Ari died at 268.3 s (CRITICAL at 230 s). Even an immediately placed
@@ -1718,7 +1726,8 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 		# food chain already counts its output in runway; optional future care
 		# must not add a construction delay to that existing production.
 		food_lead = maxf(food_lead, float(plan.seconds) + _food_worker_recovery_seconds())
-	var food_danger := _food_runway_seconds() < food_lead + FOOD_RUNWAY_MARGIN_SECONDS
+	var food_runway := _food_runway_seconds()
+	var food_trigger := food_lead + FOOD_RUNWAY_MARGIN_SECONDS
 	# Repeating an already-enabled Cook order cannot clear another life-support
 	# deadline. Once food work is running/waiting on its source, let an actionable
 	# air fix lead while its supply/build/haul window is still open.
@@ -1752,6 +1761,7 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 		named_resident = sticky_resident
 		named_death = sticky_food_death
 	_starving_resident_id = named_resident.resident_id if named_resident != null else -1
+	var food_danger := _food_forecast_with_hold(food_runway, food_trigger, named_resident != null)
 	# Pantry runway governs the crop cutoff. A produced-food rescue must also
 	# reach the named resident before their own starvation health runs out,
 	# including recovery if breaks currently block delivery or cooking.
@@ -1842,7 +1852,8 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 	if step.is_empty() or _next_build_is_suppressed(step, suppressed_builds):
 		return {}
 	if cause == "food" and named_resident == null:
-		step.text = "Next: %s · %s" % [FOOD_SHORT_LABEL, str(step.text).trim_prefix("Next: ")]
+		if _is_food_chain_step(step):
+			step.text = "Next: %s · %s" % [FOOD_SHORT_LABEL, str(step.text).trim_prefix("Next: ")]
 		step["food_unnamed"] = true
 	else:
 		step.text = "Next: %s %s · %s" % [threatened.resident_name, condition, str(step.text).trim_prefix("Next: ")]
@@ -1852,6 +1863,39 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 	# A named step reports that resident's own deadline.
 	step["death_seconds"] = named_death if cause == "food" and named_resident != null else soonest
 	return step
+
+
+func _food_forecast_with_hold(runway: float, trigger: float, named: bool) -> bool:
+	var now := game.day_cycle.elapsed_seconds
+	if named:
+		_food_forecast_latched = false
+		return runway < trigger
+	if _food_forecast_latched and now < _food_forecast_since:
+		_food_forecast_latched = false
+	if _food_forecast_latched:
+		if runway >= trigger + FOOD_FORECAST_RELEASE_S and now - _food_forecast_since >= FOOD_FORECAST_MIN_HOLD_S:
+			_food_forecast_latched = false
+		return _food_forecast_latched or runway < trigger
+	if runway < trigger:
+		_food_forecast_latched = true
+		_food_forecast_since = now
+		return true
+	return false
+
+
+# The unnamed forecast prefix belongs only on steps that act on the food chain:
+# not on the Rec Console steps that keep food workers from breaking, and not on
+# unrelated blockers such as the hatch warning.
+func _is_food_chain_step(step: Dictionary) -> bool:
+	var text := str(step.get("text", "")).to_lower()
+	if str(step.get("tool", "")) == "rec" or "rec console" in text:
+		return false
+	if str(step.get("kind", "")) == STEP_KIND_FOOD:
+		return true
+	for word: String in ["nutrient station", "grow tray", "kitchen", "cook", "meal", "eat/work"]:
+		if word in text:
+			return true
+	return false
 
 
 func _urgency_interrupts_care(step: Dictionary) -> bool:
@@ -1878,7 +1922,8 @@ func _name_food_recovery(step: Dictionary, urgent_step: Dictionary) -> Dictionar
 	if str(urgent_step.get("cause", "")) == "food":
 		if bool(urgent_step.get("food_unnamed", false)):
 			# Forecast only: no resident is inside their own runway yet.
-			step.text = "Next: %s · %s" % [FOOD_SHORT_LABEL, str(step.text).trim_prefix("Next: ")]
+			if _is_food_chain_step(step):
+				step.text = "Next: %s · %s" % [FOOD_SHORT_LABEL, str(step.text).trim_prefix("Next: ")]
 			step["urgent"] = true
 			step["resident_id"] = int(urgent_step.resident_id)
 			step["cause"] = "food"
@@ -3771,6 +3816,7 @@ func clear_survival_tips() -> void:
 	_next_hold_step.clear()
 	_next_reclamation_kind = -1
 	_starving_resident_id = -1
+	_food_forecast_latched = false
 	_survival_tips.clear()
 	_survival_tip_details.clear()
 	_survival_tip_sample_left = 0.0
