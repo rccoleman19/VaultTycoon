@@ -480,11 +480,20 @@ func _assert_starving_name(game: VaultGame, resident: VaultResident, message: St
 	_assert_equal(str(urgent.get("cause", "")), "food", message + " keeps the food cause")
 	_assert_true(bool(urgent.get("urgent", false)), message + " is urgent")
 	_assert_equal(int(urgent.get("resident_id", -1)), resident.resident_id, message + " exposes the named resident id")
-	_assert_equal(game.player_orders._starving_resident_id, resident.resident_id, message + " remembers the selected resident")
+	_assert_equal(_sticky_id(game), resident.resident_id, message + " remembers the selected resident")
 	_assert_true(_food_death(game, resident) < 60.0, message + " names a resident below the real 60-second threshold")
 	_assert_approximately(float(urgent.get("death_seconds", INF)), _food_death(game, resident), 0.00001, message + " reports the selected resident's own runway")
 	_assert_equal(int(_next(game).get("resident_id", -1)), resident.resident_id, message + " reaches the public Next selector")
 	return urgent
+
+
+# Read by name so the control run on a tree without this API fails assertions instead of script errors.
+func _sticky_id(game: VaultGame) -> Variant:
+	return game.player_orders.get("_starving_resident_id")
+
+
+func _orders_const(game: VaultGame, const_name: String) -> Variant:
+	return game.player_orders.get_script().get_script_constant_map().get(const_name)
 
 
 func _test_starving_runway() -> void:
@@ -492,8 +501,8 @@ func _test_starving_runway() -> void:
 	_assert_equal(game.residents.size(), 4, "D1 05 opening has the real four-resident crew")
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.KITCHEN), 0, "D1 opening has no Nutrient Station")
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY), 0, "D1 opening has no Grow Tray")
-	_assert_equal(game.player_orders.STARVING_RUNWAY_S, 60.0, "D1 starving uses the named 60-second runway constant")
-	_assert_equal(game.player_orders.STARVING_SWITCH_S, 10.0, "D1 sticky selection uses the named ten-second switch constant")
+	_assert_equal(_orders_const(game, "STARVING_RUNWAY_S"), 60.0, "D1 starving uses the named 60-second runway constant")
+	_assert_equal(_orders_const(game, "STARVING_SWITCH_S"), 10.0, "D1 sticky selection uses the named ten-second switch constant")
 	var checkpoints := [[2.4, 30], [4.7, 17], [9.4, 8]]
 	for checkpoint: Array in checkpoints:
 		game.day_cycle.elapsed_seconds = float(checkpoint[0])
@@ -548,7 +557,7 @@ func _test_starving_runway() -> void:
 func _test_starving_sticky_name() -> void:
 	var game := _starving_opening()
 	_assert_no_starving(game, "D2 every resident starts above the threshold")
-	_assert_equal(game.player_orders._starving_resident_id, -1, "D2 healthy crew names nobody")
+	_assert_equal(_sticky_id(game), -1, "D2 healthy crew names nobody")
 	game.food_system.meals = 0
 	var ari: VaultResident = game.residents[0]
 	var bo: VaultResident = game.residents[1]
@@ -588,7 +597,7 @@ func _test_starving_switch() -> void:
 		_assert_starving_name(game, bo, "D3 feeding the sticky resident moves the name to the remaining hungry crew")
 		bo.needs.eat()
 		_assert_no_starving(game, "D3 everybody is above the threshold after eating")
-		_assert_equal(game.player_orders._starving_resident_id, -1, "D3 no residents under the threshold clears the sticky id")
+		_assert_equal(_sticky_id(game), -1, "D3 no residents under the threshold clears the sticky id")
 		_set_food_death(ari, 50.0)
 		_set_food_death(bo, 54.0)
 		_assert_starving_name(game, ari, "D3 a new hungry span selects the shortest runway again")
@@ -616,13 +625,13 @@ func _test_starving_game_reset() -> void:
 	_set_food_death(game.residents[0], 50.0)
 	_assert_starving_name(game, game.residents[0], "D3 load fixture has a live sticky name")
 	_assert_true(game.apply_snapshot(snapshot), "D3 real loader accepts the healthy same-clock snapshot")
-	_assert_equal(game.player_orders._starving_resident_id, -1, "D3 loading clears the previous crew's sticky id before another getter")
+	_assert_equal(_sticky_id(game), -1, "D3 loading clears the previous crew's sticky id before another getter")
 	_assert_no_starving(game, "D3 restored healthy snapshot")
 	game.food_system.meals = 0
 	_set_food_death(game.residents[0], 50.0)
 	_assert_starving_name(game, game.residents[0], "D3 new-game fixture has a live sticky name")
 	game.new_game(false, 4242, 5)
-	_assert_equal(game.player_orders._starving_resident_id, -1, "D3 new game clears the previous crew's sticky id")
+	_assert_equal(_sticky_id(game), -1, "D3 new game clears the previous crew's sticky id")
 	_dispose(game)
 
 
@@ -635,5 +644,5 @@ func _test_starving_opening_jitter() -> void:
 			_advance_clock(game, 0.7)
 			_assert_equal(game.food_system.meals, 12, "D4 %02d lead jitter leaves pantry stock constant" % level)
 			_assert_no_starving(game, "D4 %02d opening salvage %d" % [level, salvage])
-			_assert_equal(game.player_orders._starving_resident_id, -1, "D4 %02d opening never retains a forecast resident name" % level)
+			_assert_equal(_sticky_id(game), -1, "D4 %02d opening never retains a forecast resident name" % level)
 		_dispose(game)
