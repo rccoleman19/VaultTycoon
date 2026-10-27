@@ -2,6 +2,7 @@ class_name JobSystem
 extends Node
 
 enum JobType { DIG, HAUL_RUBBLE, SUPPLY_BUILD, BUILD, COOK, SUPPLY_BREACH, PATCH_BREACH, HAUL_RAW_FOOD, HAUL_MEAL }
+enum HatchResponseState { WATCHING, SEALED, NEEDS_HAUL, NEEDS_CRAFT, NO_PATH, NEEDS_SALVAGE, RESPONDING, AWAITING }
 
 const JOB_NAMES := {
 	JobType.DIG: "Excavating",
@@ -448,37 +449,74 @@ func get_queued_count() -> int:
 	return count
 
 
-func get_breach_response_status() -> String:
+# Shared response for DETAILS and Next. State/responder describe the current
+# stage; missing_work also includes the later Craft stage without a path search.
+# automatic_haul tracks eligibility to turn rubble into salvage for funding.
+func get_hatch_response() -> Dictionary:
+	var response := {
+		"state": HatchResponseState.WATCHING,
+		"job_type": -1,
+		"responder": null,
+		"has_living_crew": false,
+		"has_undrafted_crew": false,
+		"missing_work": [],
+		"automatic_haul": false,
+		"salvage_shortfall": 0,
+	}
 	if breach == null or breach.phase == BreachSystem.Phase.DORMANT:
-		return "Automated seal watch active."
+		return response
 	if breach.is_sealed():
-		return "PATCH COMPLETE · HATCH STABLE"
-	if breach.needs_supply():
-		var remaining := maxi(0, BreachSystem.PATCH_COST - breach.patch_delivered - _breach_supply_in_transit())
-		var forced_hauler := _forced_breach_responder(JobType.SUPPLY_BREACH)
-		if forced_hauler == null:
-			if not _has_allowed_worker(JobType.SUPPLY_BREACH):
-				return "BLOCKED · ENABLE HAUL"
-			if not _has_worker_path(JobType.SUPPLY_BREACH):
-				return "BLOCKED · NO PATH TO HATCH"
-		elif map_grid.find_path(forced_hauler.get_cell(map_grid), BreachSystem.HATCH_CELL).is_empty():
-			return "BLOCKED · NO PATH TO HATCH"
-		if food.salvage < remaining:
-			return "BLOCKED · NEEDS %d SALVAGE" % (remaining - food.salvage)
-		if _has_reserved_job(JobType.SUPPLY_BREACH):
-			return "HAUL RESPONSE EN ROUTE"
-		return "AWAITING HAUL RESPONSE"
-	var forced_patcher := _forced_breach_responder(JobType.PATCH_BREACH)
-	if forced_patcher == null:
-		if not _has_allowed_worker(JobType.PATCH_BREACH):
+		response.state = HatchResponseState.SEALED
+		return response
+	var supplying := breach.needs_supply()
+	var type := JobType.SUPPLY_BREACH if supplying else JobType.PATCH_BREACH
+	var forced_responder := _forced_breach_responder(type)
+	response.job_type = type
+	response.responder = forced_responder if forced_responder != null else _reserved_breach_responder(type)
+	for resident: VaultResident in game.residents:
+		if resident.alive:
+			response.has_living_crew = true
+			if not resident.drafted:
+				response.has_undrafted_crew = true
+	# DETAILS describes the current stage; Next also prepares the later Craft
+	# stage. A live forced order covers only its own stage, including with OFF.
+	response.automatic_haul = _has_allowed_worker(JobType.HAUL_RUBBLE)
+	if supplying and forced_responder == null and not response.automatic_haul:
+		response.missing_work.append("haul")
+	if (supplying or forced_responder == null) and not _has_allowed_worker(JobType.PATCH_BREACH):
+		response.missing_work.append("craft")
+	if supplying:
+		response.salvage_shortfall = maxi(0, BreachSystem.PATCH_COST - breach.patch_delivered - _breach_supply_in_transit() - food.salvage)
+	if response.missing_work.has("haul" if supplying else "craft"):
+		response.state = HatchResponseState.NEEDS_HAUL if supplying else HatchResponseState.NEEDS_CRAFT
+	elif not _has_worker_path(type, forced_responder):
+		response.state = HatchResponseState.NO_PATH
+	elif response.salvage_shortfall > 0:
+		response.state = HatchResponseState.NEEDS_SALVAGE
+	else:
+		response.state = HatchResponseState.RESPONDING if response.responder != null else HatchResponseState.AWAITING
+	return response
+
+
+func get_breach_response_status() -> String:
+	var response := get_hatch_response()
+	var supplying: bool = response.job_type == JobType.SUPPLY_BREACH
+	match response.state:
+		HatchResponseState.SEALED:
+			return "PATCH COMPLETE · HATCH STABLE"
+		HatchResponseState.NEEDS_HAUL:
+			return "BLOCKED · ENABLE HAUL"
+		HatchResponseState.NEEDS_CRAFT:
 			return "BLOCKED · ENABLE CRAFT"
-		if not _has_worker_path(JobType.PATCH_BREACH):
+		HatchResponseState.NO_PATH:
 			return "BLOCKED · NO PATH TO HATCH"
-	elif map_grid.find_path(forced_patcher.get_cell(map_grid), BreachSystem.HATCH_CELL).is_empty():
-		return "BLOCKED · NO PATH TO HATCH"
-	if _has_reserved_job(JobType.PATCH_BREACH):
-		return "PATCH CREW RESPONDING"
-	return "AWAITING PATCH CREW"
+		HatchResponseState.NEEDS_SALVAGE:
+			return "BLOCKED · NEEDS %d SALVAGE" % response.salvage_shortfall
+		HatchResponseState.RESPONDING:
+			return "HAUL RESPONSE EN ROUTE" if supplying else "PATCH CREW RESPONDING"
+		HatchResponseState.AWAITING:
+			return "AWAITING HAUL RESPONSE" if supplying else "AWAITING PATCH CREW"
+	return "Automated seal watch active."
 
 
 func get_breach_supply_in_transit() -> int:
@@ -489,10 +527,10 @@ func get_breach_salvage_reserve() -> int:
 	return _breach_salvage_reserve()
 
 
-# The NO PATH TO HATCH test from get_breach_response_status for the current
-# patch stage: Haul crew while supplying, Craft crew once supplied.
+# Current-stage path, following a live forced reservation before automatic crew.
 func has_hatch_worker_path() -> bool:
-	return _has_worker_path(JobType.SUPPLY_BREACH if breach.needs_supply() else JobType.PATCH_BREACH)
+	var type := JobType.SUPPLY_BREACH if breach.needs_supply() else JobType.PATCH_BREACH
+	return _has_worker_path(type, _forced_breach_responder(type))
 
 
 # reachable_only keeps rubble a Haul resident can reach; enough >= 0 stops
@@ -1309,19 +1347,23 @@ func _has_allowed_worker(type: int) -> bool:
 
 # DETAILS status and the Next tip both ask this every frame, paused or not.
 # The answer is a pure function of the map tiles and the cells of the residents
-# eligible for this type (the type only matters through that set), so the BFS reruns only when that input changes: a dug tunnel, a
-# move, an undraft, a death or a work toggle is seen on the very same call.
+# eligible for this type, or just the live forced responder. The type only
+# matters through that set, so BFS reruns only when the input changes: a dug
+# tunnel, move, undraft, death or work toggle is seen on the very same call.
 var hatch_path_searches := 0
 var _hatch_path_key: Array = []
 var _hatch_path_cells: Array[int] = []
 var _hatch_path_value := false
 
 
-func _has_worker_path(type: int) -> bool:
+func _has_worker_path(type: int, forced_responder: VaultResident = null) -> bool:
 	var key: Array = [map_grid.get_instance_id()]
-	for resident: VaultResident in game.residents:
-		if resident.alive and not resident.drafted and _resident_allows(resident, type):
-			key.append(resident.get_cell(map_grid))
+	if forced_responder != null:
+		key.append(forced_responder.get_cell(map_grid))
+	else:
+		for resident: VaultResident in game.residents:
+			if resident.alive and not resident.drafted and _resident_allows(resident, type):
+				key.append(resident.get_cell(map_grid))
 	if key == _hatch_path_key and map_grid.cells == _hatch_path_cells:
 		return _hatch_path_value
 	hatch_path_searches += 1
@@ -1337,22 +1379,22 @@ func _has_worker_path(type: int) -> bool:
 
 # A player-forced hatch order bypasses OFF (force_job_at), so while its exact
 # reservation is live the automatic permission/path checks do not apply; the
-# status follows that resident instead. Returns null when there is none.
+# response follows that resident instead. Returns null when there is none.
 func _forced_breach_responder(type: int) -> VaultResident:
 	for resident: VaultResident in game.residents:
 		if not resident.alive or resident.drafted or not resident.is_forced_job or resident.current_job_type != type:
 			continue
 		var job := _find_job(resident.current_job_id)
-		if not job.is_empty() and not bool(job.get("done", false)) and int(job.get("reserved_by", -1)) == resident.resident_id:
+		if not job.is_empty() and int(job.type) == type and job.target == BreachSystem.HATCH_CELL and not bool(job.get("done", false)) and int(job.get("reserved_by", -1)) == resident.resident_id:
 			return resident
 	return null
 
 
-func _has_reserved_job(type: int) -> bool:
+func _reserved_breach_responder(type: int) -> VaultResident:
 	for job: Dictionary in jobs:
 		if int(job.type) == type and int(job.reserved_by) >= 0 and not bool(job.get("done", false)):
-			return true
-	return false
+			return game.get_resident_by_id(int(job.reserved_by))
+	return null
 
 
 func _is_integer_in_range(value: Variant, minimum: int, maximum: int) -> bool:
