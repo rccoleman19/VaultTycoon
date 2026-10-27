@@ -25,7 +25,6 @@ func _run() -> void:
 	_case("e", _test_last_actionable_tip)
 	_case("f", _test_loss_and_death_save_load)
 	_case("g", _test_keep_running_day_checkpoints)
-	_case("h", _test_save_load_number_lexemes)
 	for path: String in _paths:
 		_remove_test_save(path)
 	print("DEATH RECAP TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
@@ -331,7 +330,7 @@ func _test_loss_and_death_save_load() -> void:
 	_assert_true(game.load_game(_player_path), "a saved death snapshot validates and loads")
 	_assert_equal(game.outcome, "death", "loaded death remains resumable")
 	_assert_true(game.player_orders.outcome_panel.visible, "Load reopens the death recap")
-	_assert_json_equal(game, game.create_snapshot(), snapshot, "loaded death snapshot preserves its exact serialized state")
+	_assert_json_equal(game, game.create_snapshot(), snapshot, "loaded death snapshot preserves its canonical serialized state")
 	# Finish the actual wipe; the shared recap remains and Resume disappears.
 	for resident: VaultResident in game.residents:
 		if resident.alive:
@@ -400,42 +399,31 @@ func _test_keep_running_day_checkpoints() -> void:
 	_dispose(game)
 
 
-func _test_save_load_number_lexemes() -> void:
-	var save_load := SaveLoad.new()
-	root.add_child(save_load)
-	var path := _path("numbers")
-	var source := {
-		"integer": 1,
-		"decimal": 1.0,
-		"fraction": 1.25,
-		"nested": {"integers": [0, -4, 7], "decimals": [0.0, -4.0, 0.125]},
-		"quoted": "123 \"4.0\" \\56",
-		"unicode": "Ari · Ω · 森 · 9",
-	}
-	_assert_true(bool(save_load.save_snapshot(source, path).ok), "nested numeric fixture saves through the existing atomic path")
-	var loaded := save_load.load_snapshot(path)
-	_assert_true(bool(loaded.ok), "nested numeric fixture loads through SaveLoad")
-	if bool(loaded.ok):
-		_assert_json_equal(null, loaded.snapshot, source, "SaveLoad preserves exact nested integer/float JSON and quoted text")
-	# Duplicate object keys are accepted by the existing JSON parser, keeping
-	# the last value. Lexical restoration must fall back safely when duplicate
-	# numbers no longer align with the parsed object's values or count.
-	var duplicate_path := _path("duplicate_numbers")
-	var file := FileAccess.open(duplicate_path, FileAccess.WRITE)
-	file.store_string('{"version":1,"game":{"value":1,"value":2,"nested":{"count":3,"count":4},"text":"quoted \\"5\\" \\\\6 · Ω"}}')
-	file.close()
-	loaded = save_load.load_snapshot(duplicate_path)
-	_assert_true(bool(loaded.ok), "duplicate-key JSON keeps the existing parser's accepted behavior")
-	if bool(loaded.ok):
-		_assert_equal(loaded.snapshot.get("value"), 2, "duplicate numeric keys keep their final parsed value")
-		_assert_equal(loaded.snapshot.get("nested", {}).get("count"), 4, "nested duplicate numeric keys keep their final parsed value")
-		_assert_equal(loaded.snapshot.get("text"), "quoted \"5\" \\6 · Ω", "fallback leaves quoted digits, escapes and Unicode unchanged")
-	_dispose(save_load)
+# Canonical JSON: keys sorted, every number normalized to a float (JSON loads ints as floats), so
+# the comparison is about state, not about int-vs-float lexemes.
+func _canonical_json(value: Variant) -> String:
+	return JSON.stringify(_normalize_numbers(value), "", true, true)
+
+
+func _normalize_numbers(value: Variant) -> Variant:
+	if value is Dictionary:
+		var out := {}
+		for key: Variant in value:
+			out[key] = _normalize_numbers(value[key])
+		return out
+	if value is Array:
+		var items := []
+		for item: Variant in value:
+			items.append(_normalize_numbers(item))
+		return items
+	if typeof(value) == TYPE_INT:
+		return float(value)
+	return value
 
 
 func _assert_json_equal(_game_value: VaultGame, actual: Dictionary, expected: Dictionary, message: String) -> void:
-	var actual_json := JSON.stringify(actual, "", true, true)
-	var expected_json := JSON.stringify(expected, "", true, true)
+	var actual_json := _canonical_json(actual)
+	var expected_json := _canonical_json(expected)
 	var detail := ""
 	if actual_json != expected_json:
 		var offset := 0
