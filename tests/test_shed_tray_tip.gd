@@ -132,7 +132,7 @@ func _test_last_lumen() -> void:
 	_assert_shown(game, ADD_POWER, "S2")
 	_assert_recovery_metadata(_next(game), "S2")
 	var suppressed := {VaultBuilding.Kind.GENERATOR: true}
-	_assert_true(game.player_orders._shed_tray_step(suppressed).is_empty(), "S2 queued-suppressed Charge placement does not become a shed tip")
+	_assert_true(_shed(game, suppressed).is_empty(), "S2 queued-suppressed Charge placement does not become a shed tip")
 	_assert_equal(str(game.player_orders._primary_next_step_chain(suppressed).get("text", "")), REC, "S2 suppression lets the existing mood decision run")
 	_dispose(game)
 
@@ -237,7 +237,7 @@ func _test_fix_and_latch() -> void:
 	_assert_true(game.toggle_building_enabled(lumen.building_id), "S5 applies the recommended real Lumen DISABLE action")
 	_assert_true(game.get_building_at(TRAY_CELL).powered, "S5 released power immediately restores the only tray")
 	_assert_false(game.power_grid.brownout_active, "S5 the real allocation clears its brownout")
-	_assert_true(game.player_orders._shed_tray_step().is_empty(), "S5 the shed rule stops once the tray is powered")
+	_assert_true(_shed(game).is_empty(), "S5 the shed rule stops once the tray is powered")
 	_assert_shown(game, REC, "S5 after power release with mood now 25")
 	_assert_false("Grow Tray" in _text(game), "S5 a repaired tray does not remain in Next")
 	_dispose(game)
@@ -252,7 +252,7 @@ func _test_powered_tray() -> void:
 	_assert_true(game.toggle_building_enabled(spare.building_id), "S5 spare tray is manually disabled through the real action")
 	_assert_true(spare.manually_disabled and not spare.powered, "S5 spare is a disabled complete tray")
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY), 1, "S5 main tray stays powered alongside the disabled spare")
-	_assert_true(game.player_orders._shed_tray_step().is_empty(), "S5 any powered tray prevents the new rule from firing")
+	_assert_true(_shed(game).is_empty(), "S5 any powered tray prevents the new rule from firing")
 	_assert_shown(game, REC, "S5 powered tray with disabled spare")
 	_dispose(game)
 
@@ -265,7 +265,7 @@ func _test_finish_charge() -> void:
 	_assert_shown(game, FINISH_POWER, "S6")
 	_assert_false("place a Charge Node" in _text(game), "S6 never requests another Charge Node")
 	_assert_recovery_metadata(_next(game), "S6")
-	_assert_equal(str(game.player_orders._shed_tray_step({VaultBuilding.Kind.GENERATOR: true}).get("text", "")), FINISH_POWER, "S6 queued placement suppression leaves the existing finish action usable")
+	_assert_equal(str(_shed(game, {VaultBuilding.Kind.GENERATOR: true}).get("text", "")), FINISH_POWER, "S6 queued placement suppression leaves the existing finish action usable")
 	_dispose(game)
 
 
@@ -279,7 +279,7 @@ func _test_unpowered_kitchen() -> void:
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.KITCHEN), 1, "S7 kitchen guard has a complete kitchen")
 	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.KITCHEN), 0, "S7 actual low supply sheds the kitchen as well")
 	_assert_true(game.power_grid.is_building_shed(game.get_building_at(TRAY_CELL).building_id), "S7 tray remains really shed while kitchen is offline")
-	_assert_true(game.player_orders._shed_tray_step().is_empty(), "S7 an unpowered kitchen blocks the shed-only rule")
+	_assert_true(_shed(game).is_empty(), "S7 an unpowered kitchen blocks the shed-only rule")
 	_assert_shown(game, REC, "S7 unpowered kitchen preserves the previous mood tip")
 	_dispose(game)
 
@@ -294,7 +294,7 @@ func _test_incomplete_tray() -> void:
 	game.player_orders.clear_survival_tips()
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GROW_TRAY), 0, "S7 incomplete blueprint is not a completed tray")
 	_assert_true(game.get_building_at(KITCHEN_CELL).powered, "S7 no-complete-tray guard still has a powered kitchen")
-	_assert_true(game.player_orders._shed_tray_step().is_empty(), "S7 no completed tray blocks the shed rule")
+	_assert_true(_shed(game).is_empty(), "S7 no completed tray blocks the shed rule")
 	_assert_shown(game, REC, "S7 incomplete tray preserves the previous mood tip")
 	_dispose(game)
 
@@ -334,7 +334,17 @@ func _test_air_priority() -> void:
 func _test_ended_guard() -> void:
 	var game := _wing()
 	_assert_shed(game, "S7 ended")
-	_assert_false(game.player_orders._shed_tray_step().is_empty(), "S7 live fixture initially has a shed recovery step")
+	_assert_false(_shed(game).is_empty(), "S7 live fixture initially has a shed recovery step")
 	game.ended = true
-	_assert_true(game.player_orders._shed_tray_step().is_empty(), "S7 ended game suppresses the shed recovery rule")
+	_assert_true(_shed(game).is_empty(), "S7 ended game suppresses the shed recovery rule")
 	_dispose(game)
+
+
+# Calls the shed-tray rule without a script error on trees that lack it; the
+# existence assertion fails there and a sentinel step fails emptiness checks.
+func _shed(game: VaultGame, suppressed: Dictionary = {}) -> Dictionary:
+	var exists := game.player_orders.has_method("_shed_tray_step")
+	_assert_true(exists, "player orders exposes the shed-tray rule")
+	if not exists:
+		return {"text": "<missing shed-tray rule>"}
+	return game.player_orders.call("_shed_tray_step", suppressed)
