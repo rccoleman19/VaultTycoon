@@ -86,6 +86,27 @@ func _run() -> void:
 	quit(1 if _failure_count else 0)
 
 
+# This deterministic ledger walk deliberately never buys the optional salvage actions
+# (reclamation, spend). Record that the new advice is shown, then drive the underlying
+# chain step it replaced, so the walk's exact milestones are unchanged.
+var _salvage_advice_seen: Dictionary = {}
+
+
+func _walk_next(game: VaultGame) -> Dictionary:
+	var displayed: Dictionary = game.player_orders._primary_next_step()
+	var action := str(displayed.get("action", ""))
+	if action not in ["reclaim", "spend"]:
+		return displayed
+	var text := str(displayed.get("text", ""))
+	if not _salvage_advice_seen.has(text):
+		_salvage_advice_seen[text] = true
+		_assert_equal(str(displayed.get("tool", "")), "select", "salvage advice preserves Select during the nonacting ledger walk")
+	_assert_false(game.reclaim_active, "ignoring salvage advice never starts reclamation")
+	var selected: Dictionary = game.player_orders._primary_next_step_chain({})
+	_assert_false(selected.is_empty(), "salvage advice retains a selected underlying action")
+	return selected
+
+
 func _walk() -> void:
 	var game := _spawn_game()
 	game.begin_shift()
@@ -133,7 +154,7 @@ func _walk() -> void:
 		if game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged:
 			if not _resume_warning(game):
 				break
-		var step: Dictionary = game.player_orders._primary_next_step()
+		var step: Dictionary = _walk_next(game)
 		var tuple := [step.text, step.help, step.tool]
 		if tuple != _last_tuple:
 			_history.append("tick=%d elapsed=%.1f: %s" % [_tick, game.day_cycle.elapsed_seconds, str(tuple)])
@@ -237,7 +258,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 		_kitchen_placements += 1
 		_assert_true(_kitchen != null and not _kitchen.complete and _kitchen.get_cost() == 10, "one real incomplete Kitchen costing 10")
 		_assert_equal(game.buildings.size(), 9, "nine buildings at Kitchen placement")
-		var after := game.player_orders._primary_next_step()
+		var after := _walk_next(game)
 		_assert_equal([after.text, after.help, after.tool], FINISH_NUTRIENT, "Kitchen placement immediately gives exact Nutrient finish tuple")
 		return _failure_count == 0
 	if tuple == FINISH_GROW:
@@ -257,7 +278,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			_grow = game.get_building_at(GROW_CELL)
 			_grow_placements += 1
 			_assert_true(_grow != null and not _grow.complete and _grow.get_cost() == 12, "one real incomplete Grow blueprint costing 12")
-			var after: Dictionary = game.player_orders._primary_next_step()
+			var after: Dictionary = _walk_next(game)
 			_assert_equal([after.text, after.help, after.tool], FINISH_GROW, "Grow placement immediately gives exact finish tuple")
 			return _failure_count == 0
 		if _grow.complete:
@@ -279,7 +300,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			_charge_placements += 1
 			_assert_true(_charge != null and not _charge.complete and not _charge.is_emergency_core, "one real incomplete non-Core Charge blueprint")
 			_assert_true(game.day_cycle.elapsed_seconds < 60.0, "Charge placed strictly before 60s")
-			var after: Dictionary = game.player_orders._primary_next_step()
+			var after: Dictionary = _walk_next(game)
 			_assert_equal([after.text, after.help, after.tool], FINISH_CHARGE, "Charge placement immediately gives exact finish tuple")
 			return _failure_count == 0
 		if _charge.complete:
