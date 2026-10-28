@@ -33,7 +33,7 @@ static func is_better(candidate: Dictionary, previous: Dictionary) -> bool:
 
 func read() -> Dictionary:
 	var primary := _read_file(path)
-	if int(primary.status) == Status.VALID:
+	if int(primary.status) == Status.VALID or int(primary.status) == Status.UNSUPPORTED:
 		return primary
 	var backup := _read_file(path + BACKUP_SUFFIX)
 	if int(backup.status) == Status.VALID:
@@ -85,13 +85,15 @@ func _read_file(file_path: String) -> Dictionary:
 	if error != OK or parser.parse(content) != OK:
 		return {"status": Status.CORRUPT, "wings": {}}
 	var parsed: Variant = parser.data
-	if not parsed is Dictionary or parsed.size() != 2:
+	if not parsed is Dictionary:
 		return {"status": Status.CORRUPT, "wings": {}}
 	var version: Variant = parsed.get("version")
 	if not WingRecords._is_integral(version):
 		return {"status": Status.CORRUPT, "wings": {}}
 	if version != VERSION:
 		return {"status": Status.UNSUPPORTED, "wings": {}}
+	if parsed.size() != 2:
+		return {"status": Status.CORRUPT, "wings": {}}
 	var wings: Variant = parsed.get("wings")
 	if not wings is Dictionary:
 		return {"status": Status.CORRUPT, "wings": {}}

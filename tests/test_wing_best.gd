@@ -11,16 +11,24 @@ func _run() -> void:
 	_run_case("the best-run store exists", func() -> void:
 		_assert_true(_best_script != null, "scripts/wing_best.gd must exist"))
 	if _best_script != null:
-		_run_case("missing and unreadable stores are empty; round trip is independent", _test_round_trip)
-		_run_case("invalid submissions do no I/O", _test_invalid_inputs)
-		_run_case("invalid documents load entirely empty", _test_bad_files)
-		_run_case("ranking and worse submissions preserve the best", _test_ranking)
-		_run_case("atomic failures retain the old best", _test_atomic)
-		_run_case("backup recovery survives failed promotion", _test_backup)
-		_run_case("only the win outcome is a win", _test_outcomes)
-		_run_case("finish, recap, briefing, retry and LOAD integration", _test_game)
-		_run_case("win, Continue and Keep Running never rewrite a better run", _test_keep_running)
-		_run_case("scripted games cannot use the real best sidecar", _test_isolation)
+		for extra_metadata: bool in [false, true]:
+			for has_backup: bool in [false, true]:
+				_run_case("future primary: metadata=%s, backup=%s" % [extra_metadata, has_backup], _test_future_primary.bind(extra_metadata, has_backup))
+		_run_case("current version still enforces document shape", _test_current_shape)
+		_run_case("non-integral versions remain corrupt", _test_non_integral_version)
+		_run_case("missing and corrupt primaries still consult backups", _test_backup_status)
+		# Run just the ordering regression and its controls with -- --unsupported-first-only.
+		if not OS.get_cmdline_user_args().has("--unsupported-first-only"):
+			_run_case("missing and unreadable stores are empty; round trip is independent", _test_round_trip)
+			_run_case("invalid submissions do no I/O", _test_invalid_inputs)
+			_run_case("invalid documents load entirely empty", _test_bad_files)
+			_run_case("ranking and worse submissions preserve the best", _test_ranking)
+			_run_case("atomic failures retain the old best", _test_atomic)
+			_run_case("backup recovery survives failed promotion", _test_backup)
+			_run_case("only the win outcome is a win", _test_outcomes)
+			_run_case("finish, recap, briefing, retry and LOAD integration", _test_game)
+			_run_case("win, Continue and Keep Running never rewrite a better run", _test_keep_running)
+			_run_case("scripted games cannot use the real best sidecar", _test_isolation)
 	print("WING BEST TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
 
@@ -129,6 +137,99 @@ func _test_bad_files() -> void:
 		_assert_equal(store.read().wings, {}, "invalid file is entirely empty")
 		_assert_equal(_bytes(store.path), content, "read never modifies invalid data")
 	_cleanup()
+
+
+# Preserve both raw bytes and hashes, including whether a backup existed at all.
+func _file_state(path: String) -> Dictionary:
+	if not FileAccess.file_exists(path):
+		return {"exists": false}
+	return {"exists": true, "bytes": FileAccess.get_file_as_bytes(path), "md5": FileAccess.get_md5(path)}
+
+
+func _assert_store_unchanged(store: Variant, primary: Dictionary, backup: Dictionary) -> void:
+	_assert_equal(_file_state(store.path), primary, "primary existence, bytes and md5 unchanged")
+	_assert_equal(_file_state(store.path + ".bak"), backup, "backup existence, bytes and md5 unchanged")
+	var quarantined := PackedStringArray()
+	for name: String in DirAccess.get_files_at(_dir):
+		if name.begins_with("wing_best.json.corrupt-"):
+			quarantined.append(name)
+	_assert_equal(quarantined, PackedStringArray(), "no .corrupt-* file created")
+
+
+func _test_future_primary(extra_metadata: bool, has_backup: bool) -> void:
+	var store: Variant = _store()
+	var document := {"version": 2, "wings": {"07-1092": _run_entry()}}
+	if extra_metadata:
+		document.metadata = {"future": true}
+	_put(store.path, JSON.stringify(document, "  ") + "\n")
+	if has_backup:
+		_put(store.path + ".bak", JSON.stringify({"version": 1, "wings": {"07-1092": _run_entry()}}) + "\n")
+	var primary := _file_state(store.path)
+	var backup := _file_state(store.path + ".bak")
+	_assert_equal(store.read(), {"status": _best_script.Status.UNSUPPORTED, "wings": {}}, "future primary takes precedence over backup and shape")
+	_assert_store_unchanged(store, primary, backup)
+	_assert_true(_best_script.is_better(_run_entry(true), _run_entry()), "submission beats the backup's stored run")
+	_assert_false(store.submit(4242, 7, _run_entry(true)).new_best, "future primary refuses a better submission")
+	_assert_store_unchanged(store, primary, backup)
+	_cleanup()
+
+
+func _test_current_shape() -> void:
+	for has_backup: bool in [false, true]:
+		var store: Variant = _store()
+		_put(store.path, JSON.stringify({"version": 1, "wings": {}, "metadata": {}}))
+		if has_backup:
+			_put(store.path + ".bak", JSON.stringify({"version": 1, "wings": {"07-1092": _run_entry()}}))
+		var primary := _file_state(store.path)
+		var backup := _file_state(store.path + ".bak")
+		_assert_equal(store._read_file(store.path).status, _best_script.Status.CORRUPT, "v1 extra field remains corrupt")
+		_assert_equal(store.read(), {
+			"status": _best_script.Status.RECOVERED if has_backup else _best_script.Status.CORRUPT,
+			"wings": {"07-1092": _run_entry()} if has_backup else {},
+		}, "v1 extra field still permits backup recovery")
+		_assert_store_unchanged(store, primary, backup)
+		_cleanup()
+
+
+func _test_non_integral_version() -> void:
+	for version: Variant in [1.5, "2", true, null]:
+		for extra_metadata: bool in [false, true]:
+			var store: Variant = _store()
+			var document := {"version": version, "wings": {}}
+			if extra_metadata:
+				document.metadata = {}
+			_put(store.path, JSON.stringify(document))
+			var primary := _file_state(store.path)
+			var backup := _file_state(store.path + ".bak")
+			_assert_equal(store.read(), {"status": _best_script.Status.CORRUPT, "wings": {}}, "non-integral version is corrupt regardless of shape")
+			_assert_store_unchanged(store, primary, backup)
+			_cleanup()
+
+
+func _test_backup_status() -> void:
+	var store: Variant = _store()
+	_put(store.path + ".bak", JSON.stringify({"version": 1, "wings": {"07-1092": _run_entry()}}))
+	var primary := _file_state(store.path)
+	var backup := _file_state(store.path + ".bak")
+	_assert_equal(store.read(), {"status": _best_script.Status.RECOVERED, "wings": {"07-1092": _run_entry()}}, "missing primary recovers valid backup")
+	_assert_store_unchanged(store, primary, backup)
+	_cleanup()
+	for extra_metadata: bool in [false, true]:
+		for corrupt_primary: bool in [false, true]:
+			store = _store()
+			if corrupt_primary:
+				_put(store.path, "broken primary")
+			var document := {"version": 2, "wings": {}}
+			if extra_metadata:
+				document.metadata = {}
+			_put(store.path + ".bak", JSON.stringify(document))
+			primary = _file_state(store.path)
+			backup = _file_state(store.path + ".bak")
+			_assert_equal(store.read(), {"status": _best_script.Status.UNSUPPORTED, "wings": {}}, "future backup remains unsupported")
+			_assert_store_unchanged(store, primary, backup)
+			_assert_false(store.submit(4242, 7, _run_entry(true)).new_best, "future backup refuses submission")
+			_assert_store_unchanged(store, primary, backup)
+			_cleanup()
 
 
 func _test_ranking() -> void:
