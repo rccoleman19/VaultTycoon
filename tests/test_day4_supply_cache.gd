@@ -11,7 +11,9 @@ func _run() -> void:
 	_run_case("Dig labor and Haul arrival pay exact contents once", _test_labor_and_claim)
 	_run_case("canceling the expedition is persistent and never auto-grants", _test_cancel)
 	_run_case("save/load preserves partial dig, exposed cache and claimed latch", _test_save)
-	_run_case("one informational notice stays stable until claim without changing Next", _test_notice)
+	_run_case("one informational notice follows excavation until claim without changing Next", _test_notice)
+	_run_case("excavated cache names Haul instead of unsupported Cancel through save/load", _test_excavated_notice)
+	_run_case("excavated cache advice counts only living undrafted haulers", _test_cache_hauler_advice)
 	_run_case("keep-running hides an unclaimed designated cache notice", _test_keep_running_notice)
 	_run_case("malformed cache saves reject atomically and old saves stay compatible", _test_validation)
 	print("DAY4 SUPPLY CACHE TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
@@ -168,6 +170,7 @@ func _test_cancel() -> void:
 	_day4(game)
 	var notice := str(game.call("supply_cache_alert"))
 	_assert_false(notice.is_empty(), "designated cache has a notice before cancel")
+	_assert_true("CANCEL to skip" in notice, "pre-excavation notice advertises the supported Cancel action")
 	game.set_tool("cancel")
 	_assert_true(game.issue_order(_cell(game)), "player can abandon the expedition with CANCEL")
 	_assert_equal(str(game.call("supply_cache_alert")), "", "cancel hides the cache notice immediately")
@@ -247,17 +250,70 @@ func _test_notice() -> void:
 	game.player_orders.refresh()
 	_assert_equal(game.player_orders.all_alerts.count(notice), 1, "Day 5 shows exactly one unclaimed notice")
 	_assert_true(game.map_grid.apply_dig_work(_cell(game), 8.0), "excavation opens the cache before haul")
-	_assert_equal(str(game.call("supply_cache_alert")), notice, "notice does not flicker between excavation and haul")
+	var exposed_notice := str(game.call("supply_cache_alert"))
+	_assert_true("dug out" in exposed_notice and "Haul on" in exposed_notice, "exposed cache explains collection with Haul enabled")
+	_assert_false("CANCEL" in exposed_notice, "exposed cache never advertises unsupported Cancel")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.all_alerts.count(notice), 0, "excavation removes the pre-dig advice")
+	_assert_equal(game.player_orders.all_alerts.count(exposed_notice), 1, "excavation retains exactly one updated cache notice")
 	_round_trip(game)
-	_assert_equal(str(game.call("supply_cache_alert")), notice, "exposed unclaimed notice survives load")
+	_assert_equal(str(game.call("supply_cache_alert")), exposed_notice, "exposed unclaimed notice survives load")
 	_collect(game)
 	_assert_equal(str(game.call("supply_cache_alert")), "", "claim hides the notice immediately")
 	game.player_orders.refresh()
 	_assert_equal(game.player_orders.all_alerts.count(notice), 0, "claimed notice leaves the alert list")
+	_assert_equal(game.player_orders.all_alerts.count(exposed_notice), 0, "claimed exposed notice leaves the alert list")
 	_round_trip(game)
 	game.player_orders.refresh()
 	_assert_equal(str(game.call("supply_cache_alert")), "", "claimed notice stays hidden after load")
 	_assert_equal(game.player_orders.all_alerts.count(notice), 0, "load does not restore a claimed notice")
+	_dispose(game)
+
+
+func _test_excavated_notice() -> void:
+	var game := _cache_wing()
+	if game == null:
+		return
+	_day4(game)
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+	_assert_true(game.map_grid.apply_dig_work(_cell(game), 8.0), "fixture excavates the cache")
+	_assert_false(game.map_grid.dig_marks.has(_cell(game)), "excavated cache has no cancelable dig mark")
+	_assert_true(game.map_grid.is_walkable(_cell(game)), "excavated cache is walkable")
+	_assert_false(game.supply_cache_claimed, "excavated cache is still unclaimed")
+	_assert_false(_cache_job(game, JobSystem.JobType.HAUL_RUBBLE).is_empty(), "excavated cache keeps its pending haul job")
+	var notice := str(game.call("supply_cache_alert"))
+	_assert_true("DAY-4 CACHE (%d,%d): 6 salvage + 2 meals" % [_cell(game).x, _cell(game).y] in notice, "post-dig notice retains location and contents")
+	_assert_true("dug out" in notice, "post-dig notice explains completed excavation")
+	_assert_false("CANCEL" in notice, "Haul-off post-dig notice does not advertise unsupported Cancel")
+	_assert_true("YOU turn Haul on to collect" in notice, "Haul-off notice names the supported player action")
+	game.set_tool("cancel")
+	_assert_false(game.issue_order(_cell(game)), "Cancel still cannot skip an excavated cache")
+	_round_trip(game)
+	_assert_equal(str(game.call("supply_cache_alert")), notice, "save/reload retains the post-dig Haul-off advice")
+	_assert_false(game.supply_cache_claimed, "save/reload leaves collection pending")
+	_assert_false(_cache_job(game, JobSystem.JobType.HAUL_RUBBLE).is_empty(), "save/reload retains the pending haul job")
+	_dispose(game)
+
+
+func _test_cache_hauler_advice() -> void:
+	var game := _cache_wing()
+	if game == null:
+		return
+	_day4(game)
+	_assert_true(game.map_grid.apply_dig_work(_cell(game), 8.0), "fixture excavates the cache")
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("haul", VaultResident.PRIORITY_DISABLED)
+	game.residents[0].set_work_priority("haul", VaultResident.DEFAULT_WORK_PRIORITY)
+	game.residents[0].drafted = true
+	_assert_true("YOU turn Haul on to collect" in game.supply_cache_alert(), "drafted hauler does not count as automatic crew")
+	game.residents[0].drafted = false
+	game.residents[0].alive = false
+	_assert_true("YOU turn Haul on to collect" in game.supply_cache_alert(), "dead hauler does not count as automatic crew")
+	game.residents[0].alive = true
+	var notice := game.supply_cache_alert()
+	_assert_true("dug out; a hauler collects it (Haul on)" in notice, "one living undrafted hauler is enough for collection advice")
+	_assert_false("YOU turn Haul on" in notice or "CANCEL" in notice, "available Haul needs neither enablement advice nor unsupported Cancel")
 	_dispose(game)
 
 
