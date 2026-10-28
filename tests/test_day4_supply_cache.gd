@@ -7,6 +7,7 @@ const CACHE_SAVE := "user://day4_cache_test.json"
 
 func _run() -> void:
 	_run_case("cache placement is seeded rock and locked until exactly Day 4", _test_gate)
+	_run_case("a restored clock reveals the cache without a day-start signal", _test_clock_restore)
 	_run_case("Dig labor and Haul arrival pay exact contents once", _test_labor_and_claim)
 	_run_case("canceling the expedition is persistent and never auto-grants", _test_cancel)
 	_run_case("save/load preserves partial dig, exposed cache and claimed latch", _test_save)
@@ -93,6 +94,24 @@ func _test_gate() -> void:
 		_assert_equal(_cell(game), cell, "same seed resets to exactly the same cache")
 		_assert_false(bool(game.get("supply_cache_claimed")), "new wing resets claim")
 		_dispose(game)
+
+
+func _test_clock_restore() -> void:
+	var game := _cache_wing()
+	if game == null:
+		return
+	# Restoring the clock does not emit day_started, including a completed Day 7.
+	game.day_cycle.deserialize({"elapsed_seconds": 280.0, "current_day": 7, "completed": true})
+	_assert_false(bool(game.get("supply_cache_announced")), "clock restoration alone emits no announcement")
+	game.step_simulation(0.1)
+	_assert_true(bool(game.get("supply_cache_announced")), "simulation reconciles the elapsed-time gate even when the clock is complete")
+	_assert_true(game.map_grid.dig_marks.has(_cell(game)), "restored clock queues the normal expedition")
+	_assert_true(game._is_snapshot_shape_valid(game.create_snapshot()), "the reconciled snapshot is valid")
+	game.set_tool("cancel")
+	_assert_true(game.issue_order(_cell(game)), "the reconciled expedition can be canceled")
+	game.step_simulation(0.1)
+	_assert_false(game.map_grid.dig_marks.has(_cell(game)), "subsequent simulation does not re-queue canceled work")
+	_dispose(game)
 
 
 func _test_labor_and_claim() -> void:

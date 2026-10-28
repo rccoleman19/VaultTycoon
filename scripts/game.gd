@@ -459,6 +459,9 @@ func begin_shift() -> void:
 func _simulation_step(delta_seconds: float) -> void:
 	if ended or outcome == "death":
 		return
+	# Clock restoration can skip day_started, even with a completed Day 7 clock.
+	# Reconcile before work; the announcement latch preserves canceled expeditions.
+	_reveal_supply_cache()
 	power_grid.recalculate(buildings)
 	job_system.reconcile_recreation_state()
 	# Sample the actual live Next selector before damage can kill its named resident.

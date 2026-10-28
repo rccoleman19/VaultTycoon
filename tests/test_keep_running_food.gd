@@ -443,6 +443,11 @@ func _test_beats_latch() -> void:
 func _test_opening_gives_way() -> void:
 	for open: bool in [false, true]:
 		var game := _vault(open)
+		# The clock-jump fixture now reveals Day 4 correctly. Cancel its expedition
+		# so this case still exercises the opening instruction with no pending digs.
+		game.set_tool("cancel")
+		_assert_true(game.issue_order(game.map_grid.supply_cache_cell), "cancel the cache before the empty-dig fixture")
+		game.set_tool("select")
 		var primary: Dictionary = game.player_orders._primary_next_step()
 		_assert_equal(str(primary.text), OPENING_DIG_NEXT, "affordable Air keeps the underlying opening dig instruction (%s)" % _label(open))
 		_assert_equal(_next(game), STABLE_NEXT if open else ANNEX_NEXT, "affordable Air preserves the keep-running default (%s)" % _label(open))
