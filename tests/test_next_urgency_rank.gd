@@ -39,6 +39,8 @@ func _relay_lumen_game() -> VaultGame:
 	root.add_child(game)
 	game.equipped_perk = VaultGame.PERK_RELAY_LUMEN
 	game.new_game(true, 4242, 3)
+	# Keep the reported empty-larder checkpoints: optional cache meals feed Ari/Bo.
+	game._reset_supply_cache(false, game.wing_seed)
 	_assert_true(VaultGame.PERK_RELAY_LUMEN in game.unlocked_perks(), "RELAY LUMEN is unlocked through records")
 	_assert_equal(game.wing_perk, VaultGame.PERK_RELAY_LUMEN, "replay equips the earned perk")
 	_assert_equal(game.sublevel, 3, "replay starts on sublevel 03")
@@ -252,6 +254,8 @@ func _test_food_runway_trigger() -> void:
 func _test_idle_kitchen_prefix() -> void:
 	var game := _spawn_game()
 	game.new_game(true, 4242, 5)
+	# Isolate the original starvation ranking from the optional cache rescue.
+	game._reset_supply_cache(false, game.wing_seed)
 	game.begin_shift()
 	# The idle driver only begins the shift and acknowledges the breach modal.
 	# Its real-time delay holds simulation still; acknowledge immediately here

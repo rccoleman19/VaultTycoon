@@ -35,13 +35,17 @@ func _cell(game: VaultGame) -> Vector2i:
 	return game.map_grid.get("supply_cache_cell")
 
 
-func _day4(game: VaultGame) -> void:
+func _seal_hatch(game: VaultGame) -> void:
 	game.breach_system.advance(0.0, game.breach_system.warning_at)
 	game.breach_system.add_delivery(BreachSystem.PATCH_COST)
 	game.breach_system.apply_patch_work(BreachSystem.PATCH_WORK_SECONDS)
 	game.breach_system.warning_acknowledged = true
 	game.player_orders.show_breach_warning(false)
 	game.job_system.reset()
+
+
+func _day4(game: VaultGame) -> void:
+	_seal_hatch(game)
 	game.day_cycle.advance(120.0 - game.day_cycle.elapsed_seconds)
 
 
@@ -101,13 +105,21 @@ func _test_clock_restore() -> void:
 	var game := _cache_wing()
 	if game == null:
 		return
+	# Keep the hatch coherent with the late clock so this isolates cache validation.
+	_seal_hatch(game)
 	# Restoring the clock does not emit day_started, including a completed Day 7.
 	game.day_cycle.deserialize({"elapsed_seconds": 280.0, "current_day": 7, "completed": true})
 	_assert_false(bool(game.get("supply_cache_announced")), "clock restoration alone emits no announcement")
+	var restored := game.create_snapshot()
+	_round_trip(game)
+	_assert_equal(game.create_snapshot(), restored, "saving/loading a restored clock preserves the pending announcement without work or rewards")
 	game.step_simulation(0.1)
 	_assert_true(bool(game.get("supply_cache_announced")), "simulation reconciles the elapsed-time gate even when the clock is complete")
 	_assert_true(game.map_grid.dig_marks.has(_cell(game)), "restored clock queues the normal expedition")
 	_assert_true(game._is_snapshot_shape_valid(game.create_snapshot()), "the reconciled snapshot is valid")
+	_assert_true(game.ended and game.outcome == "win", "a restored complete clock and sealed hatch finish normally")
+	_round_trip(game)
+	_assert_true(game.start_keep_running(), "Keep Running permits canceling after the restored win")
 	game.set_tool("cancel")
 	_assert_true(game.issue_order(_cell(game)), "the reconciled expedition can be canceled")
 	game.step_simulation(0.1)
@@ -286,6 +298,27 @@ func _test_validation() -> void:
 	var early := original.duplicate(true)
 	early[CACHE_KEY].claimed = true
 	_assert_false(game.apply_snapshot(early), "early claim save rejected")
+	var announced_early := original.duplicate(true)
+	announced_early[CACHE_KEY].announced = true
+	_assert_false(game.apply_snapshot(announced_early), "announcement before Day 4 still rejects")
+	_assert_equal(game.create_snapshot(), original, "early announcement rejection is atomic")
+	for elapsed in [120.0, 280.0]:
+		var pending := original.duplicate(true)
+		pending.day = {"elapsed_seconds": elapsed, "current_day": mini(7, int(elapsed / DayCycle.SECONDS_PER_DAY) + 1), "completed": elapsed == 280.0}
+		pending.breach = {
+			"phase": BreachSystem.Phase.SEALED, "patch_delivered": BreachSystem.PATCH_COST,
+			"patch_work_left": 0.0, "warning_acknowledged": true,
+			"warning_emitted": true, "open_emitted": false, "sealed_emitted": true,
+		}
+		_assert_true(game._is_snapshot_shape_valid(pending), "late clock permits an unreconciled announcement")
+		var cell := _cell(game)
+		var opened := pending.duplicate(true)
+		opened.map.cells[cell.y * MapGrid.WIDTH + cell.x] = MapGrid.Tile.FLOOR
+		_assert_false(game.apply_snapshot(opened), "unannounced cache must still be sealed rock after clock restore")
+		var marked := pending.duplicate(true)
+		marked.map.dig_marks.append([cell.x, cell.y])
+		_assert_false(game.apply_snapshot(marked), "unannounced cache must still have no dig designation after clock restore")
+		_assert_equal(game.create_snapshot(), original, "late clock does not permit invalid sealed-cache mutations")
 	var legacy := original.duplicate(true)
 	legacy.erase(CACHE_KEY)
 	_assert_true(game.apply_snapshot(legacy), "older snapshots without cache remain loadable")

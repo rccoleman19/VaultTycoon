@@ -2461,7 +2461,9 @@ func _is_supply_cache_snapshot_valid(snapshot: Dictionary) -> bool:
 	if not south_edge and not west_edge:
 		return false
 	var elapsed := float(snapshot.get("day", {}).get("elapsed_seconds", 0.0))
-	if data.announced != (elapsed >= SUPPLY_CACHE_AT) or (data.claimed and not data.announced):
+	# A restored clock can be saved before the next simulation step reveals the
+	# cache. The announcement is a latch, not a derived property of the clock.
+	if (data.announced and elapsed < SUPPLY_CACHE_AT) or (data.claimed and not data.announced):
 		return false
 	var tile := int(snapshot.map.cells[cell.y * MapGrid.WIDTH + cell.x])
 	if data.claimed and tile != MapGrid.Tile.FLOOR:
