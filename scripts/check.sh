@@ -68,6 +68,7 @@ run_godot_check work-tie-help-text --script res://tests/test_work_tie_help_text.
 run_godot_check breach-modal-speed-keys --script res://tests/test_breach_modal_speed_keys.gd
 run_godot_check next-tip-warning --script res://tests/test_next_tip_warning.gd
 run_godot_check next-urgency-rank --script res://tests/test_next_urgency_rank.gd
+run_godot_check spend-agrees-next --script res://tests/test_spend_agrees_next.gd
 run_godot_check alert-triage --script res://tests/test_alert_triage.gd
 run_godot_check late-shift-goals --script res://tests/test_late_shift_goals.gd
 run_godot_check day4-supply-cache --script res://tests/test_day4_supply_cache.gd
