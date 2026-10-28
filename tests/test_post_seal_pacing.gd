@@ -276,9 +276,11 @@ func _test_salvage_nudge() -> void:
 	game.food_system.salvage = 7
 	_assert_equal(_offer(game), "<hidden>", "7 salvage: nothing useful is affordable")
 	game.food_system.salvage = 28
-	_assert_equal(_offer(game), "Spend 28: build Rec Console", "no Rec Console yet: the nudge names one")
+	# Next urgently names a Nutrient Station (food runway short), so conflicting
+	# Rec/Grow spend nudges must step back until that kitchen is built.
+	_assert_equal(_offer(game), "<hidden>", "urgent Nutrient Station Next suppresses the conflicting Rec nudge")
 	game.player_orders._on_upgrade_offer_pressed()
-	_assert_equal(game.active_tool, "rec", "and picks its tool")
+	_assert_equal(game.active_tool, "select", "the hidden conflicting offer leaves the tool unchanged")
 	game.food_system.raw_food = 6
 	_assert_equal(_offer(game), "Spend 28: build Nutrient Station", "a raw pile of 6 asks for a second Nutrient Station first")
 	game.player_orders._on_upgrade_offer_pressed()
@@ -286,7 +288,7 @@ func _test_salvage_nudge() -> void:
 	game.food_system.raw_food = 0
 	_add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12))
 	game.power_grid.recalculate(game.buildings)
-	_assert_equal(_offer(game), "Spend 28: build Grow Tray", "then a second Grow Tray")
+	_assert_equal(_offer(game), "<hidden>", "urgent Nutrient Station Next suppresses the conflicting Grow nudge")
 	_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 13))
 	_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(21, 13))
 	_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(21, 14))
