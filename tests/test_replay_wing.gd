@@ -9,6 +9,8 @@ func _run() -> void:
 	_run_case("REPLAY WING starts a fresh run of the same seed", _test_replay)
 	_run_case("the replay briefing hides LOAD of the ended run's checkpoint", _test_replay_hides_load)
 	_run_case("the ended status line names every outcome button", _test_ended_status)
+	_run_case("a real seeded win footer names replay over the last live message", _test_real_win_footer)
+	_run_case("a real seeded loss footer names replay over the last death message", _test_real_loss_footer)
 	_run_case("a seeded panel followed by a legacy one hides the button again", _test_seeded_then_legacy)
 	_finish()
 
@@ -141,9 +143,81 @@ func _test_ended_status() -> void:
 				game._finish_win()
 			else:
 				game._finish_loss()
-			game.set_tool("select")
-			game.status_message_left = 0.0
-			game.player_orders.refresh()
 			var expected := "SHIFT ENDED // LOAD LAST CHECKPOINT, NEW WING or REPLAY WING" if seed_value != 0 else "SHIFT ENDED // LOAD LAST CHECKPOINT or NEW WING"
-			_assert_equal(game.player_orders.tool_status.text, expected, "seed %d %s status line" % [seed_value, "win" if won else "loss"])
+			var tools := ["select", "dig", "air"] if seed_value != 0 else ["select"]
+			var message_times := [0.0, 4.0] if seed_value != 0 else [0.0]
+			for tool in tools:
+				for message_left in message_times:
+					game.set_tool(tool)
+					game.status_message_left = message_left
+					game.player_orders.refresh()
+					var label := "seed %d %s tool %s message %.1fs" % [seed_value, "win" if won else "loss", tool, message_left]
+					_assert_equal(game.player_orders.tool_status.text, expected, label + " status line")
+					_assert_equal(game.player_orders.tool_status.tooltip_text, expected, label + " tooltip")
+					_assert_true(game.player_orders.tool_status.is_visible_in_tree(), label + " footer visible")
 			_dispose(game)
+
+
+func _test_real_win_footer() -> void:
+	_test_real_footer(true)
+
+
+func _test_real_loss_footer() -> void:
+	_test_real_footer(false)
+
+
+func _test_real_footer(won: bool) -> void:
+	var kind := "win" if won else "loss"
+	var directory := "user://headless_replay_footer"
+	_assert_equal(DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory)), OK, "isolated footer records directory")
+	var game := MAIN_SCENE.instantiate() as VaultGame
+	game.records_path = directory.path_join(kind + "-records.json")
+	game.best_path = directory.path_join(kind + "-best.json")
+	game.save_path = directory.path_join(kind + "-save.json")
+	for path in [game.records_path, game.best_path, game.save_path]:
+		_remove_test_save(path)
+	root.add_child(game)
+	# Seed 45 leaves all twelve route cells as rock and warns naturally at 60 s.
+	game.new_game(false, 45)
+	game.begin_shift()
+	if won:
+		game.set_tool("dig")
+		for x in [16, 15, 14, 13]:
+			for y in [14, 15, 16]:
+				_assert_true(game.issue_order(Vector2i(x, y)), "real route dig accepted")
+		game.step_simulation(40.0)
+		for plan in [
+			[VaultBuilding.Kind.BED, Vector2i(27, 12)],
+			[VaultBuilding.Kind.BED, Vector2i(26, 12)],
+			[VaultBuilding.Kind.GENERATOR, Vector2i(21, 12)],
+			[VaultBuilding.Kind.KITCHEN, Vector2i(22, 12)],
+			[VaultBuilding.Kind.GROW_TRAY, Vector2i(23, 12)],
+			[VaultBuilding.Kind.AIR_RECYCLER, Vector2i(24, 12)],
+		]:
+			_assert_true(game.place_blueprint(int(plan[0]), plan[1]), "real route blueprint accepted")
+	var tick_limit := int(DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE / VaultGame.SIMULATION_TICK) + 1
+	for _tick in tick_limit:
+		if game.ended:
+			break
+		if game.player_orders.breach_warning_panel.visible:
+			game.player_orders.breach_resume_button.pressed.emit()
+		if game.outcome == "death":
+			game.player_orders.outcome_resume_button.pressed.emit()
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+	_assert_true(game.records_enabled(), "real " + kind + " records enabled")
+	_assert_true(game.ended, "real " + kind + " ended")
+	_assert_equal(game.outcome, kind, "real outcome reached through play")
+	_assert_equal(game.get_alive_count(), 4 if won else 0, "real " + kind + " survivor count")
+	_assert_true(game.status_message_left > 0.0, "last live message still pending at " + kind)
+	var orders := game.player_orders
+	orders.refresh()
+	var expected := "SHIFT ENDED // LOAD LAST CHECKPOINT, NEW WING or REPLAY WING"
+	_assert_equal(orders.tool_status.text, expected, "real " + kind + " footer names replay immediately")
+	_assert_equal(orders.tool_status.tooltip_text, expected, "real " + kind + " footer tooltip")
+	_assert_true(orders.tool_status.is_visible_in_tree(), "real " + kind + " footer visible")
+	_assert_true(orders.outcome_panel.is_visible_in_tree(), "real " + kind + " panel visible")
+	_assert_true(orders.outcome_replay_button.is_visible_in_tree(), "real " + kind + " replay action visible")
+	_assert_equal(_visible_buttons(orders), ["LOAD LAST CHECKPOINT", "NEW WING", "REPLAY WING"] as Array[String], "real " + kind + " action order agrees with footer")
+	for path in [game.records_path, game.best_path, game.save_path]:
+		_remove_test_save(path)
+	_dispose(game)
