@@ -268,6 +268,7 @@ func _test_offer_order() -> void:
 func _test_salvage_nudge() -> void:
 	var game := _offer_game()
 	_seal(game)
+	game.food_system.meals = 15
 	_of_kind(game, VaultBuilding.Kind.GROW_TRAY).upgrade_tier = 2
 	_of_kind(game, VaultBuilding.Kind.GENERATOR).upgrade_tier = 2
 	game._check_wing_orders()
@@ -276,11 +277,10 @@ func _test_salvage_nudge() -> void:
 	game.food_system.salvage = 7
 	_assert_equal(_offer(game), "<hidden>", "7 salvage: nothing useful is affordable")
 	game.food_system.salvage = 28
-	# Next urgently names a Nutrient Station (food runway short), so conflicting
-	# Rec/Grow spend nudges must step back until that kitchen is built.
-	_assert_equal(_offer(game), "<hidden>", "urgent Nutrient Station Next suppresses the conflicting Rec nudge")
+	_assert_equal(_offer(game), "Spend 28: build Rec Console", "no Rec Console yet: the nudge names one")
+	_assert_false(bool(game.player_orders._displayed_next_step.get("urgent", false)), "Next is not urgent at the Rec nudge")
 	game.player_orders._on_upgrade_offer_pressed()
-	_assert_equal(game.active_tool, "select", "the hidden conflicting offer leaves the tool unchanged")
+	_assert_equal(game.active_tool, "rec", "and picks its tool")
 	game.food_system.raw_food = 6
 	_assert_equal(_offer(game), "Spend 28: build Nutrient Station", "a raw pile of 6 asks for a second Nutrient Station first")
 	game.player_orders._on_upgrade_offer_pressed()
@@ -288,7 +288,8 @@ func _test_salvage_nudge() -> void:
 	game.food_system.raw_food = 0
 	_add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12))
 	game.power_grid.recalculate(game.buildings)
-	_assert_equal(_offer(game), "<hidden>", "urgent Nutrient Station Next suppresses the conflicting Grow nudge")
+	_assert_equal(_offer(game), "Spend 28: build Grow Tray", "then a second Grow Tray")
+	_assert_false(bool(game.player_orders._displayed_next_step.get("urgent", false)), "Next is not urgent at the Grow nudge")
 	_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 13))
 	_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(21, 13))
 	_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(21, 14))
