@@ -14,6 +14,7 @@ var _next_hold_signature: Array = []
 var _next_hold_since := -1.0
 var _next_hold_step: Dictionary = {}
 var _next_reclamation_kind := -1
+var _displayed_next_step: Dictionary = {}
 
 # Guidance reads retain the starvation name until fed or a nearer deadline.
 var _starving_resident_id := -1
@@ -1112,6 +1113,7 @@ func refresh() -> void:
 	command_buttons.zone.text = "ZONE %d" % game.map_grid.stockpile_cells.size()
 	command_buttons.zone.tooltip_text = "Stockpile: %d cells. Salvage, raw food, and meals prefer reachable zones; otherwise Salvage Bay / chamber center. Click/drag to paint; CANCEL [X] clears." % game.map_grid.stockpile_cells.size()
 	var objective_step: Dictionary = _refresh_objective()
+	_displayed_next_step = objective_step
 	var step: Dictionary = objective_step
 	power_label.text = game.power_grid.get_status_text()
 	power_label.add_theme_color_override("font_color", Color("ef6860") if game.power_grid.brownout_active else Color("75d4b4"))
@@ -2416,6 +2418,12 @@ func _salvage_crisis_live() -> bool:
 		if resident.alive and (resident.needs.food < 20.0 or resident.needs.rest < 15.0):
 			return true
 	return false
+
+
+# Read the displayed selection, including its urgency metadata. Re-selecting
+# here would recurse through Next's salvage helpers and could change its text.
+func next_urgent_build_kind() -> int:
+	return _next_named_build_kind(_displayed_next_step) if bool(_displayed_next_step.get("urgent", false)) else -1
 
 
 func _next_named_build_kind(step: Dictionary) -> int:
@@ -3934,6 +3942,7 @@ func clear_survival_tips() -> void:
 	_next_hold_since = -1.0
 	_next_hold_step.clear()
 	_next_reclamation_kind = -1
+	_displayed_next_step = {}
 	_starving_resident_id = -1
 	_food_forecast_latched = false
 	_next_bunk_text = ""
@@ -4845,11 +4854,17 @@ func _on_idle_start_dismissed() -> void:
 	refresh()
 
 
+func _upgrade_offer_nudge_kind() -> int:
+	var nudge := salvage_nudge_kind()
+	var urgent_kind := next_urgent_build_kind()
+	return -1 if urgent_kind >= 0 and nudge != urgent_kind else nudge
+
+
 func _refresh_upgrade_offer() -> void:
 	if upgrade_offer_button == null:
 		return
 	var target := _upgrade_offer_target()
-	var nudge := salvage_nudge_kind() if target == null else -1
+	var nudge := _upgrade_offer_nudge_kind() if target == null else -1
 	upgrade_offer_button.visible = target != null or nudge >= 0
 	if target != null:
 		upgrade_offer_button.text = upgrade_offer_text(target)
@@ -4962,7 +4977,7 @@ func _on_wing_order_pressed(order_id: String) -> void:
 
 func _on_upgrade_offer_pressed() -> void:
 	var target := _upgrade_offer_target()
-	var nudge := salvage_nudge_kind() if target == null else -1
+	var nudge := _upgrade_offer_nudge_kind() if target == null else -1
 	if target != null:
 		game.select_building(target.building_id)
 	elif nudge >= 0:
