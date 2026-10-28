@@ -74,6 +74,8 @@ run_godot_check next-flicker --script res://tests/test_next_flicker.gd
 run_godot_check shed-tray-tip --script res://tests/test_shed_tray_tip.gd
 run_godot_check unnamed-rec-lead --script res://tests/test_unnamed_rec_lead.gd
 run_godot_check medbed-bunk-card --script res://tests/test_medbed_bunk_card.gd
+run_godot_check wing-best --script res://tests/test_wing_best.gd
+run_godot_check wing-best-behavior --script res://tests/test_wing_best_behavior.gd
 run_godot_check death-recap --script res://tests/test_death_recap.gd
 run_godot_check retry-checkpoint-match --script res://tests/test_retry_checkpoint_match.gd
 run_godot_check medical --script res://tests/test_medical.gd

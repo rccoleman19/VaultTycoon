@@ -88,6 +88,10 @@ const SUBLEVEL_MODIFIERS := {
 # whenever the main loop runs a script (tests, QA drivers) unless records_path is injected, so no
 # test or tool ever touches the player's user://wing_records.json.
 var records_path := ""
+var best_path := ""
+var _wing_best: WingBest = null
+# Transient finish result; never part of a save or checkpoint.
+var finish_best := {}
 var save_path := SaveLoad.DEFAULT_PATH
 # Day recovery uses its own atomic slot, never the player's manual/autosave slot.
 var checkpoint_path := SaveLoad.CHECKPOINT_PATH
@@ -321,6 +325,24 @@ func wing_records() -> WingRecords:
 	return _wing_records
 
 
+func wing_best() -> WingBest:
+	if _wing_best == null:
+		_wing_best = WingBest.new()
+	_wing_best.path = best_path
+	if _wing_best.path.is_empty():
+		_wing_best.path = records_path.get_base_dir().path_join("wing_best.json") if records_path != "" else WingBest.DEFAULT_PATH
+	return _wing_best
+
+
+func best_enabled() -> bool:
+	if not records_enabled():
+		return false
+	# Root-level injected record filenames would otherwise resolve to the real sidecar.
+	# Scripted tests/tools must inject best_path or use a dedicated records directory.
+	var loop := Engine.get_main_loop()
+	return loop == null or loop.get_script() == null or ProjectSettings.globalize_path(wing_best().path) != ProjectSettings.globalize_path(WingBest.DEFAULT_PATH)
+
+
 func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_sublevel := WingRecords.BASE_SUBLEVEL) -> void:
 	var seed_value := clampi(start_seed, LEGACY_WING_SEED, MAX_WING_SEED)
 	var level := WingRecords.BASE_SUBLEVEL if seed_value == LEGACY_WING_SEED else clampi(start_sublevel, WingRecords.DEEPEST_SUBLEVEL, WingRecords.BASE_SUBLEVEL)
@@ -349,6 +371,7 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 	death_recap = {}
 	player_orders.clear_survival_tips()
 	finish_record = {}
+	finish_best = {}
 	active_tool = "select"
 	map_grid.preview_tool = active_tool
 	selected_resident_id = -1
@@ -1279,6 +1302,7 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 			death_recap["elapsed_seconds"] = float(death_recap.elapsed_seconds)
 	player_orders.clear_survival_tips()
 	finish_record = {}
+	finish_best = {}
 	var camera_data: Array = snapshot.get("camera", [])
 	if camera_data.size() >= 3:
 		world_camera.position = Vector2(float(camera_data[0]), float(camera_data[1]))
@@ -2402,6 +2426,7 @@ func _finish_loss() -> void:
 # a loss the day reached. A failed or refused write never blocks the outcome.
 func _record_finish(won: bool) -> void:
 	finish_record = {}
+	finish_best = {}
 	if not records_enabled():
 		return
 	var store := wing_records()
@@ -2409,6 +2434,14 @@ func _record_finish(won: bool) -> void:
 	var previous := store.get_record(wing_seed, level)
 	var stars: Variant = int(player_orders.crew_grade()["stars"]) if won else null
 	var day := clampi(keep_running_day() if keep_running else day_cycle.current_day, 1, WingRecords.MAX_DAY)
+	if best_enabled():
+		var survivors: Array[String] = []
+		for resident: VaultResident in residents:
+			if resident.alive:
+				survivors.append(resident.resident_name)
+		# The normal clock freezes at the seal win; endless days continue from day 8.
+		var elapsed := DayCycle.DAYS_TO_SURVIVE * DayCycle.SECONDS_PER_DAY + keep_running_seconds if keep_running else day_cycle.elapsed_seconds
+		finish_best = wing_best().submit(wing_seed, level, WingBest.run_from(outcome, day, elapsed, survivors))
 	var unlocked_before := store.unlocked_sublevel()
 	if store.record(wing_seed, won, stars, day, level):
 		finish_record = {"previous": previous, "current": store.get_record(wing_seed, level)}
