@@ -188,12 +188,19 @@ func _follow_next() -> void:
 	var tip := game.player_orders.objective_label.text
 	var danger_tip := _has_resident_danger_prefix(tip)
 	var salvage_tip := tip.begins_with("Next: YOU begin reclamation") or tip.begins_with("Next: YOU spend")
-	if followed_tips.has(tip) or (not danger_tip and not salvage_tip):
+	if not danger_tip and not salvage_tip:
 		return
-	followed_tips[tip] = true
-	_log("FOLLOW tip=%s" % tip)
 	var action := tip.get_slice(" · ", 1) if danger_tip else tip.get_slice(" · ", 0).trim_prefix("Next: ")
 	var lower := action.to_lower()
+	var tip_key := tip
+	if lower.begins_with("you spend") and "fit " in lower and "mk ii" in lower:
+		var building := _upgrade_target(action)
+		if building != null:
+			tip_key = "%s id=%d" % [tip, building.building_id]
+	if followed_tips.has(tip_key):
+		return
+	followed_tips[tip_key] = true
+	_log("FOLLOW tip=%s" % tip)
 	if lower.begins_with("you begin reclamation"):
 		var ok := game.start_reclamation()
 		_log("FOLLOW begin reclamation success=%s" % str(ok))
@@ -301,7 +308,7 @@ func _kind_named(action: String) -> int:
 	return -1
 
 
-func _upgrade_named(action: String) -> void:
+func _upgrade_target(action: String) -> VaultBuilding:
 	var lower := action.to_lower()
 	var kind := _kind_named(action)
 	# The Next offer uses the short fixture labels used by the Mk II UI.
@@ -312,8 +319,15 @@ func _upgrade_named(action: String) -> void:
 	for building: VaultBuilding in game.buildings:
 		if building.kind != kind or not game.can_upgrade_building(building.building_id):
 			continue
+		return building
+	return null
+
+
+func _upgrade_named(action: String) -> void:
+	var building := _upgrade_target(action)
+	if building != null:
 		var ok := game.upgrade_building(building.building_id)
-		_log("FOLLOW fit %s id=%d success=%s" % [VaultBuilding.KIND_NAMES[kind], building.building_id, str(ok)])
+		_log("FOLLOW fit %s id=%d success=%s" % [VaultBuilding.KIND_NAMES[building.kind], building.building_id, str(ok)])
 		return
 	_log("FOLLOW fit failed: no affordable fixture named by %s" % action)
 
