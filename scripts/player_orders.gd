@@ -4080,7 +4080,7 @@ func show_outcome(won: bool, survivors: int) -> void:
 	outcome_best.visible = not outcome_best.text.is_empty()
 	outcome_record.text = record_line(won)
 	outcome_record.visible = not resumable and not outcome_record.text.is_empty()
-	if not won and outcome_best.visible:
+	if not won and not resumable and outcome_best.visible:
 		var record_first_line := outcome_record.text.get_slice("\n", 0)
 		var perk_start := record_first_line.find(" · with ")
 		if perk_start >= 0:

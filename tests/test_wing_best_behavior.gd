@@ -22,6 +22,8 @@ func _run() -> void:
 	_run_case("d: a frame-cap END is never stored as a win", _test_cap)
 	_run_case("e: corrupt best is empty and leaves wing records intact", _test_corrupt)
 	_run_case("f: Retry's identical inexact-clock loss stays a tie", _test_inexact_retry)
+	_run_case("g: direct Keep Running deaths never repeat the win unlock", _test_direct_keep_running_deaths)
+	_run_case("h: a true wing loss still merges fresh unlock details into Best", _test_loss_unlock_details)
 	_cleanup_slots()
 	print("WING BEST BEHAVIOR TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
@@ -334,6 +336,82 @@ func _test_corrupt() -> void:
 	_assert_equal(FileAccess.get_file_as_bytes(_slots.records_path), before, "wing_records.json bytes remain intact")
 	_assert_equal(game.wing_records().read().wings, loaded_before, "game-loaded records remain intact")
 	_assert_equal(records.read().wings, loaded_before, "freshly read independent records remain intact")
+	_dispose(game)
+
+
+func _win_unlock() -> VaultGame:
+	_make_slots()
+	var game := _game()
+	game.new_game(false, SEED, WingRecords.BASE_SUBLEVEL)
+	game.begin_shift()
+	game.day_cycle.deserialize({"elapsed_seconds": 100.0, "current_day": 3, "completed": false})
+	game.breach_system.advance(0.0, 100.0)
+	game.breach_system.patch_delivered = BreachSystem.PATCH_COST
+	game.breach_system.apply_patch_work(100.0)
+	game.job_system.rebuild_from_state()
+	game.day_cycle.deserialize({"elapsed_seconds": 279.5, "current_day": 7, "completed": false})
+	game.oxygen_system.oxygen = 100.0
+	game.step_simulation(1.0)
+	_assert_true(game.ended and game.outcome == "win", "sealed breathable wing reaches the real day-seven win")
+	_assert_equal(game.finish_record.get("unlocked"), 6, "fresh win really unlocks sublevel 06")
+	_assert_true(_screen_text(game.player_orders.outcome_panel).contains("SUBLEVEL 06 UNLOCKED · EARLY HATCH"), "win visibly announces the fresh unlock")
+	return game
+
+
+func _press_keep_running(game: VaultGame) -> void:
+	var button := game.player_orders.keep_running_button
+	_assert_true(button.is_visible_in_tree() and not button.disabled, "win offers an enabled Keep Running button")
+	var record := game.finish_record.duplicate(true)
+	button.pressed.emit()
+	_assert_true(game.keep_running and not game.ended and game.outcome == "", "Keep Running button resumes the won wing directly without LOAD")
+	_assert_false(game.player_orders.outcome_panel.is_visible_in_tree(), "Keep Running button hides the win recap")
+	_assert_equal(game.finish_record, record, "Keep Running preserves the fresh finish record including its unlock")
+
+
+func _test_direct_keep_running_deaths() -> void:
+	var game := _win_unlock()
+	_press_keep_running(game)
+	var record := game.finish_record.duplicate(true)
+	var best_before := FileAccess.get_file_as_bytes(_slots.best_path)
+	for index in 2:
+		game.residents[index].kill()
+		_assert_equal(game.outcome, "death", "resident %d opens a recoverable death recap" % (index + 1))
+		_assert_false(game.ended, "resident death leaves the wing resumable")
+		_assert_equal(game.player_orders.outcome_title.text, "RESIDENT LOST", "recap visibly says RESIDENT LOST")
+		var text := _screen_text(game.player_orders.outcome_panel)
+		var best := game.player_orders.outcome_best
+		_assert_true(best.is_visible_in_tree(), "recoverable recap renders Best")
+		_assert_equal(best.text, "Best: WIN · 4 survived", "each direct Keep Running death shows plain Best")
+		_assert_false(best.text.contains("UNLOCKED"), "recoverable Best never replays the fresh unlock")
+		_assert_false(best.text.contains("\n"), "recoverable Best remains a single line")
+		_assert_false(text.contains("UNLOCKED"), "no visible recap label repeats the unlock")
+		_assert_false(game.player_orders.outcome_record.is_visible_in_tree(), "recoverable recap hides the separate record label")
+		_assert_equal(game.finish_record, record, "death recap retains the fresh win record unchanged")
+		_assert_equal(FileAccess.get_file_as_bytes(_slots.best_path), best_before, "recoverable death leaves stored Best bytes intact")
+		if index == 0:
+			var resume := game.player_orders.outcome_resume_button
+			_assert_true(resume.is_visible_in_tree() and not resume.disabled, "first death offers an enabled Continue button")
+			resume.pressed.emit()
+			_assert_true(game.outcome == "" and not game.user_paused, "Continue button resumes before the second death")
+			_assert_false(game.player_orders.outcome_panel.is_visible_in_tree(), "Continue button hides the first death recap")
+	_dispose(game)
+
+
+func _test_loss_unlock_details() -> void:
+	var game := _win_unlock()
+	var unlocked := int(game.finish_record.unlocked)
+	_press_keep_running(game)
+	_inexact_clock_loss(game)
+	# A real final death replaces finish_record. Supply the just-earned unlock
+	# as a presentation fixture, like test_wing_best's merged-details control.
+	game.finish_record["unlocked"] = unlocked
+	game.player_orders.show_outcome(false, game.get_alive_count())
+	_assert_equal(game.player_orders.outcome_title.text, "WING LOST", "true finish visibly says WING LOST")
+	_assert_false(game.player_orders.outcome_resume_button.is_visible_in_tree(), "true wing loss cannot offer Continue")
+	var text := _screen_text(game.player_orders.outcome_panel)
+	_assert_merged_best(game, text, "Best: WIN · 4 survived\nSUBLEVEL 06 UNLOCKED · EARLY HATCH")
+	_assert_true(game.player_orders.outcome_best.is_visible_in_tree(), "true loss renders the merged Best label")
+	_assert_true(game.player_orders.outcome_best.text.contains("SUBLEVEL 06 UNLOCKED · EARLY HATCH"), "true finish retains the unlock suffix in Best")
 	_dispose(game)
 
 
