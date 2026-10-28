@@ -240,7 +240,7 @@ func _build_interface() -> void:
 	summary.add_child(also_label)
 	alert_label = Label.new()
 	alert_label.tooltip_text = "Open DETAILS to see the remaining alerts listed by urgency."
-	alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD
 	alert_label.custom_minimum_size.y = 34
 	alert_label.resized.connect(_fit_alert_line)
 	summary.add_child(alert_label)
@@ -3345,39 +3345,52 @@ func _refresh_alerts(step: Dictionary) -> void:
 	for alert: String in all_alerts:
 		if not _alert_stated_by_next(alert, step):
 			alert_list.append(alert)
-	alert_hidden_count = maxi(0, alert_list.size() - MAX_VISIBLE_ALERTS)
 	if all_alerts.is_empty():
 		alert_label.text = "STATUS NOMINAL"
 	elif alert_list.is_empty():
 		alert_label.text = "SEE NEXT"
-	else:
-		alert_label.text = "  ·  ".join(alert_list.slice(0, MAX_VISIBLE_ALERTS))
-		if alert_hidden_count > 0:
-			alert_label.text += "  ·  +%d more" % alert_hidden_count
 	_fit_alert_line()
 	alert_label.add_theme_color_override("font_color", alert_color)
 	_refresh_alert_details()
 
 
+func _alert_line_text(visible_count: int) -> String:
+	var clauses: Array[String] = []
+	for alert: String in alert_list.slice(0, visible_count):
+		# Internal spaces (including those around an internal dot) never wrap.
+		clauses.append(alert.replace(" ", "\u00a0"))
+	var hidden := alert_list.size() - visible_count
+	if hidden > 0:
+		clauses.append("+%d\u00a0more" % hidden)
+	# Only the separators between complete clauses offer line breaks.
+	return "  ·  ".join(clauses)
+
+
 func _fit_alert_line() -> void:
-	# Two complete clauses (including long hatch/cache advice) must fit the pinned
-	# rail without clipping. Refit on layout as well as refresh; keep the normal
-	# font size whenever it already fits. Countdown digits use padded MM:SS below.
-	if _fitting_alert_line or alert_label.size.x <= 0.0:
+	if _fitting_alert_line or alert_list.is_empty():
 		return
 	_fitting_alert_line = true
-	var font_size := alert_label.get_theme_default_font_size()
-	alert_label.add_theme_font_size_override("font_size", font_size)
-	while alert_label.get_line_count() > 2 and font_size > 1:
-		font_size -= 1
-		alert_label.add_theme_font_size_override("font_size", font_size)
+	var visible_count := mini(MAX_VISIBLE_ALERTS, alert_list.size())
+	alert_label.text = _alert_line_text(visible_count)
+	if visible_count == 2 and alert_label.size.x > 0.0:
+		var font := alert_label.get_theme_font("font")
+		var font_size := alert_label.get_theme_font_size("font_size")
+		var second_width := font.get_string_size(alert_list[1].replace(" ", "\u00a0"),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+		# Word wrapping cannot split a clause. Reject an overwide second clause
+		# too, since it could overflow horizontally while counting as one line.
+		if second_width > alert_label.size.x or alert_label.get_line_count() > 2:
+			visible_count = 1
+			alert_label.text = _alert_line_text(visible_count)
+	alert_hidden_count = alert_list.size() - visible_count
+	_refresh_alert_details()
 	_fitting_alert_line = false
 
 
 func _refresh_alert_details() -> void:
 	if alert_more_label == null:
 		return
-	alert_more_label.text = "\n".join(alert_list.slice(MAX_VISIBLE_ALERTS))
+	alert_more_label.text = "\n".join(alert_list.slice(alert_list.size() - alert_hidden_count))
 	alert_more_label.visible = _details_expanded and alert_hidden_count > 0
 	alert_more_header.visible = alert_more_label.visible
 
