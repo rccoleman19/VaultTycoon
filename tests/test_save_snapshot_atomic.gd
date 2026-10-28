@@ -35,6 +35,8 @@ func _run() -> void:
 		_run_case("wrapper rejects version %s" % entry[0], _test_wrapper_version.bind(entry[1]))
 	_run_case("rejection then valid load applies cleanly", _test_reject_then_valid)
 	_run_case("valid save round-trips through the file unchanged", _test_round_trip)
+	_run_case("float clocks and positions retain every bit through JSON", _test_float_precision)
+	_run_case("invalid float precision metadata rejects or recovers the backup", _test_float_precision_rejected)
 	_run_case("in-memory snapshot with integer types still applies", _test_in_memory_apply)
 	_run_case("legacy snapshot without optional sections still loads with defaults", _test_legacy_optional)
 	_run_case("short camera arrays stay ignored, including their value types", _test_short_camera)
@@ -334,6 +336,54 @@ func _test_round_trip() -> bool:
 	_assert_equal(JSON.stringify(loaded.create_snapshot()), saved_json, "round-trip snapshot identical")
 	loaded.step_simulation(5.0)
 	_assert_equal(JSON.stringify(loaded.create_snapshot()), advanced_json, "round-trip stays deterministic")
+	return true
+
+
+func _test_float_precision() -> bool:
+	# Actual fixed-tick death clock and float32 position reached by the cache replay.
+	var clock := 0.0
+	for _tick in range(1975):
+		clock += VaultGame.SIMULATION_TICK
+	var coordinate := float(Vector2(576.0, 415.69219970703125).y)
+	var values := [clock, coordinate, -clock, -coordinate, -0.0, 1e-20, 1e20]
+	var snapshot := {"day": {"elapsed_seconds": clock}, "residents": [{"position": [576.0, coordinate]}], "nested/\"values": values}
+	var store := SaveLoad.new()
+	for _round in range(2):
+		_assert_true(bool(store.save_snapshot(snapshot, SAVE_PATH).ok), "precision fixture saves")
+		var loaded := store.load_snapshot(SAVE_PATH)
+		_assert_true(bool(loaded.ok), "precision fixture loads")
+		if bool(loaded.ok):
+			_assert_equal(loaded.snapshot.day.elapsed_seconds, clock, "JSON preserves the exact accumulated clock")
+			_assert_equal(loaded.snapshot.residents[0].position[1], coordinate, "JSON preserves the exact resident coordinate")
+			_assert_equal(PackedFloat64Array(loaded.snapshot['nested/"values']).to_byte_array(), PackedFloat64Array(values).to_byte_array(), "nested floats retain every bit, including signed zero")
+			snapshot = loaded.snapshot
+	store.free()
+	return true
+
+
+func _test_float_precision_rejected() -> bool:
+	var bits := PackedFloat64Array([0.5]).to_byte_array().hex_encode()
+	var invalid_entries := [
+		null, [null], [[]], [[[], bits]], [[["absent"], bits]],
+		[[["value"], "not hexadecimal!"]], [[["value"], "000000000000f07f"]],
+		[[["value"], "+000000000000000"]], [[["value"], "-000000000000000"]],
+		[[["nested", -1], bits]], [[["nested", 0.5], bits]],
+		[[["value", "deeper"], bits]], [[["value"], "0000000000000000"]],
+		[[["text"], bits]],
+	]
+	var store := SaveLoad.new()
+	for entries: Variant in invalid_entries:
+		var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+		file.store_string(JSON.stringify({"version": 1, "game": {"value": 0.5, "nested": [0.5], "text": "0.5"}, "float64": entries}, "", true, true))
+		file.close()
+		_assert_equal(store.load_snapshot(SAVE_PATH).ok, false, "malformed or mismatched precision data rejects cleanly")
+	var coordinate := float(Vector2(576.0, 415.69219970703125).y)
+	_assert_true(bool(store.save_snapshot({"value": coordinate}, SAVE_PATH + ".bak").ok), "an intact backup saves")
+	var recovered := store.load_snapshot(SAVE_PATH)
+	_assert_true(bool(recovered.ok), "invalid precision metadata recovers the intact backup")
+	if bool(recovered.ok):
+		_assert_equal(recovered.snapshot.value, coordinate, "recovery retains the backup's exact numeric value")
+	store.free()
 	return true
 
 

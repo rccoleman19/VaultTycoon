@@ -4,6 +4,7 @@ extends "res://tests/test_death_recap.gd"
 # queries and death signals. New APIs stay dynamic so the unfixed control runs.
 func _run() -> void:
 	_case("cross-wing", _test_cross_wing)
+	_case("cross-wing-no-cache", _test_cross_wing.bind(false))
 	_case("same-wing", _test_same_wing)
 	_case("seed-only", _test_identity_mismatch.bind(6262, 5))
 	_case("sublevel-only", _test_identity_mismatch.bind(4242, 6))
@@ -29,13 +30,19 @@ func _idle_until(game: VaultGame, stop_seconds := INF) -> void:
 	_assert_true(false, "the real idle replay reaches its stop before the frame cap")
 
 
-func _test_cross_wing() -> void:
+func _test_cross_wing(with_cache := true) -> void:
 	var game := _game(5, false, true)
+	if not with_cache:
+		var legacy := game.create_snapshot()
+		legacy.erase(VaultGame.SUPPLY_CACHE_KEY)
+		_assert_true(game.apply_snapshot(legacy), "the no-cache control loads a legacy wing")
 	_idle_until(game, 185.1)
 	_assert_true(game.outcome == "" and game.residents[0].alive, "wing A is still live at the ordinary player save")
 	_assert_equal(game.residents[0].resident_name, "Ari", "the real idle fixture follows Ari")
 	_assert_true(game.save_game(false, _player_path), "wing A seed 4242/sublevel 5 is saved through the player path")
 	var saved_a := game.create_snapshot()
+	if with_cache:
+		_assert_true(saved_a[VaultGame.SUPPLY_CACHE_KEY].claimed, "the plain replay earned the cache's two meals before saving")
 	game.new_game(false, 8080, 7)
 	game.begin_shift()
 	var wing_b := game.save_load.load_snapshot(_checkpoint_path)
@@ -52,9 +59,11 @@ func _test_cross_wing() -> void:
 	game.user_paused = false
 	game.set_speed(2)
 	_idle_until(game)
-	_assert_equal(game.outcome, "death", "Ari dies naturally after reloading A")
-	_assert_equal(str(_recap(game).get("name", "")), "Ari", "the real death recap belongs to Ari")
-	_assert_approximately(game.day_cycle.elapsed_seconds, 188.2, 0.11, "the unchanged real replay dies at the expected day-five time")
+	_assert_equal(game.outcome, "death", "the loaded wing reaches a natural death")
+	# Dig/Haul claims two cache meals in plain play, extending the run and
+	# changing who starves first. The legacy control still dies as Ari at 188.2.
+	_assert_equal(str(_recap(game).get("name", "")), "Cyra" if with_cache else "Ari", "the real death recap names the expected resident")
+	_assert_approximately(game.day_cycle.elapsed_seconds, 197.5 if with_cache else 188.2, 0.11, "the real replay dies at the expected day-five time")
 	_assert_rejected_checkpoint(game, "wing")
 	_assert_equal(_checkpoint_files(), checkpoint_bytes, "death, peeks and refused Retry preserve B's exact checkpoint bytes")
 	_dispose(game)
@@ -77,7 +86,7 @@ func _test_same_wing() -> void:
 		_assert_equal(game.wing_seed, 4242, "same-wing Retry retains A's seed")
 		_assert_equal(game.sublevel, 5, "same-wing Retry retains A's sublevel")
 		_assert_true(game.outcome == "" and game.user_paused and not game.player_orders.outcome_panel.visible, "successful Retry clears the recap and pauses restored play")
-		_assert_equal(game.get_alive_count(), game.residents.size(), "same-wing Retry undoes Ari's death")
+		_assert_equal(game.get_alive_count(), game.residents.size(), "same-wing Retry undoes the resident's death")
 		_assert_equal(_checkpoint_files(), files_before, "successful Retry only reads the checkpoint")
 	_dispose(game)
 
