@@ -1101,6 +1101,7 @@ func _process_rubble_job(resident: VaultResident, job: Dictionary, delta_seconds
 		if not resident.move_to(job.target, map_grid, delta_seconds):
 			resident.state = "Walking to rubble"
 			return
+		game.claim_supply_cache(resident)
 		resident.carrying = int(job.amount)
 		resident.carrying_kind = "salvage"
 		resident.job_phase = "deposit"

@@ -221,6 +221,9 @@ func _walk_next(game: VaultGame) -> Dictionary:
 
 func _walk() -> void:
 	var game := _spawn_game()
+	# This controlled ledger counts only player-designated digs and Grow/Kitchen food.
+	# Skip the optional cache expedition, which otherwise queues a dig at 120s.
+	game._reset_supply_cache(false, game.wing_seed)
 	game.begin_shift()
 	var originals: Array[VaultResident] = game.residents.duplicate()
 	_starters.assign(game.buildings)

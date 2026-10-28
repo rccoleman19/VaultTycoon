@@ -3319,6 +3319,12 @@ func _refresh_alerts(step: Dictionary) -> void:
 				critical_resident = resident
 				break
 		alerts.append("CRITICAL: %s" % critical_resident.resident_name)
+	# The cache is informational and must not escalate the status colour.
+	var only_welcome := alerts.size() == 1 and game.keep_running and game.annex_welcome_left > 0.0 and alerts[0].begins_with("NEW CREW")
+	var alert_color := Color("75d4b4") if alerts.is_empty() or only_welcome else Color("ef6860")
+	var cache_notice := game.supply_cache_alert()
+	if not cache_notice.is_empty():
+		alerts.append(cache_notice)
 	all_alerts = _order_alerts_by_urgency(alerts)
 	for alert: String in all_alerts:
 		if not _alert_stated_by_next(alert, step):
@@ -3332,8 +3338,7 @@ func _refresh_alerts(step: Dictionary) -> void:
 		alert_label.text = alert_list[0]
 		if alert_hidden_count > 0:
 			alert_label.text += "  ·  +%d more" % alert_hidden_count
-	var only_welcome := all_alerts.size() == 1 and game.keep_running and game.annex_welcome_left > 0.0 and all_alerts[0].begins_with("NEW CREW")
-	alert_label.add_theme_color_override("font_color", Color("75d4b4") if all_alerts.is_empty() or only_welcome else Color("ef6860"))
+	alert_label.add_theme_color_override("font_color", alert_color)
 	_refresh_alert_details()
 
 

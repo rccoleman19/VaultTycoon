@@ -185,6 +185,14 @@ const ORDER_STOCK_MEALS_TARGET := 16
 var wing_orders_claimed: Array[String] = []
 # Post-seal reclamation (QA-d #2): a player-started, finite salvage income after the seal.
 const RECLAIM_KEY := "post_seal_reclamation"
+# One finite expedition; the existing Dig and rubble-haul jobs pay its labor cost.
+const SUPPLY_CACHE_KEY := "day4_supply_cache"
+const SUPPLY_CACHE_AT := 3.0 * DayCycle.SECONDS_PER_DAY
+const SUPPLY_CACHE_SALVAGE := 6
+const SUPPLY_CACHE_MEALS := 2
+var supply_cache_enabled := false
+var supply_cache_announced := false
+var supply_cache_claimed := false
 # QA-d #8 idle start: a two-step card for a wing nobody has touched by 30 s. Step 1 queues the standard
 # opening (digs, two bunks, Charge Node, Nutrient Station, Grow Tray); step 2 is the Air Recycler.
 const IDLE_START_KEY := "idle_start"
@@ -356,6 +364,7 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 	next_building_id = 1
 	map_grid.new_wing(seed_value)
 	job_system.reset()
+	_reset_supply_cache(true, seed_value)
 	power_grid.reset()
 	lighting_system.reset()
 	food_system.reset()
@@ -450,6 +459,9 @@ func begin_shift() -> void:
 func _simulation_step(delta_seconds: float) -> void:
 	if ended or outcome == "death":
 		return
+	# Clock restoration can skip day_started, even with a completed Day 7 clock.
+	# Reconcile before work; the announcement latch preserves canceled expeditions.
+	_reveal_supply_cache()
 	power_grid.recalculate(buildings)
 	job_system.reconcile_recreation_state()
 	# Sample the actual live Next selector before damage can kill its named resident.
@@ -1167,6 +1179,13 @@ func load_game(path := "") -> bool:
 # Post-seal reclamation: an additive, versioned key, written only once the player started it.
 func create_snapshot() -> Dictionary:
 	var snapshot := _create_base_snapshot()
+	if supply_cache_enabled:
+		snapshot[SUPPLY_CACHE_KEY] = {
+			"version": 1,
+			"position": [map_grid.supply_cache_cell.x, map_grid.supply_cache_cell.y],
+			"announced": supply_cache_announced,
+			"claimed": supply_cache_claimed,
+		}
 	if not death_recap.is_empty():
 		snapshot[DEATH_RECAP_KEY] = death_recap.duplicate(true)
 	if reclaim_active:
@@ -1228,6 +1247,14 @@ func _create_base_snapshot() -> Dictionary:
 func apply_snapshot(snapshot: Dictionary) -> bool:
 	if not _is_snapshot_shape_valid(snapshot):
 		return false
+	_reset_supply_cache(snapshot.has(SUPPLY_CACHE_KEY), _snapshot_wing_seed(snapshot))
+	if supply_cache_enabled:
+		var cache_position: Array = snapshot[SUPPLY_CACHE_KEY].position
+		map_grid.supply_cache_cell = Vector2i(int(cache_position[0]), int(cache_position[1]))
+		supply_cache_announced = snapshot[SUPPLY_CACHE_KEY].announced
+		supply_cache_claimed = snapshot[SUPPLY_CACHE_KEY].claimed
+		map_grid.supply_cache_open = supply_cache_announced
+		map_grid.supply_cache_visible = supply_cache_announced and not supply_cache_claimed
 	if not map_grid.deserialize(snapshot.map):
 		return false
 	lighting_system.reset()
@@ -1508,6 +1535,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	if not map_data is Dictionary or not resident_data is Array or not building_data is Array:
 		return false
 	if not MapGrid.is_stockpile_data_valid(map_data):
+		return false
+	if not _is_supply_cache_snapshot_valid(snapshot):
 		return false
 	if not job_system.is_serialized_food_haul_data_valid(jobs_data, map_data):
 		return false
@@ -2343,8 +2372,121 @@ func retry_day_checkpoint() -> bool:
 	return true
 
 
+# Pick only initial rock, independent of the current excavation state and RNG stream.
+static func supply_cache_position_for(seed_value: int) -> Vector2i:
+	var pockets: Array = MapGrid.generate_layout(seed_value)["pockets"]
+	var candidates: Array[Vector2i] = []
+	for x in range(MapGrid.CHAMBER.position.x, MapGrid.CHAMBER.end.x):
+		var cell := Vector2i(x, MapGrid.CHAMBER.end.y)
+		if cell not in pockets:
+			candidates.append(cell)
+	# Seeded pockets are small; retain a deterministic perimeter fallback.
+	if candidates.is_empty():
+		for y in range(MapGrid.CHAMBER.position.y + 2, MapGrid.CHAMBER.end.y):
+			var cell := Vector2i(MapGrid.CHAMBER.position.x - 1, y)
+			if cell not in pockets:
+				candidates.append(cell)
+	return candidates[BreachSystem.seed_hash(seed_value, 404) % candidates.size()]
+
+
+func _reset_supply_cache(enabled: bool, seed_value: int) -> void:
+	supply_cache_enabled = enabled
+	supply_cache_announced = false
+	supply_cache_claimed = false
+	map_grid.supply_cache_cell = supply_cache_position_for(seed_value) if enabled else Vector2i(-1, -1)
+	map_grid.supply_cache_open = false
+	map_grid.supply_cache_visible = false
+
+
+func _reveal_supply_cache() -> void:
+	if not supply_cache_enabled or supply_cache_announced or day_cycle.elapsed_seconds < SUPPLY_CACHE_AT:
+		return
+	# Latch before checkpoints. Canceled designations are never silently re-created.
+	supply_cache_announced = true
+	map_grid.supply_cache_open = true
+	map_grid.supply_cache_visible = not supply_cache_claimed
+	if map_grid.queue_dig(map_grid.supply_cache_cell):
+		job_system.queue_dig(map_grid.supply_cache_cell)
+	map_grid.queue_redraw()
+
+
+func supply_cache_alert() -> String:
+	if not supply_cache_enabled or not supply_cache_announced or supply_cache_claimed or keep_running:
+		return ""
+	# Cancel only works while the dig mark exists; exposed supplies need Haul.
+	if not map_grid.dig_marks.has(map_grid.supply_cache_cell) and not map_grid.is_walkable(map_grid.supply_cache_cell):
+		return ""
+	var advice := "Dig/Haul queued; CANCEL to skip"
+	if not map_grid.dig_marks.has(map_grid.supply_cache_cell):
+		advice = "dug out; YOU turn Haul on to collect"
+		for resident: VaultResident in residents:
+			if resident.alive and not resident.drafted and resident.get_work_priority("haul") != VaultResident.PRIORITY_DISABLED:
+				advice = "dug out; a hauler collects it (Haul on)"
+				break
+	return "DAY-4 CACHE (%d,%d): %d salvage + %d %s · %s" % [
+		map_grid.supply_cache_cell.x, map_grid.supply_cache_cell.y,
+		SUPPLY_CACHE_SALVAGE, SUPPLY_CACHE_MEALS, "meal" if SUPPLY_CACHE_MEALS == 1 else "meals", advice]
+
+
+func claim_supply_cache(resident: VaultResident) -> bool:
+	if not supply_cache_enabled or supply_cache_claimed or not supply_cache_announced or day_cycle.elapsed_seconds < SUPPLY_CACHE_AT:
+		return false
+	if resident == null or not resident.alive or resident.get_cell(map_grid) != map_grid.supply_cache_cell:
+		return false
+	if not map_grid.is_walkable(map_grid.supply_cache_cell) or resident.current_job_type != JobSystem.JobType.HAUL_RUBBLE:
+		return false
+	var job := job_system._find_job(resident.current_job_id)
+	if job.is_empty() or job.target != map_grid.supply_cache_cell:
+		return false
+	# Latch before emitting inventory signals; reaching the cache pays exactly once.
+	supply_cache_claimed = true
+	map_grid.supply_cache_visible = false
+	food_system.add_salvage(SUPPLY_CACHE_SALVAGE)
+	food_system.add_meals(SUPPLY_CACHE_MEALS)
+	map_grid.queue_redraw()
+	return true
+
+
+func _is_supply_cache_snapshot_valid(snapshot: Dictionary) -> bool:
+	if not snapshot.has(SUPPLY_CACHE_KEY):
+		return true
+	var data: Variant = snapshot[SUPPLY_CACHE_KEY]
+	if not data is Dictionary or not _is_integer_in_range(data.get("version"), 1, 1):
+		return false
+	if typeof(data.get("announced")) != TYPE_BOOL or typeof(data.get("claimed")) != TYPE_BOOL:
+		return false
+	var position: Variant = data.get("position")
+	if not position is Array or position.size() != 2:
+		return false
+	if not _is_integer_in_range(position[0], 1, MapGrid.WIDTH - 2) or not _is_integer_in_range(position[1], 1, MapGrid.HEIGHT - 2):
+		return false
+	# Position is saved authority, including when an older wing's seed/layout is
+	# migrated. Require the same chamber perimeter used by placement.
+	var cell := Vector2i(int(position[0]), int(position[1]))
+	var south_edge := cell.y == MapGrid.CHAMBER.end.y and cell.x >= MapGrid.CHAMBER.position.x and cell.x < MapGrid.CHAMBER.end.x
+	var west_edge := cell.x == MapGrid.CHAMBER.position.x - 1 and cell.y >= MapGrid.CHAMBER.position.y + 2 and cell.y < MapGrid.CHAMBER.end.y
+	if not south_edge and not west_edge:
+		return false
+	var elapsed := float(snapshot.get("day", {}).get("elapsed_seconds", 0.0))
+	# A restored clock can be saved before the next simulation step reveals the
+	# cache. The announcement is a latch, not a derived property of the clock.
+	if (data.announced and elapsed < SUPPLY_CACHE_AT) or (data.claimed and not data.announced):
+		return false
+	var tile := int(snapshot.map.cells[cell.y * MapGrid.WIDTH + cell.x])
+	if data.claimed and tile != MapGrid.Tile.FLOOR:
+		return false
+	if not data.announced:
+		if tile != MapGrid.Tile.ROCK:
+			return false
+		for mark: Variant in snapshot.map.get("dig_marks", []):
+			if mark is Array and mark.size() >= 2 and mark[0] == cell.x and mark[1] == cell.y:
+				return false
+	return true
+
+
 func _on_day_started(_day: int) -> void:
 	if not ended and outcome != "death":
+		_reveal_supply_cache()
 		_save_day_checkpoint()
 		save_game(false)
 		if breach_system.is_response_active() or (breach_system.is_sealed() and status_message_left > 0.0):

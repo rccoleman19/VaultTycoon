@@ -74,6 +74,7 @@ var _mat_colonist_selected: StandardMaterial3D
 var _mat_colonist_dead: StandardMaterial3D
 var _mat_hatch: StandardMaterial3D
 var _breach_alarm: OmniLight3D
+var _supply_cache_marker: Node3D
 
 
 func _ready() -> void:
@@ -190,11 +191,37 @@ func _make_terrain_mat(color: Color) -> StandardMaterial3D:
 	return mat
 
 
+# Static, readable marker: no pulsing or simulation effects.
+func _sync_supply_cache_marker() -> void:
+	if _supply_cache_marker == null and map_grid.supply_cache_visible:
+		_supply_cache_marker = Node3D.new()
+		_supply_cache_marker.name = "SupplyCache"
+		var crate := MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = Vector3(8.0, 5.0, 6.0)
+		crate.mesh = box
+		crate.material_override = _make_mat(Color("efc56b"))
+		_supply_cache_marker.add_child(crate)
+		var label := Label3D.new()
+		label.text = "DAY-4 CACHE"
+		label.font_size = 32
+		label.pixel_size = 0.15
+		label.position.y = 9.0
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		_supply_cache_marker.add_child(label)
+		marker_root.add_child(_supply_cache_marker)
+	if _supply_cache_marker != null:
+		_supply_cache_marker.visible = map_grid.supply_cache_visible
+		var center := map_grid.cell_to_world(map_grid.supply_cache_cell)
+		_supply_cache_marker.position = Vector3(center.x, _terrain_top(map_grid.supply_cache_cell) + 3.0, center.y)
+
+
 func rebuild_map(force := false) -> void:
 	if map_grid == null:
 		return
 	_ensure_materials()
 	_sync_build_ghost()
+	_sync_supply_cache_marker()
 	var signature := _map_signature()
 	if not force and signature == _last_map_signature:
 		return
