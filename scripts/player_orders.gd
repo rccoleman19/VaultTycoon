@@ -1109,7 +1109,7 @@ func refresh() -> void:
 		game.job_system.get_pending_raw_food(),
 		game.food_system.salvage,
 	]
-	resource_label.tooltip_text = "Stored inventory; values in parentheses are produced food still awaiting Haul delivery. DAYS = stored + pending meals per living resident (each eats one meal a day)."
+	resource_label.tooltip_text = "Stored inventory; values in parentheses are produced food still awaiting Haul delivery. DAYS = stored + pending meals at the living crew's food drain (normally one meal a day each; FRUGAL eats 15% less)."
 	command_buttons.zone.text = "ZONE %d" % game.map_grid.stockpile_cells.size()
 	command_buttons.zone.tooltip_text = "Stockpile: %d cells. Salvage, raw food, and meals prefer reachable zones; otherwise Salvage Bay / chamber center. Click/drag to paint; CANCEL [X] clears." % game.map_grid.stockpile_cells.size()
 	var objective_step: Dictionary = _refresh_objective()
@@ -1297,15 +1297,21 @@ const FOOD_WORK_RECOVERY_SECONDS := DayCycle.SECONDS_PER_DAY
 const AIR_RECOVERY_MARGIN_SECONDS := 75.0
 
 
+# Shared consumption rate for the HUD, pantry forecast and crew's food reserve.
+func _crew_meals_per_day() -> float:
+	var consumption := 0.0
+	for resident: VaultResident in game.residents:
+		if resident.alive:
+			consumption += FOOD_PER_DAY * resident.needs.food_drain_scale / FOOD_PER_MEAL
+	return consumption
+
+
 # Shared stock and already-produced food, in meals / living crew's meals per
 # second. Cooking consumes raw only at completion, so its input is ALREADY in
 # raw_food: adding another meal for a COOK job would double count it. Pending
 # haul totals include cargo in transit. Future Grow cycles are not stock.
 func _food_runway_seconds() -> float:
-	var consumption := 0.0
-	for resident: VaultResident in game.residents:
-		if resident.alive:
-			consumption += FOOD_PER_DAY * resident.needs.food_drain_scale / DayCycle.SECONDS_PER_DAY / FOOD_PER_MEAL
+	var consumption := _crew_meals_per_day() / DayCycle.SECONDS_PER_DAY
 	if consumption <= 0.0:
 		return INF
 	var meals := float(game.food_system.meals + game.job_system.get_pending_meals())
@@ -1564,15 +1570,14 @@ func _food_fix_plan(rescue_seconds := INF) -> Dictionary:
 
 # Days the living crew can eat from stored meals plus what is already in their bellies.
 func _crew_food_days() -> float:
-	var alive := 0
+	var consumption := _crew_meals_per_day()
 	var belly := 0.0
 	for resident: VaultResident in game.residents:
 		if resident.alive:
-			alive += 1
 			belly += resident.needs.food
-	if alive == 0:
+	if consumption <= 0.0:
 		return INF
-	return (belly + game.food_system.meals * FOOD_PER_MEAL) / (FOOD_PER_DAY * alive)
+	return (belly + game.food_system.meals * FOOD_PER_MEAL) / (FOOD_PER_MEAL * consumption)
 
 
 # Allocate only stored rations, in the order crew reach the automatic eating
@@ -3541,14 +3546,14 @@ func _refresh_lighting() -> void:
 	lighting_overlay_button.modulate = Color("efc56b") if lighting.is_coverage_overlay_visible() else Color.WHITE
 
 
-# Each resident burns 60 food per day and a meal restores 60, so one meal
-# feeds one resident for one day. Floor to a tenth so the HUD never overpromises.
+# Use the same living crew drain as the food forecast, including FRUGAL.
+# Floor to a tenth so the HUD never overpromises.
 func _meal_runway_text() -> String:
-	var alive := game.get_alive_count()
-	if game.ended or alive <= 0:
+	var consumption := _crew_meals_per_day()
+	if game.ended or consumption <= 0.0:
 		return ""
 	var meals := game.food_system.meals + game.job_system.get_pending_meals()
-	return " · %.1f DAYS" % (floorf(float(meals) * 10.0 / float(alive)) / 10.0)
+	return " · %.1f DAYS" % (floorf(float(meals) * 10.0 / consumption) / 10.0)
 
 func _refresh_oxygen() -> void:
 	var oxygen := game.oxygen_system
