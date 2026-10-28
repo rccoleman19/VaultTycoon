@@ -361,6 +361,12 @@ func _assert_triage_sorted(game: VaultGame, alerts: Array, message: String) -> v
 				"%s preserves severity order when death keys tie" % message)
 
 
+func _triage_bar_text(orders: PlayerOrders) -> String:
+	# Compare clause order/count independently of the presentation's line breaks.
+	# test_alert_line_cap checks separators on the actual rendered lines.
+	return orders.alert_label.text.replace("\u00a0", " ").replace("\n", "  ·  ")
+
+
 func _assert_triage_count_and_bar(game: VaultGame, visible: Array, hidden: int) -> void:
 	var shown := visible.size() - hidden
 	_assert_true(shown == mini(2, visible.size()) or (shown == 1 and visible.size() >= 2),
@@ -370,7 +376,7 @@ func _assert_triage_count_and_bar(game: VaultGame, visible: Array, hidden: int) 
 	var expected := "  ·  ".join(visible.slice(0, shown))
 	if hidden > 0:
 		expected += "  ·  +%d more" % hidden
-	_assert_equal(game.player_orders.alert_label.text.replace("\u00a0", " "), expected, "the bar renders the leading alerts plus their exact hidden count")
+	_assert_equal(_triage_bar_text(game.player_orders), expected, "the bar renders the leading alerts plus their exact hidden count")
 
 
 func _test_alerts_cap_two_visible() -> void:
@@ -385,7 +391,7 @@ func _test_alerts_cap_two_visible() -> void:
 	_assert_true(game.day_cycle.elapsed_seconds >= 2.0 * VaultGame.SIMULATION_TICK,
 		"the multi-alert state includes real needs and fixed-tick progress")
 	_assert_true(hidden >= 1, "several alerts leave at least one alert behind the cap")
-	_assert_equal(orders.alert_label.text.replace("\u00a0", " ").split("  ·  ").size(), visible.size() - hidden + 1,
+	_assert_equal(_triage_bar_text(orders).split("  ·  ").size(), visible.size() - hidden + 1,
 		"the bar has one or two alert segments and one +N segment")
 	_assert_triage_count_and_bar(game, visible, hidden)
 	_assert_true("DETAILS" in orders.alert_label.tooltip_text,
@@ -403,7 +409,7 @@ func _test_alerts_cap_two_visible() -> void:
 		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
 	orders.refresh()
 	_assert_equal(_triage_alerts(orders, "alert_list"), ["NO COOK ENABLED"], "ample pantry stock leaves just the independent Cook alert")
-	_assert_equal(orders.alert_label.text.replace("\u00a0", " "), "NO COOK ENABLED", "a single alert keeps its exact wording without +N more")
+	_assert_equal(_triage_bar_text(orders), "NO COOK ENABLED", "a single alert keeps its exact wording without +N more")
 	_assert_equal(_triage_hidden(orders), 0, "one alert has no hidden alerts")
 	var more: Variant = _triage_more(orders)
 	if more != null:
@@ -448,7 +454,7 @@ func _test_alerts_rank_by_urgency() -> void:
 	_assert_true(generated.find("OXYGEN LOW") >= 0 and generated.find(seal_alert) >= 0
 		and generated.find("OXYGEN LOW") < generated.find(seal_alert),
 		"oxygen's critical crossing comes before the real hatch-opening deadline")
-	_assert_true(orders.alert_label.text.replace("\u00a0", " ").begins_with("OXYGEN LOW  ·  ")
+	_assert_true(_triage_bar_text(orders).begins_with("OXYGEN LOW  ·  ")
 		and visible.slice(0, 2) == ["OXYGEN LOW", seal_alert],
 		"the shorter uncovered oxygen runway leads the hatch alert")
 	_assert_triage_count_and_bar(game, visible, _triage_hidden(orders))
@@ -464,7 +470,7 @@ func _test_alerts_rank_by_urgency() -> void:
 	_assert_true(generated.find(seal_alert) >= 0 and generated.find("OXYGEN LOW") >= 0
 		and generated.find(seal_alert) < generated.find("OXYGEN LOW"),
 		"the alert ordering flips when oxygen outlasts the hatch grace")
-	_assert_true(orders.alert_label.text.replace("\u00a0", " ").begins_with(seal_alert + "  ·  ")
+	_assert_true(_triage_bar_text(orders).begins_with(seal_alert + "  ·  ")
 		and visible.slice(0, 2) == [seal_alert, "OXYGEN LOW"],
 		"the earlier hatch-opening deadline leads oxygen after the flip")
 	_assert_triage_count_and_bar(game, visible, _triage_hidden(orders))
@@ -557,7 +563,7 @@ func _test_alerts_uncovered_critical_resident() -> void:
 	if not orders.details_box.visible:
 		orders._toggle_details_rail()
 	var more: Variant = _triage_more(orders)
-	var ari_visible := "CRITICAL: Ari" in orders.alert_label.text.replace("\u00a0", " ")
+	var ari_visible := "CRITICAL: Ari" in _triage_bar_text(orders)
 	if more != null:
 		ari_visible = ari_visible or (more.is_visible_in_tree() and "CRITICAL: Ari" in more.text)
 	_assert_true(ari_visible, "the alert bar or expanded DETAILS visibly names CRITICAL: Ari")
@@ -623,7 +629,7 @@ func _assert_next_alert_omitted(game: VaultGame, alert: String, message: String)
 	var orders := game.player_orders
 	_assert_true(alert in _triage_alerts(orders, "all_alerts"), "%s: the simulation still generates %s" % [message, alert])
 	_assert_false(alert in _triage_alerts(orders, "alert_list"), "%s: Next removes %s from the showable list" % [message, alert])
-	_assert_false(alert in orders.alert_label.text.replace("\u00a0", " "), "%s: the bar does not repeat %s" % [message, alert])
+	_assert_false(alert in _triage_bar_text(orders), "%s: the bar does not repeat %s" % [message, alert])
 	var more: Variant = _triage_more(orders)
 	if more != null:
 		_assert_false(alert in more.text, "%s: DETAILS does not repeat %s" % [message, alert])
@@ -644,7 +650,7 @@ func _test_alerts_no_duplicate_with_next() -> void:
 	_assert_next_alert_omitted(game, "NO MEALS", "food recovery action")
 	_assert_true("INJURED 1 · NO MED BED" in _triage_alerts(orders, "alert_list"),
 		"Next's food advice preserves Bo's unrelated injury alert")
-	_assert_true(orders.alert_label.text.replace("\u00a0", " ").begins_with("INJURED 1 · NO MED BED  ·  "),
+	_assert_true(_triage_bar_text(orders).begins_with("INJURED 1 · NO MED BED  ·  "),
 		"the uncovered injury remains visible with the count excluding deduped food alerts")
 	_dispose(game)
 

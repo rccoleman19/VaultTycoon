@@ -3384,6 +3384,25 @@ func _alert_line_text(visible_count: int) -> String:
 	return "  ·  ".join(clauses)
 
 
+func _wrap_alert_line(text: String) -> String:
+	var width := alert_label.size.x
+	if width <= 0.0:
+		return text
+	var font := alert_label.get_theme_font("font")
+	var font_size := alert_label.get_theme_font_size("font_size")
+	var lines: PackedStringArray = []
+	var line := ""
+	for clause: String in text.split("  ·  "):
+		var candidate := line + "  ·  " + clause if not line.is_empty() else clause
+		if not line.is_empty() and font.get_string_size(candidate, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > width:
+			lines.append(line)
+			line = clause
+		else:
+			line = candidate
+	lines.append(line)
+	return "\n".join(lines)
+
+
 func _fit_alert_line() -> void:
 	if _fitting_alert_line or alert_list.is_empty():
 		return
@@ -3400,6 +3419,9 @@ func _fit_alert_line() -> void:
 		if second_width > alert_label.size.x or alert_label.get_line_count() > 2:
 			visible_count = 1
 			alert_label.text = _alert_line_text(visible_count)
+	# Keep the existing clause/fold decision above. A separator belongs only
+	# between clauses sharing a rendered line, never at either edge of a wrap.
+	alert_label.text = _wrap_alert_line(alert_label.text)
 	alert_hidden_count = alert_list.size() - visible_count
 	_refresh_alert_details()
 	_fitting_alert_line = false
