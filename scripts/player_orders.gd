@@ -2,7 +2,7 @@ class_name PlayerOrders
 extends CanvasLayer
 
 const DIG_SALVAGE_YIELD := 3
-const MAX_VISIBLE_ALERTS := 1
+const MAX_VISIBLE_ALERTS := 2
 const IDLE_CREW_WINDOW_S := 3.0
 const NEXT_HOLD_S := 2.0
 
@@ -32,6 +32,7 @@ var pause_button: Button
 var objective_label: Label
 var also_label: Label
 var alert_label: Label
+var _fitting_alert_line := false
 var all_alerts: Array[String] = []
 var alert_list: Array[String] = []
 var alert_hidden_count: int = 0
@@ -241,6 +242,7 @@ func _build_interface() -> void:
 	alert_label.tooltip_text = "Open DETAILS to see the remaining alerts listed by urgency."
 	alert_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	alert_label.custom_minimum_size.y = 34
+	alert_label.resized.connect(_fit_alert_line)
 	summary.add_child(alert_label)
 	_build_idle_start_card(summary)
 	_build_comfort_card(summary)
@@ -3212,6 +3214,7 @@ func _refresh_alerts(step: Dictionary) -> void:
 		# The outcome panel is up and the shift is over: one outcome line, no live advice.
 		var won := game.outcome == "win"
 		alert_label.text = "SHIFT ENDED · %s" % ("SEAL STABILIZED" if won else "WING LOST")
+		_fit_alert_line()
 		alert_label.add_theme_color_override("font_color", Color("75d4b4") if won else Color("ef6860"))
 		return
 	var alerts: Array[String] = []
@@ -3348,11 +3351,27 @@ func _refresh_alerts(step: Dictionary) -> void:
 	elif alert_list.is_empty():
 		alert_label.text = "SEE NEXT"
 	else:
-		alert_label.text = alert_list[0]
+		alert_label.text = "  ·  ".join(alert_list.slice(0, MAX_VISIBLE_ALERTS))
 		if alert_hidden_count > 0:
 			alert_label.text += "  ·  +%d more" % alert_hidden_count
+	_fit_alert_line()
 	alert_label.add_theme_color_override("font_color", alert_color)
 	_refresh_alert_details()
+
+
+func _fit_alert_line() -> void:
+	# Two complete clauses (including long hatch/cache advice) must fit the pinned
+	# rail without clipping. Refit on layout as well as refresh; keep the normal
+	# font size whenever it already fits. Countdown digits use padded MM:SS below.
+	if _fitting_alert_line or alert_label.size.x <= 0.0:
+		return
+	_fitting_alert_line = true
+	var font_size := alert_label.get_theme_default_font_size()
+	alert_label.add_theme_font_size_override("font_size", font_size)
+	while alert_label.get_line_count() > 2 and font_size > 1:
+		font_size -= 1
+		alert_label.add_theme_font_size_override("font_size", font_size)
+	_fitting_alert_line = false
 
 
 func _refresh_alert_details() -> void:
@@ -5083,6 +5102,7 @@ func _suffocating_health_loss_per_second(resident: VaultResident) -> float:
 	return loss
 
 
+# Keep both fields padded across digit/minute boundaries so countdowns do not reflow.
 func _format_seconds(seconds: float) -> String:
 	var total := maxi(0, ceili(seconds))
 	return "%02d:%02d" % [total / 60, total % 60]
