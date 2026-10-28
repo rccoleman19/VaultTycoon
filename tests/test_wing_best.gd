@@ -27,6 +27,8 @@ func _run() -> void:
 			_run_case("backup recovery survives failed promotion", _test_backup)
 			_run_case("only the win outcome is a win", _test_outcomes)
 			_run_case("finish, recap, briefing, retry and LOAD integration", _test_game)
+			_run_case("non-win Best clocks match DayCycle on entry and recap", _test_clock_text)
+			_run_case("loss Best merges perk and sublevel unlock details", _test_merged_details)
 			_run_case("win, Continue and Keep Running never rewrite a better run", _test_keep_running)
 			_run_case("scripted games cannot use the real best sidecar", _test_isolation)
 	print("WING BEST TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
@@ -318,6 +320,13 @@ func _best_label(game: VaultGame) -> Label:
 	return label as Label
 
 
+func _assert_loss_labels(game: VaultGame, expected: String) -> void:
+	_assert_equal(_best_label(game).text, expected, "loss recap shows the complete merged Best text")
+	_assert_true(_best_label(game).is_visible_in_tree(), "the merged Best label is visible")
+	_assert_false(game.player_orders.outcome_record.is_visible_in_tree(), "the separate FURTHEST DAY label is hidden")
+	_assert_false(_best_label(game).text.contains("FURTHEST DAY"), "merged text contains no FURTHEST DAY label")
+
+
 func _test_game() -> void:
 	var store: Variant = _store()
 	var game := _game()
@@ -328,9 +337,7 @@ func _test_game() -> void:
 		names.append(resident.resident_name)
 	game._finish_loss()
 	_assert_equal(game.get("finish_best"), {"previous": {}, "current": _run_entry(false, 5, 172.3, names), "new_best": true}, "loss submits run and alive names")
-	var label := _best_label(game)
-	if label != null:
-		_assert_equal(label.text, "Best: DAY 5 · 12.3s · 4 survived · NEW BEST", "loss recap shows new best")
+	_assert_loss_labels(game, "Best: DAY 5 · 07:22 · 4 survived · NEW BEST")
 	var before := _bytes(store.path)
 	_assert_true(before != "<missing>", "injected records directory also receives best file")
 	_assert_true(game.retry_day_checkpoint(), "Retry restores day checkpoint")
@@ -339,20 +346,69 @@ func _test_game() -> void:
 	game.day_cycle.current_day = 2
 	game.day_cycle.elapsed_seconds = 45.0
 	game._finish_loss()
-	label = _best_label(game)
-	if label != null:
-		_assert_true(label.text.begins_with("Best:") and not label.text.contains("NEW BEST"), "worse recap shows best without new mark")
+	_assert_loss_labels(game, "Best: DAY 5 · 07:22 · 4 survived")
 	_assert_equal(_bytes(store.path), before, "worse finish leaves best file unchanged")
 	_assert_false(bool(game.get("finish_best").new_best), "worse finish is not a new best")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(game.records_path))
 	game.new_game(true, 4242)
 	_assert_equal(game.get("finish_best"), {}, "new wing resets best result")
-	_assert_true(game.player_orders.briefing_record_text().contains("Best: DAY 5 · 12.3s · 4 survived"), "briefing displays best even without a wing record")
+	_assert_true(game.player_orders.briefing_record_label.text.contains("Best: DAY 5 · 07:22 · 4 survived"), "briefing displays best in game-clock time even without a wing record")
 	_assert_true(game.player_orders.briefing_record_label.visible, "briefing best line is visible")
 	# LOAD-style outcome rendering reads the sidecar and never submits.
 	game.player_orders.show_outcome(false, 4)
+	_assert_loss_labels(game, "Best: DAY 5 · 07:22 · 4 survived")
 	_assert_equal(_bytes(store.path), before, "show_outcome does not write")
 	_assert_false(_best_label(game).text.contains("NEW BEST"), "LOAD-style recap has no fresh mark")
+	_dispose(game)
+	_cleanup()
+
+
+func _test_clock_text() -> void:
+	var store: Variant = _store()
+	var game := _game()
+	var fixtures := [
+		[0.0, "00:00"], [0.30000000000000004, "00:10"],
+		[39.999999, "23:59"], [40.0, "00:00"], [172.3, "07:22"],
+		[201.99999999999997, "01:11"], [280.0, "00:00"], [333.5, "08:06"],
+	]
+	for index in fixtures.size():
+		var elapsed: float = fixtures[index][0]
+		var day := floori(elapsed / DayCycle.SECONDS_PER_DAY) + 1
+		var seed_value := 4242 + index
+		var clock := DayCycle.new()
+		clock.elapsed_seconds = elapsed
+		var time := clock.get_clock_text().get_slice("·", 1).strip_edges()
+		clock.free()
+		_assert_equal(time, fixtures[index][1], "fixture includes DayCycle's minute-floor behavior")
+		store.submit(seed_value, 7, _run_entry(false, day, elapsed, []))
+		var before := _bytes(store.path)
+		game.new_game(true, seed_value)
+		var expected := "Best: DAY %d · %s · 0 survived" % [day, time]
+		_assert_equal(game.player_orders.briefing_record_label.text, expected, "entry shows the stored day and game-clock time")
+		_assert_true(game.player_orders.briefing_record_label.is_visible_in_tree(), "entry Best is visible")
+		game.player_orders.show_outcome(false, 0)
+		_assert_loss_labels(game, expected)
+		_assert_equal(_bytes(store.path), before, "entry and recap clock formatting never change stored elapsed")
+	_dispose(game)
+	_cleanup()
+
+
+func _test_merged_details() -> void:
+	var store: Variant = _store()
+	var game := _game()
+	game.wing_perk = "provisioning"
+	game.day_cycle.current_day = 6
+	game.day_cycle.elapsed_seconds = 201.99999999999997
+	game._finish_loss()
+	_assert_loss_labels(game, "Best: DAY 6 · 01:11 · 4 survived · NEW BEST · with PROVISIONING")
+	# Retain any unlock second line supplied by record_line, independently of its first line.
+	game.finish_record["unlocked"] = 6
+	game.player_orders.show_outcome(false, 4)
+	_assert_loss_labels(game, "Best: DAY 6 · 01:11 · 4 survived · NEW BEST · with PROVISIONING\nSUBLEVEL 06 UNLOCKED · EARLY HATCH")
+	game.finish_record = {}
+	game.finish_best = {}
+	game.player_orders.show_outcome(false, 4)
+	_assert_loss_labels(game, "Best: DAY 6 · 01:11 · 4 survived · with PROVISIONING")
 	_dispose(game)
 	_cleanup()
 
@@ -370,6 +426,8 @@ func _test_keep_running() -> void:
 	_assert_true(store.get_best(4242).won, "_finish_win submits a win")
 	var before := _bytes(store.path)
 	_assert_equal(_best_label(game).text, "Best: WIN · 4 survived · NEW BEST", "win recap shows best")
+	_assert_true(game.player_orders.outcome_record.is_visible_in_tree(), "win keeps its separate star record line")
+	_assert_equal(game.player_orders.outcome_record.text, "BEST ★★☆ · NEW RECORD\nSUBLEVEL 06 UNLOCKED · EARLY HATCH", "win retains stars and unlock text alongside Best: WIN")
 	_assert_true(game.load_game(), "won save loads")
 	_assert_equal(game.get("finish_best"), {}, "LOAD clears transient best")
 	_assert_equal(_bytes(store.path), before, "LOAD leaves best bytes unchanged")
@@ -381,10 +439,12 @@ func _test_keep_running() -> void:
 	game.residents[0].kill()
 	_assert_equal(game.outcome, "death", "partial death opens recap")
 	_assert_true(_best_label(game).visible and _best_label(game).text.begins_with("Best:"), "death recap shows existing best")
+	_assert_loss_labels(game, "Best: WIN · 4 survived")
 	_assert_false(_best_label(game).text.contains("NEW BEST"), "later death does not repeat win's mark")
 	_assert_true(game.resume_after_death(), "Continue resumes endless shift")
 	_assert_equal(_bytes(store.path), before, "Continue does not write best")
 	game._finish_loss()
+	_assert_loss_labels(game, "Best: WIN · 4 survived")
 	_assert_false(bool(game.get("finish_best").new_best), "endless loss cannot replace win")
 	_assert_equal(_bytes(store.path), before, "endless loss leaves win unchanged")
 	# A distinct wing with no prior win verifies the absolute elapsed clock after day 7.
@@ -394,6 +454,9 @@ func _test_keep_running() -> void:
 	game._finish_loss()
 	var endless: Dictionary = store.get_best(7)
 	_assert_equal([endless.won, endless.day, endless.elapsed], [false, 9, 333.5], "endless loss uses consistent day and seconds into run")
+	_assert_loss_labels(game, "Best: DAY 9 · 08:06 · 4 survived · NEW BEST")
+	game.new_game(true, 7)
+	_assert_equal(game.player_orders.briefing_record_label.text.get_slice("\n", 1), "Best: DAY 9 · 08:06 · 4 survived", "entry formats total Keep Running elapsed as time of day")
 	_dispose(game)
 	_cleanup()
 

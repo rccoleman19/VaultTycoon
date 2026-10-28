@@ -4080,6 +4080,15 @@ func show_outcome(won: bool, survivors: int) -> void:
 	outcome_best.visible = not outcome_best.text.is_empty()
 	outcome_record.text = record_line(won)
 	outcome_record.visible = not resumable and not outcome_record.text.is_empty()
+	if not won and outcome_best.visible:
+		var record_first_line := outcome_record.text.get_slice("\n", 0)
+		var perk_start := record_first_line.find(" · with ")
+		if perk_start >= 0:
+			outcome_best.text += record_first_line.substr(perk_start)
+		var unlock_start := outcome_record.text.find("\n")
+		if unlock_start >= 0:
+			outcome_best.text += outcome_record.text.substr(unlock_start)
+		outcome_record.visible = false
 	_show_keep_running_button(won)
 	if resumable:
 		for button: Button in [outcome_resume_button, outcome_retry_button]:
@@ -4143,7 +4152,13 @@ func best_line(finish := false) -> String:
 	var best: Dictionary = game.finish_best.current if fresh else game.wing_best().get_best(game.wing_seed, game.sublevel)
 	if best.is_empty():
 		return ""
-	var text := "Best: WIN" if best.won else "Best: DAY %d · %.1fs" % [best.day, fmod(float(best.elapsed), DayCycle.SECONDS_PER_DAY)]
+	var text := "Best: WIN"
+	if not best.won:
+		# Stored elapsed includes every day, including Keep Running. Match DayCycle's clock math.
+		var fraction := fmod(float(best.elapsed), DayCycle.SECONDS_PER_DAY) / DayCycle.SECONDS_PER_DAY
+		var hours := floori(fraction * 24.0)
+		var minutes := floori(fmod(fraction * 24.0, 1.0) * 60.0)
+		text = "Best: DAY %d · %02d:%02d" % [best.day, hours, minutes]
 	text += " · %d survived" % best.survivors.size()
 	if fresh and bool(game.finish_best.new_best):
 		text += " · NEW BEST"

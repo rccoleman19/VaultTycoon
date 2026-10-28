@@ -87,6 +87,22 @@ func _screen_text(panel: Variant) -> String:
 	return text
 
 
+func _assert_merged_best(game: VaultGame, text: String, expected: String) -> void:
+	var labels := _visible_labels(game.player_orders.outcome_panel)
+	_assert_true(labels.has(expected), "recap renders the complete merged Best label: %s" % expected)
+	_assert_equal(text.count("Best:"), 1, "recap renders exactly one Best line")
+	_assert_false(text.contains("FURTHEST DAY"), "no separate FURTHEST DAY label is visible with Best")
+	_assert_false(game.player_orders.outcome_record.is_visible_in_tree(), "the separate record label is hidden")
+
+
+func _finished_best_text(game: VaultGame) -> String:
+	var clock := DayCycle.new()
+	clock.elapsed_seconds = game.day_cycle.elapsed_seconds
+	var time := clock.get_clock_text().get_slice("·", 1).strip_edges()
+	clock.free()
+	return "Best: DAY %d · %s · 0 survived" % [game.day_cycle.current_day, time]
+
+
 func _test_entry() -> void:
 	_make_slots()
 	_assert_true(_best_script != null, "best-run store script exists")
@@ -97,7 +113,7 @@ func _test_entry() -> void:
 	_seed_best(4, 125.5)
 	game.new_game(true, SEED, LEVEL)
 	text = _screen_text(game.player_orders.get("briefing_panel"))
-	_assert_true(text.contains("Best: DAY 4"), "entry shows the stored non-win best as visible label text")
+	_assert_true(text.contains("Best: DAY 4 · 03:18 · 4 survived"), "entry shows the stored non-win best in game-clock time")
 	_assert_true(text.contains("4 survived"), "entry includes the stored survivor count")
 	_assert_false(text.contains("NEW BEST"), "entry does not claim a newly finished run")
 	_dispose(game)
@@ -150,7 +166,7 @@ func _test_death_finish() -> void:
 	_idle_until_death(game)
 	_finish_deaths(game)
 	var text := _screen_text(game.player_orders.get("outcome_panel"))
-	_assert_true(text.contains("Best: DAY %d" % game.day_cycle.current_day), "death finish shows the better day in a recap label")
+	_assert_merged_best(game, text, _finished_best_text(game) + " · NEW BEST")
 	_assert_true(text.contains("NEW BEST"), "better death finish visibly announces NEW BEST")
 	_assert_true(FileAccess.get_file_as_bytes(_slots.best_path) != before, "better death finish replaces the stored run")
 	var document: Variant = JSON.parse_string(FileAccess.get_file_as_string(_slots.best_path))
@@ -169,6 +185,7 @@ func _test_retry() -> void:
 	_idle_until_death(game)
 	_finish_deaths(game)
 	var first_text := _screen_text(game.player_orders.get("outcome_panel"))
+	_assert_merged_best(game, first_text, _finished_best_text(game) + " · NEW BEST")
 	_assert_true(first_text.contains("Best:") and first_text.contains("NEW BEST"), "first finish establishes the retry's best")
 	_assert_true(FileAccess.file_exists(_slots.best_path), "a best exists before Retry")
 	var before := FileAccess.get_file_as_bytes(_slots.best_path)
@@ -185,7 +202,7 @@ func _test_retry() -> void:
 		_advance_idle_to_outcome(game)
 		_finish_deaths(game)
 		var text := _screen_text(game.player_orders.get("outcome_panel"))
-		_assert_true(text.contains("Best: DAY %d" % game.day_cycle.current_day), "equal retry finish still shows Best on the visible recap")
+		_assert_merged_best(game, text, _finished_best_text(game))
 		_assert_false(text.contains("NEW BEST"), "equal retry finish has no NEW BEST mark")
 		_assert_equal(FileAccess.get_file_as_bytes(_slots.best_path), before, "equal retry finish leaves wing_best.json byte-for-byte unchanged")
 	_dispose(game)
@@ -221,7 +238,7 @@ func _test_inexact_retry() -> void:
 	var first: Dictionary = game.get("finish_best") if "finish_best" in game else {}
 	_assert_equal(first.get("new_best"), true, "first inexact-clock loss establishes the best")
 	_assert_true(float(first.get("current", {}).get("elapsed", -1.0)) == elapsed, "first finish submits the exact simulation clock")
-	_assert_true(_screen_text(game.player_orders.get("outcome_panel")).contains("NEW BEST"), "first inexact-clock loss visibly announces NEW BEST")
+	_assert_merged_best(game, _screen_text(game.player_orders.get("outcome_panel")), "Best: DAY 1 · 00:10 · 0 survived · NEW BEST")
 	var document: Variant = JSON.parse_string(FileAccess.get_file_as_string(_slots.best_path))
 	_assert_true(document is Dictionary, "first inexact-clock best has readable JSON")
 	if document is Dictionary:
@@ -242,12 +259,12 @@ func _test_inexact_retry() -> void:
 		_assert_equal(second.get("new_best"), false, "identical inexact-clock Retry loss is not a new best")
 		_assert_true(float(second.get("current", {}).get("elapsed", -1.0)) == elapsed, "Retry finish reads the exact stored best elapsed")
 		var text := _screen_text(game.player_orders.get("outcome_panel"))
-		_assert_true(text.contains("Best: DAY 1"), "identical inexact-clock loss still visibly shows Best")
+		_assert_merged_best(game, text, "Best: DAY 1 · 00:10 · 0 survived")
 		_assert_false(text.contains("NEW BEST"), "identical inexact-clock Retry recap has no NEW BEST")
 		_assert_equal(FileAccess.get_file_as_bytes(_slots.best_path), before, "identical inexact-clock loss preserves every best byte")
 		game.new_game(true, SEED, LEVEL)
 		var entry_text := _screen_text(game.player_orders.get("briefing_panel"))
-		_assert_true(entry_text.contains("Best: DAY 1"), "entry displays the inexact-clock stored best")
+		_assert_true(entry_text.contains("Best: DAY 1 · 00:10 · 0 survived"), "entry displays the inexact-clock stored best in game-clock time")
 		_assert_false(entry_text.contains("NEW BEST"), "entry after the identical Retry loss has no NEW BEST")
 	_dispose(game)
 
@@ -284,7 +301,7 @@ func _test_cap() -> void:
 		_assert_true(false, "best store can convert cap outcomes without inventing wins")
 	game.new_game(true, SEED, LEVEL)
 	var text := _screen_text(game.player_orders.get("briefing_panel"))
-	_assert_true(text.contains("Best: DAY 8"), "entry renders the cap's stored best as a day result")
+	_assert_true(text.contains("Best: DAY 8 · 00:00 · 1 survived"), "entry renders the cap's stored best as a day and game-clock result")
 	_assert_false(text.contains("Best: WIN"), "cap END is never presented as a win")
 	_dispose(game)
 
@@ -299,7 +316,7 @@ func _test_corrupt() -> void:
 	_seed_best(4, 125.5)
 	var game := _game()
 	game.new_game(true, SEED, LEVEL)
-	_assert_true(_screen_text(game.player_orders.get("briefing_panel")).contains("Best: DAY 4"), "valid best fixture is visible before corrupting it")
+	_assert_true(_screen_text(game.player_orders.get("briefing_panel")).contains("Best: DAY 4 · 03:18 · 4 survived"), "valid best fixture is visible in game-clock time before corrupting it")
 	var corrupt := "{broken wing_best.json"
 	_put(_slots.best_path, corrupt)
 	game.new_game(true, SEED, LEVEL)

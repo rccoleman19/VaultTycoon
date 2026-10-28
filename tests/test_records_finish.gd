@@ -132,16 +132,19 @@ func _test_load_no_write() -> void:
 func _test_loss() -> void:
 	_clean()
 	var game := _game(77)
+	_assert_false(game.best_enabled(), "root-level test store leaves Best disabled: legacy record text remains")
 	game.day_cycle.current_day = 3
 	game._finish_loss()
 	_assert_equal(game.wing_records().get_record(77), {"ever_won": false, "best_stars": null, "best_day": 3, "annex": false}, "the loss is recorded with its day")
 	_assert_equal(game.player_orders.outcome_record.text, "FURTHEST DAY 3 · NEW RECORD", "loss shows the furthest day")
+	_assert_true(game.player_orders.outcome_record.is_visible_in_tree(), "without Best the original furthest-day line is visible")
 	_assert_equal(game.player_orders.outcome_title.text, "WING LOST", "loss title unchanged")
 	_dispose(game)
 	game = _game(77)
 	game.day_cycle.current_day = 2
 	game._finish_loss()
 	_assert_equal(game.player_orders.outcome_record.text, "FURTHEST DAY 3", "an earlier loss keeps the furthest day")
+	_assert_true(game.player_orders.outcome_record.is_visible_in_tree(), "without Best the earlier record remains visible")
 	_dispose(game)
 	_clean()
 

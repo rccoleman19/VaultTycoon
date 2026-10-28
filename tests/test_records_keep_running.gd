@@ -115,6 +115,8 @@ func _test_loss() -> void:
 	_assert_true(bool(rec.ever_won), "the earlier win is kept")
 	_assert_equal(int(rec.best_day), 8, "the loss day is the keep-running day, with no rollover")
 	_assert_true(game.player_orders.outcome_record.text.begins_with("FURTHEST DAY 8"), "the loss shows the furthest day: %s" % game.player_orders.outcome_record.text)
+	_assert_false(game.best_enabled(), "Best is disabled for this legacy record-only fixture")
+	_assert_true(game.player_orders.outcome_record.is_visible_in_tree(), "without Best the original kept-running record is visible")
 	_dispose(game)
 	_clean()
 
