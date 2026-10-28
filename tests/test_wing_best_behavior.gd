@@ -21,6 +21,7 @@ func _run() -> void:
 	_run_case("c: Retry's equal finish preserves bytes and has no NEW BEST", _test_retry)
 	_run_case("d: a frame-cap END is never stored as a win", _test_cap)
 	_run_case("e: corrupt best is empty and leaves wing records intact", _test_corrupt)
+	_run_case("f: Retry's identical inexact-clock loss stays a tie", _test_inexact_retry)
 	_cleanup_slots()
 	print("WING BEST BEHAVIOR TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
@@ -187,6 +188,67 @@ func _test_retry() -> void:
 		_assert_true(text.contains("Best: DAY %d" % game.day_cycle.current_day), "equal retry finish still shows Best on the visible recap")
 		_assert_false(text.contains("NEW BEST"), "equal retry finish has no NEW BEST mark")
 		_assert_equal(FileAccess.get_file_as_bytes(_slots.best_path), before, "equal retry finish leaves wing_best.json byte-for-byte unchanged")
+	_dispose(game)
+
+
+func _inexact_clock_loss(game: VaultGame) -> void:
+	# Induce the same loss through real resident death signals on both attempts.
+	# No simulation tick or clock assignment may hide the checkpoint's precision.
+	for resident: VaultResident in game.residents:
+		resident.kill()
+	game.player_orders.refresh()
+	_assert_equal(game.get_alive_count(), 0, "induced loss has no living residents")
+	_assert_true(game.ended and game.outcome == "loss", "final resident death runs the real finish path")
+
+
+func _test_inexact_retry() -> void:
+	_make_slots()
+	var game := _game()
+	game.new_game(false, SEED, LEVEL)
+	game.begin_shift()
+	_assert_false(game.is_simulation_paused(), "precision fixture starts a live shift")
+	for tick in 3:
+		game.step_simulation(0.1)
+	var elapsed := game.day_cycle.elapsed_seconds
+	_assert_true(elapsed == 0.30000000000000004, "three real 0.1 ticks produce the inexact clock")
+	_assert_true(elapsed != 0.3, "the fixture distinguishes the clock from rounded JSON")
+	_assert_true(bool(game.call("_save_day_checkpoint")), "real checkpoint writer saves the inexact clock")
+	var checkpoint := game.save_load.load_snapshot(_slots.checkpoint_path)
+	_assert_true(bool(checkpoint.ok), "inexact-clock checkpoint loads through SaveLoad")
+	if bool(checkpoint.ok):
+		_assert_true(float(checkpoint.snapshot.day.elapsed_seconds) == elapsed, "checkpoint elapsed round-trips exactly")
+	_inexact_clock_loss(game)
+	var first: Dictionary = game.get("finish_best") if "finish_best" in game else {}
+	_assert_equal(first.get("new_best"), true, "first inexact-clock loss establishes the best")
+	_assert_true(float(first.get("current", {}).get("elapsed", -1.0)) == elapsed, "first finish submits the exact simulation clock")
+	_assert_true(_screen_text(game.player_orders.get("outcome_panel")).contains("NEW BEST"), "first inexact-clock loss visibly announces NEW BEST")
+	var document: Variant = JSON.parse_string(FileAccess.get_file_as_string(_slots.best_path))
+	_assert_true(document is Dictionary, "first inexact-clock best has readable JSON")
+	if document is Dictionary:
+		_assert_true(float(document.get("wings", {}).get(WING_KEY, {}).get("elapsed", -1.0)) == elapsed, "stored best elapsed round-trips exactly")
+	var before := FileAccess.get_file_as_bytes(_slots.best_path)
+	var retried := bool(game.call("retry_day_checkpoint"))
+	_assert_true(retried, "real Retry restores the inexact-clock checkpoint")
+	if retried:
+		_assert_true(game.day_cycle.elapsed_seconds == elapsed, "Retry restores the exact inexact clock")
+		_assert_equal(game.get_alive_count(), game.residents.size(), "Retry restores every resident before the identical loss")
+		_assert_equal(game.get("finish_best"), {}, "Retry clears the first finish result")
+		_assert_equal(FileAccess.get_file_as_bytes(_slots.best_path), before, "inexact-clock Retry leaves best bytes intact")
+		_assert_false((game.player_orders.get("outcome_panel") as Control).is_visible_in_tree(), "inexact-clock Retry hides the first recap")
+		game.begin_shift()
+		_inexact_clock_loss(game)
+		_assert_true(game.day_cycle.elapsed_seconds == elapsed, "identical loss finishes at exactly the same clock")
+		var second: Dictionary = game.get("finish_best") if "finish_best" in game else {}
+		_assert_equal(second.get("new_best"), false, "identical inexact-clock Retry loss is not a new best")
+		_assert_true(float(second.get("current", {}).get("elapsed", -1.0)) == elapsed, "Retry finish reads the exact stored best elapsed")
+		var text := _screen_text(game.player_orders.get("outcome_panel"))
+		_assert_true(text.contains("Best: DAY 1"), "identical inexact-clock loss still visibly shows Best")
+		_assert_false(text.contains("NEW BEST"), "identical inexact-clock Retry recap has no NEW BEST")
+		_assert_equal(FileAccess.get_file_as_bytes(_slots.best_path), before, "identical inexact-clock loss preserves every best byte")
+		game.new_game(true, SEED, LEVEL)
+		var entry_text := _screen_text(game.player_orders.get("briefing_panel"))
+		_assert_true(entry_text.contains("Best: DAY 1"), "entry displays the inexact-clock stored best")
+		_assert_false(entry_text.contains("NEW BEST"), "entry after the identical Retry loss has no NEW BEST")
 	_dispose(game)
 
 

@@ -130,7 +130,7 @@ func _write(document: Dictionary, status: int) -> bool:
 	var file := FileAccess.open(temporary, FileAccess.WRITE) if fail_step != "open" else null
 	if file == null:
 		return false
-	file.store_string(JSON.stringify(document))
+	file.store_string(JSON.stringify(document, "", true, true))
 	file.flush()
 	var error := file.get_error()
 	file.close()
