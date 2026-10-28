@@ -11,7 +11,8 @@ func _run() -> void:
 	_run_case("Dig labor and Haul arrival pay exact contents once", _test_labor_and_claim)
 	_run_case("canceling the expedition is persistent and never auto-grants", _test_cancel)
 	_run_case("save/load preserves partial dig, exposed cache and claimed latch", _test_save)
-	_run_case("one static alert survives refresh, claim and load without changing Next", _test_notice)
+	_run_case("one informational notice stays stable until claim without changing Next", _test_notice)
+	_run_case("keep-running hides an unclaimed designated cache notice", _test_keep_running_notice)
 	_run_case("malformed cache saves reject atomically and old saves stay compatible", _test_validation)
 	print("DAY4 SUPPLY CACHE TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
@@ -153,17 +154,24 @@ func _test_cancel() -> void:
 	if game == null:
 		return
 	_day4(game)
+	var notice := str(game.call("supply_cache_alert"))
+	_assert_false(notice.is_empty(), "designated cache has a notice before cancel")
 	game.set_tool("cancel")
 	_assert_true(game.issue_order(_cell(game)), "player can abandon the expedition with CANCEL")
+	_assert_equal(str(game.call("supply_cache_alert")), "", "cancel hides the cache notice immediately")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.all_alerts.count(notice), 0, "canceled notice leaves the alert list")
 	var initial := game.food_system.serialize()
 	_round_trip(game)
 	game.day_cycle.advance(40.0)
 	for _tick in range(300):
 		game.job_system.advance(0.1)
 	_assert_false(game.map_grid.dig_marks.has(_cell(game)), "load and next day do not re-queue canceled work")
+	_assert_equal(str(game.call("supply_cache_alert")), "", "canceled notice stays hidden after load and next day")
 	_assert_equal(game.food_system.serialize(), initial, "abandoned cache grants no supplies")
 	game.set_tool("dig")
 	_assert_true(game.issue_order(_cell(game)), "player can choose to resume the expedition")
+	_assert_equal(str(game.call("supply_cache_alert")), notice, "resuming restores the same notice")
 	_collect(game)
 	_dispose(game)
 
@@ -197,6 +205,11 @@ func _test_notice() -> void:
 	if game == null:
 		return
 	_day4(game)
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.mood = 100.0
+	game.food_system.meals = 24
 	var notice := str(game.call("supply_cache_alert"))
 	_assert_true("DAY-4 CACHE" in notice and "6 salvage + 2 meals" in notice and "Dig/Haul" in notice, "notice states contents and work cost")
 	var next_before := str(game.player_orders._primary_next_step().get("text", ""))
@@ -204,15 +217,55 @@ func _test_notice() -> void:
 		game.player_orders.refresh()
 		_assert_equal(game.player_orders.all_alerts.count(notice), 1, "refresh shows exactly one latched cache notice")
 		_assert_equal(str(game.player_orders._primary_next_step().get("text", "")), next_before, "cache notice does not churn Next at unchanged time")
+	_assert_equal(game.player_orders.all_alerts, [notice], "healthy crew have only the informational cache notice")
+	_assert_equal(game.player_orders.alert_label.get_theme_color("font_color"), Color("75d4b4"), "cache notice alone stays green")
+	game.food_system.meals = 0
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.alert_label.get_theme_color("font_color"), Color("ef6860"), "a real alert alongside the notice stays red")
+	game.food_system.meals = 24
 	game.map_view_3d.rebuild_map()
 	var marker := game.map_view_3d.marker_root.get_node_or_null("SupplyCache")
 	_assert_true(marker != null and marker.visible, "visible static 3D marker identifies the pocket")
-	_collect(game)
-	_assert_equal(str(game.call("supply_cache_alert")), notice, "claim never replaces the notice text")
 	_round_trip(game)
 	game.day_cycle.advance(40.0)
+	_assert_equal(game.day_cycle.current_day, 5, "unclaimed notice is checked on Day 5")
+	_assert_false(bool(game.get("supply_cache_claimed")), "Day-5 cache is still unclaimed")
+	_assert_true(game.map_grid.dig_marks.has(_cell(game)), "Day-5 expedition is still designated")
+	_assert_equal(str(game.call("supply_cache_alert")), notice, "load and Day 5 retain the identical unclaimed notice")
 	game.player_orders.refresh()
-	_assert_equal(game.player_orders.all_alerts.count(notice), 1, "load and next day keep exactly one identical notice")
+	_assert_equal(game.player_orders.all_alerts.count(notice), 1, "Day 5 shows exactly one unclaimed notice")
+	_assert_true(game.map_grid.apply_dig_work(_cell(game), 8.0), "excavation opens the cache before haul")
+	_assert_equal(str(game.call("supply_cache_alert")), notice, "notice does not flicker between excavation and haul")
+	_round_trip(game)
+	_assert_equal(str(game.call("supply_cache_alert")), notice, "exposed unclaimed notice survives load")
+	_collect(game)
+	_assert_equal(str(game.call("supply_cache_alert")), "", "claim hides the notice immediately")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.all_alerts.count(notice), 0, "claimed notice leaves the alert list")
+	_round_trip(game)
+	game.player_orders.refresh()
+	_assert_equal(str(game.call("supply_cache_alert")), "", "claimed notice stays hidden after load")
+	_assert_equal(game.player_orders.all_alerts.count(notice), 0, "load does not restore a claimed notice")
+	_dispose(game)
+
+
+func _test_keep_running_notice() -> void:
+	var game := _cache_wing()
+	if game == null:
+		return
+	_day4(game)
+	var notice := str(game.call("supply_cache_alert"))
+	_assert_false(notice.is_empty(), "cache notice is visible before the seal win")
+	game.day_cycle.advance(160.0)
+	game.step_simulation(0.1)
+	_assert_true(game.start_keep_running(), "sealed wing enters keep-running after the win")
+	_assert_false(bool(game.get("supply_cache_claimed")), "keep-running fixture leaves the cache unclaimed")
+	_assert_true(game.map_grid.dig_marks.has(_cell(game)), "keep-running fixture leaves the dig designated")
+	_assert_equal(str(game.call("supply_cache_alert")), "", "keep-running hides even an unclaimed designated cache notice")
+	game.player_orders.refresh()
+	_assert_equal(game.player_orders.all_alerts.count(notice), 0, "keep-running alert list omits the cache notice")
+	_round_trip(game)
+	_assert_equal(str(game.call("supply_cache_alert")), "", "keep-running notice stays hidden after load")
 	_dispose(game)
 
 

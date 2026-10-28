@@ -2411,7 +2411,10 @@ func _reveal_supply_cache() -> void:
 
 
 func supply_cache_alert() -> String:
-	if not supply_cache_enabled or not supply_cache_announced:
+	if not supply_cache_enabled or not supply_cache_announced or supply_cache_claimed or keep_running:
+		return ""
+	# Excavation removes the dig mark; keep the same notice until Haul claims it.
+	if not map_grid.dig_marks.has(map_grid.supply_cache_cell) and not map_grid.is_walkable(map_grid.supply_cache_cell):
 		return ""
 	return "DAY-4 CACHE (%d,%d): %d salvage + %d %s · Dig/Haul queued; CANCEL to skip" % [
 		map_grid.supply_cache_cell.x, map_grid.supply_cache_cell.y,
