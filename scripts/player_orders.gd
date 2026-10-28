@@ -3319,6 +3319,9 @@ func _refresh_alerts(step: Dictionary) -> void:
 				critical_resident = resident
 				break
 		alerts.append("CRITICAL: %s" % critical_resident.resident_name)
+	var cache_notice := game.supply_cache_alert()
+	if not cache_notice.is_empty():
+		alerts.append(cache_notice)
 	all_alerts = _order_alerts_by_urgency(alerts)
 	for alert: String in all_alerts:
 		if not _alert_stated_by_next(alert, step):

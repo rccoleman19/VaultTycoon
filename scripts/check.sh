@@ -70,6 +70,7 @@ run_godot_check next-tip-warning --script res://tests/test_next_tip_warning.gd
 run_godot_check next-urgency-rank --script res://tests/test_next_urgency_rank.gd
 run_godot_check alert-triage --script res://tests/test_alert_triage.gd
 run_godot_check late-shift-goals --script res://tests/test_late_shift_goals.gd
+run_godot_check day4-supply-cache --script res://tests/test_day4_supply_cache.gd
 run_godot_check next-flicker --script res://tests/test_next_flicker.gd
 run_godot_check shed-tray-tip --script res://tests/test_shed_tray_tip.gd
 run_godot_check unnamed-rec-lead --script res://tests/test_unnamed_rec_lead.gd
