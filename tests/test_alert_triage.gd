@@ -280,10 +280,10 @@ func _triage_hidden(orders: Node) -> int:
 	return int(value) if value is int else -1
 
 
-func _triage_more(orders: Node) -> Label:
+func _triage_more(orders: Node) -> Variant:
 	var value: Variant = orders.get("alert_more_label")
-	_assert_true(value is Label, "DETAILS owns a label for the remaining alerts")
-	return value as Label
+	_assert_true(value is Control, "DETAILS owns a surface for the remaining alerts")
+	return value as Control
 
 
 func _triage_game() -> VaultGame:
@@ -405,7 +405,7 @@ func _test_alerts_cap_two_visible() -> void:
 	_assert_equal(_triage_alerts(orders, "alert_list"), ["NO COOK ENABLED"], "ample pantry stock leaves just the independent Cook alert")
 	_assert_equal(orders.alert_label.text.replace("\u00a0", " "), "NO COOK ENABLED", "a single alert keeps its exact wording without +N more")
 	_assert_equal(_triage_hidden(orders), 0, "one alert has no hidden alerts")
-	var more := _triage_more(orders)
+	var more: Variant = _triage_more(orders)
 	if more != null:
 		_assert_false(more.visible, "no remaining alert list is shown for a single alert")
 	orders._toggle_details_rail()
@@ -556,7 +556,7 @@ func _test_alerts_uncovered_critical_resident() -> void:
 	_assert_triage_count_and_bar(game, visible, _triage_hidden(orders))
 	if not orders.details_box.visible:
 		orders._toggle_details_rail()
-	var more := _triage_more(orders)
+	var more: Variant = _triage_more(orders)
 	var ari_visible := "CRITICAL: Ari" in orders.alert_label.text.replace("\u00a0", " ")
 	if more != null:
 		ari_visible = ari_visible or (more.is_visible_in_tree() and "CRITICAL: Ari" in more.text)
@@ -624,7 +624,7 @@ func _assert_next_alert_omitted(game: VaultGame, alert: String, message: String)
 	_assert_true(alert in _triage_alerts(orders, "all_alerts"), "%s: the simulation still generates %s" % [message, alert])
 	_assert_false(alert in _triage_alerts(orders, "alert_list"), "%s: Next removes %s from the showable list" % [message, alert])
 	_assert_false(alert in orders.alert_label.text.replace("\u00a0", " "), "%s: the bar does not repeat %s" % [message, alert])
-	var more := _triage_more(orders)
+	var more: Variant = _triage_more(orders)
 	if more != null:
 		_assert_false(alert in more.text, "%s: DETAILS does not repeat %s" % [message, alert])
 	_assert_triage_count_and_bar(game, _triage_alerts(orders, "alert_list"), _triage_hidden(orders))
@@ -729,7 +729,7 @@ func _test_alerts_details_expands_more() -> void:
 	var orders := game.player_orders
 	var visible := _triage_alerts(orders, "alert_list")
 	var hidden := _triage_hidden(orders)
-	var more := _triage_more(orders)
+	var more: Variant = _triage_more(orders)
 	_assert_true(hidden >= 2, "the fixture has at least two remaining alerts for DETAILS")
 	if orders.details_box.visible:
 		orders._toggle_details_rail()

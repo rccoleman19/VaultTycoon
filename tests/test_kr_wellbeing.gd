@@ -2,12 +2,16 @@ extends "res://tests/test_runner.gd"
 
 # After the win residents seek the Rec Console at 45 (before MOOD STRESSED at < 40), and while the
 # comfort card is available Next points at it, even over a latched Rec or Med step.
+# Post-win MOOD STRESSED is a warning; other danger alerts and pre-win colors stay red.
 
 
 func _run() -> void:
 	_run_case("the Rec Console seek threshold is 45 only while the won vault keeps running", _test_threshold)
 	_run_case("a resident at mood 42 takes a free console after the win, not before", _test_seek_job)
 	_run_case("Next points at the comfort card over Rec/Med steps; life support still leads", _test_comfort_next)
+	_run_case("post-win stress alone is amber on the alert line and DETAILS", _test_stress_warning_colors)
+	_run_case("danger keeps the top red while DETAILS colors each folded alert", _test_mixed_alert_colors)
+	_run_case("pre-win stress and post-win break risk remain red", _test_stress_danger_colors)
 	_run_case("the comfort Next fits two lines with 12 px to spare", _test_fit)
 	print("")
 	if _failure_count == 0:
@@ -136,4 +140,111 @@ func _test_fit() -> void:
 		node = node.get_parent()
 	var room := 2.0 * width - _text_width(orders.objective_label, PlayerOrders.COMFORT_TEXT.next)
 	_assert_true(room >= 12.0, "comfort Next fits two lines with %.0f px to spare" % room)
+	_dispose(game)
+
+
+# Exercise real alert generation; only fold all clauses for the isolated DETAILS color checks.
+# Normal fold/layout behavior is covered unchanged by test_alert_line_cap.gd.
+func _stress_game(kept: bool) -> VaultGame:
+	var game := _won() if kept else _spawn_game()
+	game.set_process(false)
+	if kept:
+		game.start_keep_running()
+	else:
+		game.begin_shift()
+	_calm(game)
+	var cell: Vector2i = game._annex_free_cells(1)[0]
+	var console := _add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, cell)
+	console.powered = true
+	game.residents[0].needs.mood = 38.0
+	if not game.player_orders._details_expanded:
+		game.player_orders._toggle_details_rail()
+	return game
+
+
+func _assert_font(control: Control, expected: String, context: String) -> void:
+	_assert_equal(control.get_theme_color("font_color").to_html(false), expected, context + ": actual font color")
+	_assert_equal(control.modulate * control.self_modulate, Color.WHITE, context + ": no tint changes the font")
+
+
+func _assert_details_font(orders: PlayerOrders, clause: String, expected: String) -> void:
+	var surface: Control = orders.alert_more_label
+	# Also reads the old multiline Label so the baseline control fails on color assertions.
+	var rows: Array[Node] = [surface]
+	rows.append_array(surface.get_children())
+	var found := false
+	for row: Node in rows:
+		if row is Label and clause in (row as Label).text.split("\n"):
+			found = true
+			_assert_true((row as Label).is_visible_in_tree(), clause + ": DETAILS row is visible")
+			_assert_font(row as Label, expected, "DETAILS " + clause)
+	_assert_true(found, clause + ": DETAILS has a rendered Label")
+
+
+func _fold_all(orders: PlayerOrders) -> void:
+	orders.alert_hidden_count = orders.alert_list.size()
+	orders._refresh_alert_details()
+
+
+func _test_stress_warning_colors() -> void:
+	var game := _stress_game(true)
+	var orders := game.player_orders
+	var stress := "MOOD STRESSED · " + game.residents[0].resident_name
+	orders._refresh_alerts({})
+	_assert_equal(orders.alert_list, [stress], "real stressed-only alert set")
+	_assert_font(orders.alert_label, "efc56b", "post-win stressed-only top")
+	_fold_all(orders)
+	_assert_details_font(orders, stress, "efc56b")
+	# A danger already stated by Next is excluded from shown/folded clauses.
+	game.food_system.meals = 0
+	orders._refresh_alerts({"text": "Next: cook meals"})
+	_assert_true("NO MEALS" in orders.all_alerts, "fixture includes a filtered danger")
+	_assert_equal(orders.alert_list, [stress], "only stress remains after Next filtering")
+	_assert_font(orders.alert_label, "efc56b", "shown/folded warnings only")
+	_dispose(game)
+
+
+func _test_mixed_alert_colors() -> void:
+	var game := _stress_game(true)
+	var orders := game.player_orders
+	var stress := "MOOD STRESSED · " + game.residents[0].resident_name
+	game.food_system.meals = 0
+	orders._refresh_alerts({})
+	_assert_equal(orders.alert_list, ["NO MEALS", stress], "real mixed warning and danger")
+	_assert_font(orders.alert_label, "ef6860", "mixed top")
+	_fold_all(orders)
+	_assert_details_font(orders, stress, "efc56b")
+	_assert_details_font(orders, "NO MEALS", "ef6860")
+	# Four real clauses leave both stress and a danger folded into DETAILS.
+	game.residents[1].needs.health = 50.0
+	for resident: VaultResident in game.residents:
+		resident.set_work_priority("cook", VaultResident.PRIORITY_DISABLED)
+	orders._refresh_alerts({})
+	_assert_equal(orders.alert_list.size(), 4, "four real clauses exercise normal folding")
+	_assert_true(orders.alert_hidden_count >= 2, "normal cap folds danger and stress")
+	_assert_font(orders.alert_label, "ef6860", "mixed top with folded danger")
+	_assert_details_font(orders, stress, "efc56b")
+	_assert_details_font(orders, "INJURED 1 · NO MED BED", "ef6860")
+	_dispose(game)
+
+
+func _test_stress_danger_colors() -> void:
+	var game := _stress_game(false)
+	var orders := game.player_orders
+	var stress := "MOOD STRESSED · " + game.residents[0].resident_name
+	orders._refresh_alerts({})
+	_assert_equal(orders.alert_list, [stress], "pre-win stressed-only alerts")
+	_assert_font(orders.alert_label, "ef6860", "pre-win stressed top")
+	_fold_all(orders)
+	_assert_details_font(orders, stress, "ef6860")
+	_dispose(game)
+	game = _stress_game(true)
+	orders = game.player_orders
+	game.residents[0].needs.mood = ResidentNeeds.BREAK_MOOD_THRESHOLD
+	orders._refresh_alerts({})
+	var risk := "MOOD BREAK RISK · " + game.residents[0].resident_name
+	_assert_true(risk in orders.alert_list, "break risk is still a danger")
+	_assert_font(orders.alert_label, "ef6860", "post-win break-risk top")
+	_fold_all(orders)
+	_assert_details_font(orders, risk, "ef6860")
 	_dispose(game)
