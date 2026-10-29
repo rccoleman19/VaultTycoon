@@ -9,6 +9,7 @@ func _run() -> void:
 	_run_case("with spare power the plan skips the Charge Node", _test_power_ok)
 	_run_case("the card is held while the live hatch needs its patch salvage", _test_gate)
 	_run_case("the card hides while the pre-seal hatch warning is up", _test_warning_hide)
+	_run_case("a queued partial offer's unpaid cost is reserved before the next offer", _test_queued_reserve)
 	print("")
 	if _failure_count == 0:
 		print("FOOD PLAN CARD TESTS PASSED: %d cases, %d assertions" % [_case_count, _assertion_count])
@@ -117,4 +118,38 @@ func _test_warning_hide() -> void:
 	game.breach_system.phase = BreachSystem.Phase.OPEN
 	game.player_orders.refresh()
 	_assert_true(_card(game).is_visible_in_tree(), "card back once the hatch is open")
+	_dispose(game)
+
+
+# Codex note on #135: placing a blueprint debits nothing until pickup, so after tapping the partial
+# "Nutrient Station · 10" offer the card used to offer "Grow Tray · 12" against the same stock and
+# the two taps spent the hatch patch reserve (05 s8 + Bunk: hatch opened at 103.8 s unpatched).
+func _test_queued_reserve() -> void:
+	var game := _spawn_game()
+	game.new_game(false, 8, 5)
+	game.begin_shift()
+	game.user_paused = true
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(27, 12))
+	game.food_system.salvage = 22
+	game.power_grid.recalculate(game.buildings)
+	game.player_orders.refresh()
+	_assert_equal(_button(game).text, "Nutrient Station · 10", "fixture: 22 stock - patch 4 offers the Station alone")
+	_assert_equal(_press(game), [VaultBuilding.Kind.KITCHEN] as Array[int], "the tap queues the Station")
+	game.player_orders.refresh()
+	_assert_true(_button(game).disabled or not _card(game).is_visible_in_tree(), "the card holds while the Station's 10 is unpaid: %s" % _button(game).text)
+	_assert_false("Grow Tray" in _button(game).text, "no Grow Tray offer against the same stock: %s" % _button(game).text)
+	_assert_equal(_press(game).size(), 0, "a second tap queues nothing")
+	# Driver run: keep tapping whenever the card is live; the hatch must still get its patch.
+	game.user_paused = false
+	var extra := 0
+	for _tick in range(int(110.0 / VaultGame.SIMULATION_TICK)):
+		if game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged:
+			game.acknowledge_breach_warning(true)
+		if _card(game).is_visible_in_tree():
+			extra += _press(game).size()
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		game.player_orders.refresh()
+		if game.breach_system.is_sealed():
+			break
+	_assert_true(game.breach_system.is_sealed(), "the hatch seals (patch %d/%d, %d more taps)" % [game.breach_system.patch_delivered, BreachSystem.PATCH_COST, extra])
 	_dispose(game)

@@ -2843,9 +2843,22 @@ func food_plan_patch_owed() -> int:
 	return maxi(0, BreachSystem.PATCH_COST - breach_system.patch_delivered - job_system.get_breach_supply_in_transit())
 
 
-# Salvage left for the food plan once the hatch reserve is set aside.
+# Salvage left for the food plan once the hatch reserve and every queued blueprint's unpaid
+# cost are set aside (placing a blueprint debits nothing until its supply is picked up, so
+# back-to-back partial taps must not both count the same stock).
 func food_plan_spendable() -> int:
-	return food_system.salvage - food_plan_patch_owed()
+	return food_system.salvage - food_plan_patch_owed() - queued_build_commitment()
+
+
+# Stock still promised to unfinished blueprints: cost minus delivered minus in transit
+# (salvage in transit has already left stock).
+func queued_build_commitment() -> int:
+	var owed := 0
+	for building in buildings:
+		if building.complete:
+			continue
+		owed += maxi(0, building.get_cost() - building.delivered - job_system.get_build_supply_in_transit(building.building_id))
+	return owed
 
 
 # What the card offers right now: the whole plan when it fits the spendable salvage, otherwise

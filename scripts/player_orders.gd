@@ -4179,18 +4179,22 @@ func death_recap_for(resident: VaultResident) -> Dictionary:
 		var hours := floori(fraction * 24.0)
 		var minutes := floori(fmod(fraction * 24.0, 1.0) * 60.0)
 		clock = "DAY %d  ·  %02d:%02d" % [game.keep_running_day(), hours, minutes]
+	var cause: String = ["starvation", "exhaustion", "despair", "suffocation", "unknown causes"][_resident_loss_cause(resident)]
 	return {
 		"resident_id": resident.resident_id,
 		"name": resident.resident_name,
-		"cause": ["starvation", "exhaustion", "despair", "suffocation", "unknown causes"][_resident_loss_cause(resident)],
+		"cause": cause,
 		"time": clock,
 		"elapsed_seconds": game.keep_running_seconds if game.keep_running else game.day_cycle.elapsed_seconds,
-		"tip": _tip_naming_sidebar_build(_saving_tip_for(resident)),
+		"tip": _tip_naming_sidebar_build(_saving_tip_for(resident), cause),
 	}
 
 
-# The recap names the build the sidebar offers at the loss, not an older one from the first warning.
-func _tip_naming_sidebar_build(tip: String) -> String:
+# For a starvation loss the recap names the food build the sidebar offers at the loss, not an older
+# one from the first warning. Other causes keep their own advice (a suffocation Charge Node stays).
+func _tip_naming_sidebar_build(tip: String, cause: String) -> String:
+	if cause != "starvation":
+		return tip
 	var offered := _food_card_offer_kind()
 	if offered < 0:
 		offered = _upgrade_offer_nudge_kind() if _upgrade_offer_target() == null else -1

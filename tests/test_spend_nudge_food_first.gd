@@ -15,6 +15,7 @@ func _run() -> void:
 	_run_case("(a) no affordable food step hides the nudge", _test_hides_without_food)
 	_run_case("(a) Spend, card and Next agree across states; pressing arms that build", _test_sweep)
 	_run_case("(b) the recap's would-have-saved build is the one the sidebar offered at the loss", _test_recap_matches_sidebar)
+	_run_case("(c) a suffocation recap keeps its Charge Node while the card offers food", _test_suffocation_recap_keeps_tip)
 	print("")
 	if _failure_count == 0:
 		print("SPEND NUDGE FOOD FIRST TESTS PASSED: %d cases, %d assertions" % [_case_count, _assertion_count])
@@ -160,4 +161,42 @@ func _test_recap_matches_sidebar() -> void:
 	var line := body.get_slice("This would have saved", 1)
 	_assert_true(("place a %s" % offered) in line, "recap names the sidebar's %s: %s" % [offered, line])
 	_assert_false("place a Nutrient Station" in line, "not the stale Station from the first warning: %s" % line)
+	_dispose(game)
+
+
+const AIR_TIP := "YOU place a Charge Node · THEY power the Air Recycler"
+
+
+# Codex note on #136: the sidebar swap is for starvation only; a suffocation tip keeps its build.
+func _suffocate_with_tip(game: VaultGame, index: int) -> VaultResident:
+	var resident: VaultResident = game.residents[index]
+	var orders := game.player_orders
+	orders._survival_tips[resident.resident_id] = {"air": AIR_TIP}
+	orders._survival_tip_details[resident.resident_id] = {"air": {"elapsed_seconds": -1.0, "cause": "air", "tick": -1}}
+	resident.needs.food = 60.0
+	resident.needs.rest = 100.0
+	resident.needs.mood = 100.0
+	resident.needs.health = 0.0
+	game.oxygen_system.oxygen = OxygenSystem.CRITICAL_OXYGEN_THRESHOLD - 5.0
+	return resident
+
+
+func _test_suffocation_recap_keeps_tip() -> void:
+	var game := _game(35, true)
+	_starve(game, 1)
+	_assert_true(_card_shown(game) and "Station" in _button(game).text, "fixture: the card offers the Nutrient Station: %s" % _button(game).text)
+	var resident := _suffocate_with_tip(game, 2)
+	var recap := game.player_orders.death_recap_for(resident)
+	_assert_equal(str(recap.cause), "suffocation", "fixture: suffocation loss")
+	_assert_equal(str(recap.tip), AIR_TIP, "suffocation recap keeps the Charge Node advice")
+	# The real death path stores it (recap save/load itself is covered by test_death_recap).
+	resident.kill()
+	_assert_equal(str(game.death_recap.get("tip", "")), AIR_TIP, "the live death recap keeps the Charge Node advice")
+	_dispose(game)
+	# No food offer: unchanged too.
+	game = _game(35, true)
+	game.food_system.meals = 40
+	game.player_orders.refresh()
+	resident = _suffocate_with_tip(game, 2)
+	_assert_equal(str(game.player_orders.death_recap_for(resident).tip), AIR_TIP, "no food offer: the suffocation tip is unchanged")
 	_dispose(game)
