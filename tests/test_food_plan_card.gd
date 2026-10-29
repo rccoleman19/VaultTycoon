@@ -86,13 +86,17 @@ func _test_power_ok() -> void:
 
 
 func _test_gate() -> void:
-	# Plan 40 + patch 4: 43 is held, 44 is not.
-	var game := _game(43, false)
+	# Plan 40 + patch 4: 44 covers the whole plan; 43 falls back to the Station alone
+	# (QA playtest 2026-10-30); 13 cannot cover patch 4 + Station 10, so it is held.
+	var game := _game(13, false)
 	var button := _button(game)
-	_assert_true(button != null and button.disabled, "43 salvage: card held")
+	_assert_true(button != null and button.disabled, "13 salvage: card held")
 	_assert_true(button != null and button.text == "Keep 4 salvage for the hatch", "held card says why: %s" % (button.text if button else "none"))
 	_assert_equal(_press(game).size(), 0, "a held card queues nothing")
 	_assert_true(not game.apply_food_plan(), "apply is refused while held")
+	_dispose(game)
+	game = _game(43, false)
+	_assert_equal(_button(game).text, "Nutrient Station · 10", "43 salvage: short of plan 40 + patch 4, offers the Station")
 	_dispose(game)
 	game = _game(44, false)
 	_assert_true(not _button(game).disabled, "44 salvage covers plan 40 + patch 4")

@@ -64,6 +64,7 @@ run_godot_check mood-recreation --script res://tests/test_mood_recreation.gd
 run_godot_check meal-runway --script res://tests/test_meal_runway.gd
 run_godot_check frugal-meal-estimate --script res://tests/test_frugal_meal_estimate.gd
 run_godot_check food-plan-card --script res://tests/test_food_plan_card.gd
+run_godot_check food-card-next-step --script res://tests/test_food_card_next_step.gd
 run_godot_check stress-break-venting --script res://tests/test_stress_break_venting.gd
 run_godot_check rec-boost --script res://tests/test_rec_boost.gd
 run_godot_check work-priorities --script res://tests/test_work_priorities.gd

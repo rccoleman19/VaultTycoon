@@ -3393,6 +3393,11 @@ func _refresh_alerts(step: Dictionary) -> void:
 	for alert: String in all_alerts:
 		if not _alert_stated_by_next(alert, step):
 			alert_list.append(alert)
+	# A starving resident always leads the alert line, even though Next names them too.
+	var starving := _starving_alert(step)
+	if not starving.is_empty():
+		all_alerts.push_front(starving)
+		alert_list.push_front(starving)
 	if all_alerts.is_empty():
 		alert_label.text = "STATUS NOMINAL"
 	elif alert_list.is_empty():
@@ -3409,6 +3414,19 @@ func _refresh_alerts(step: Dictionary) -> void:
 	_fit_alert_line()
 	alert_label.add_theme_color_override("font_color", alert_color)
 	_refresh_alert_details()
+
+
+const STARVING_ALERT_PREFIX := "STARVING: "
+
+
+func _starving_alert(step: Dictionary) -> String:
+	if _starving_resident_id < 0:
+		return ""
+	var text := " " + str(step.get("text", ""))
+	for resident: VaultResident in game.residents:
+		if resident.alive and resident.resident_id == _starving_resident_id and (" %s starving" % resident.resident_name) in text:
+			return STARVING_ALERT_PREFIX + resident.resident_name
+	return ""
 
 
 func _alert_line_text(visible_count: int) -> String:
@@ -5459,7 +5477,10 @@ const FOOD_PLAN_TEXT := {
 	"header": "FOOD PLAN",
 	"button": "%s · %d",
 	"held": "Keep %d salvage for the hatch",
+	"short": "Need %d salvage: %s",
 }
+const FOOD_PLAN_NAMES := {VaultBuilding.Kind.GENERATOR: "Charge", VaultBuilding.Kind.KITCHEN: "Station", VaultBuilding.Kind.GROW_TRAY: "Tray"}
+const FOOD_PLAN_STEP_NAMES := {VaultBuilding.Kind.GENERATOR: "Charge Node", VaultBuilding.Kind.KITCHEN: "Nutrient Station", VaultBuilding.Kind.GROW_TRAY: "Grow Tray"}
 var food_plan_box: VBoxContainer
 var food_plan_button: Button
 
@@ -5481,7 +5502,7 @@ func _build_food_plan_card(parent: Control) -> void:
 	food_plan_button.custom_minimum_size.y = 26
 	food_plan_button.tooltip_text = "Queues a Nutrient Station and a Grow Tray, plus a Charge Node first if power is short. Held while the hatch still needs its patch salvage."
 	food_plan_button.pressed.connect(func() -> void:
-		game.apply_food_plan()
+		game.apply_food_plan(_food_plan_lead_kind())
 		refresh())
 	food_plan_box.add_child(food_plan_button)
 
@@ -5493,15 +5514,39 @@ func _refresh_food_plan() -> void:
 	food_plan_box.visible = game.food_plan_pending() and not game.keep_running and game.breach_system.phase != BreachSystem.Phase.WARNING
 	if not food_plan_box.visible:
 		return
-	var gate_open := game.food_plan_gate_open()
-	food_plan_button.disabled = not gate_open
-	if gate_open:
+	var lead := _food_plan_lead_kind()
+	var offer := game.food_plan_offer(lead)
+	food_plan_button.disabled = offer.is_empty()
+	if offer.size() == 1:
+		food_plan_button.text = FOOD_PLAN_TEXT.button % [FOOD_PLAN_STEP_NAMES[offer[0]], game.food_plan_offer_cost(lead)]
+	elif not offer.is_empty():
 		var names: Array[String] = []
-		for kind in game.food_plan_kinds():
-			names.append({VaultBuilding.Kind.GENERATOR: "Charge", VaultBuilding.Kind.KITCHEN: "Station", VaultBuilding.Kind.GROW_TRAY: "Tray"}[kind])
-		food_plan_button.text = FOOD_PLAN_TEXT.button % [" + ".join(names), game.food_plan_cost()]
-	else:
+		for kind in offer:
+			names.append(FOOD_PLAN_NAMES[kind])
+		food_plan_button.text = FOOD_PLAN_TEXT.button % [" + ".join(names), game.food_plan_offer_cost(lead)]
+	elif game.food_plan_patch_owed() > 0:
 		food_plan_button.text = FOOD_PLAN_TEXT.held % game.food_plan_patch_owed()
+	else:
+		var want := lead
+		if want < 0:
+			want = game.food_plan_kinds()[-1]
+			for kind: int in VaultGame.FOOD_PLAN_KINDS:
+				if game._count_buildings(kind) == 0:
+					want = kind
+					break
+		food_plan_button.text = FOOD_PLAN_TEXT.short % [int(VaultBuilding.COSTS[want]), FOOD_PLAN_STEP_NAMES[want]]
+
+
+# The food build the displayed Next asks the player to place, or -1.
+func _food_plan_lead_kind() -> int:
+	var step := _displayed_next_step
+	if step.is_empty() or str(step.get("kind", "")) != STEP_KIND_FOOD:
+		return -1
+	var text := str(step.get("text", ""))
+	for kind: int in FOOD_PLAN_STEP_NAMES:
+		if ("YOU place a %s" % FOOD_PLAN_STEP_NAMES[kind]) in text:
+			return kind
+	return -1
 
 
 func _build_annex_card(parent: Control) -> void:

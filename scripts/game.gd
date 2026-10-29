@@ -2839,15 +2839,52 @@ func food_plan_patch_owed() -> int:
 	return maxi(0, BreachSystem.PATCH_COST - breach_system.patch_delivered - job_system.get_breach_supply_in_transit())
 
 
-func food_plan_gate_open() -> bool:
-	var owed := food_plan_patch_owed()
-	return owed == 0 or food_system.salvage >= owed + food_plan_cost()
+# Salvage left for the food plan once the hatch reserve is set aside.
+func food_plan_spendable() -> int:
+	return food_system.salvage - food_plan_patch_owed()
 
 
-func apply_food_plan() -> bool:
-	if not food_plan_pending() or not food_plan_gate_open():
-		return false
+# What the card offers right now: the whole plan when it fits the spendable salvage, otherwise
+# the next single food build that does. A Next-named food build (lead_kind) leads, so the card
+# and Next never name different builds. Empty when nothing is affordable (the card is held).
+func food_plan_offer(lead_kind: int = -1) -> Array[int]:
+	var offer: Array[int] = []
+	if not food_plan_pending():
+		return offer
 	var kinds := food_plan_kinds()
+	var spendable := food_plan_spendable()
+	if (lead_kind < 0 or kinds.has(lead_kind)) and spendable >= food_plan_cost():
+		if lead_kind >= 0:
+			kinds.erase(lead_kind)
+			kinds.push_front(lead_kind)
+		return kinds
+	var step := lead_kind
+	if step < 0:
+		for kind: int in FOOD_PLAN_KINDS:
+			if _count_buildings(kind) == 0:
+				step = kind
+				break
+	if step >= 0 and spendable >= int(VaultBuilding.COSTS[step]):
+		offer.append(step)
+	return offer
+
+
+func food_plan_offer_cost(lead_kind: int = -1) -> int:
+	var cost := 0
+	for kind in food_plan_offer(lead_kind):
+		cost += int(VaultBuilding.COSTS[kind])
+	return cost
+
+
+# One affordability check for both the card's enabled state and the click.
+func food_plan_gate_open(lead_kind: int = -1) -> bool:
+	return not food_plan_offer(lead_kind).is_empty()
+
+
+func apply_food_plan(lead_kind: int = -1) -> bool:
+	if not food_plan_gate_open(lead_kind):
+		return false
+	var kinds := food_plan_offer(lead_kind)
 	var cells := _annex_free_cells(kinds.size())
 	if cells.size() < kinds.size():
 		status_message = "No free floor for the food plan; place a Nutrient Station and Grow Tray by hand."
