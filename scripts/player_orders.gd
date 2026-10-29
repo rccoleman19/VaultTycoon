@@ -6,6 +6,16 @@ const MAX_VISIBLE_ALERTS := 2
 const IDLE_CREW_WINDOW_S := 3.0
 const NEXT_HOLD_S := 2.0
 
+# Keep a plain-text view for alert clause/fold readers while rendering each row separately.
+class AlertDetails extends VBoxContainer:
+	var text: String:
+		get:
+			var lines: Array[String] = []
+			for row: Label in get_children():
+				lines.append(row.text)
+			return "\n".join(lines)
+
+
 # Presentation state is sampled by refresh/the existing simulation-tip hook,
 # never by the Next selector. Instance IDs also distinguish loaded residents.
 var _idle_crew_since: Dictionary = {}
@@ -36,7 +46,7 @@ var _fitting_alert_line := false
 var all_alerts: Array[String] = []
 var alert_list: Array[String] = []
 var alert_hidden_count: int = 0
-var alert_more_label: Label
+var alert_more_label: AlertDetails
 var alert_more_header: Label
 var crew_mood_label: Label
 var crew_mood_bar: ProgressBar
@@ -294,9 +304,8 @@ func _build_interface() -> void:
 	alert_more_header.text = "ALERTS"
 	alert_more_header.add_theme_color_override("font_color", Color("8faeb7"))
 	details_box.add_child(alert_more_header)
-	alert_more_label = Label.new()
-	alert_more_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	alert_more_label.add_theme_color_override("font_color", Color("ef6860"))
+	alert_more_label = AlertDetails.new()
+	alert_more_label.add_theme_constant_override("separation", 0)
 	details_box.add_child(alert_more_label)
 	_refresh_alert_details()
 	var mood_header := Label.new()
@@ -3349,6 +3358,15 @@ func _refresh_alerts(step: Dictionary) -> void:
 		alert_label.text = "STATUS NOMINAL"
 	elif alert_list.is_empty():
 		alert_label.text = "SEE NEXT"
+	# Include folded clauses in the severity decision, after the existing Next filtering.
+	if game.keep_running and not alert_list.is_empty():
+		var only_warnings := true
+		for alert: String in alert_list:
+			if not _is_calm_stress_alert(alert):
+				only_warnings = false
+				break
+		if only_warnings:
+			alert_color = Color("efc56b")
 	_fit_alert_line()
 	alert_label.add_theme_color_override("font_color", alert_color)
 	_refresh_alert_details()
@@ -3364,6 +3382,25 @@ func _alert_line_text(visible_count: int) -> String:
 		clauses.append("+%d\u00a0more" % hidden)
 	# Only the separators between complete clauses offer line breaks.
 	return "  ·  ".join(clauses)
+
+
+func _wrap_alert_line(text: String) -> String:
+	var width := alert_label.size.x
+	if width <= 0.0:
+		return text
+	var font := alert_label.get_theme_font("font")
+	var font_size := alert_label.get_theme_font_size("font_size")
+	var lines: PackedStringArray = []
+	var line := ""
+	for clause: String in text.split("  ·  "):
+		var candidate := line + "  ·  " + clause if not line.is_empty() else clause
+		if not line.is_empty() and font.get_string_size(candidate, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > width:
+			lines.append(line)
+			line = clause
+		else:
+			line = candidate
+	lines.append(line)
+	return "\n".join(lines)
 
 
 func _fit_alert_line() -> void:
@@ -3382,6 +3419,9 @@ func _fit_alert_line() -> void:
 		if second_width > alert_label.size.x or alert_label.get_line_count() > 2:
 			visible_count = 1
 			alert_label.text = _alert_line_text(visible_count)
+	# Keep the existing clause/fold decision above. A separator belongs only
+	# between clauses sharing a rendered line, never at either edge of a wrap.
+	alert_label.text = _wrap_alert_line(alert_label.text)
 	alert_hidden_count = alert_list.size() - visible_count
 	_refresh_alert_details()
 	_fitting_alert_line = false
@@ -3390,9 +3430,25 @@ func _fit_alert_line() -> void:
 func _refresh_alert_details() -> void:
 	if alert_more_label == null:
 		return
-	alert_more_label.text = "\n".join(alert_list.slice(alert_list.size() - alert_hidden_count))
+	var folded := alert_list.slice(alert_list.size() - alert_hidden_count)
+	while alert_more_label.get_child_count() > folded.size():
+		alert_more_label.get_child(-1).free()
+	for index in folded.size():
+		var row: Label
+		if index < alert_more_label.get_child_count():
+			row = alert_more_label.get_child(index)
+		else:
+			row = Label.new()
+			row.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			alert_more_label.add_child(row)
+		row.text = folded[index]
+		row.add_theme_color_override("font_color", Color("efc56b") if _is_calm_stress_alert(row.text) else Color("ef6860"))
 	alert_more_label.visible = _details_expanded and alert_hidden_count > 0
 	alert_more_header.visible = alert_more_label.visible
+
+
+func _is_calm_stress_alert(alert: String) -> bool:
+	return game.keep_running and alert.begins_with("MOOD STRESSED · ")
 
 
 func _alert_urgency_seconds(alert: String) -> float:

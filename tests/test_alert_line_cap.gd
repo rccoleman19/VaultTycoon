@@ -1,5 +1,8 @@
 extends "res://tests/test_runner.gd"
 
+var _separator_wraps := 0
+var _same_line_separators := 0
+
 
 func _run() -> void:
 	await _frame_case("zero, one, two, three and many real alerts count clauses beyond the visible cap", _test_counts)
@@ -10,6 +13,7 @@ func _run() -> void:
 	await _frame_case("an overwide second clause folds into +N and DETAILS", _test_fold)
 	await _frame_case("a second clause that needs a third line folds too", _test_line_budget)
 	await _frame_case("the theme font stays fixed through refresh and resize", _test_fixed_font)
+	await _frame_case("rendered separators stay between whole clauses across alert sets and widths", _test_separator_matrix)
 	print("ALERT LINE CAP TESTS: %s — %d cases, %d assertions, %d failures" % [
 		"FAIL" if _failure_count else "PASS", _case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
@@ -76,7 +80,7 @@ func _assert_bar(orders: PlayerOrders, context: String) -> void:
 		expected += "  ·  +%d more" % hidden
 	if alerts.is_empty():
 		expected = "STATUS NOMINAL" if orders.all_alerts.is_empty() else "SEE NEXT"
-	_assert_equal(orders.alert_label.text.replace("\u00a0", " "), expected, "%s: exact leading clauses and +%d more" % [context, hidden])
+	_assert_equal(orders.alert_label.text.replace("\u00a0", " ").replace("\n", "  ·  "), expected, "%s: exact leading clauses and +%d more" % [context, hidden])
 	_assert_equal(orders.alert_more_label.text, "\n".join(alerts.slice(shown)), "%s: DETAILS contains exactly the dropped clauses" % context)
 
 
@@ -219,6 +223,8 @@ func _assert_whole_lines(orders: PlayerOrders, context: String) -> void:
 	var clauses := orders.alert_list.slice(0, orders.alert_list.size() - orders.alert_hidden_count)
 	if orders.alert_hidden_count > 0:
 		clauses.append("+%d more" % orders.alert_hidden_count)
+	if clauses.is_empty():
+		clauses.append("STATUS NOMINAL" if orders.all_alerts.is_empty() else "SEE NEXT")
 	var plain := label.text.replace("\u00a0", " ")
 	var cursor := 0
 	for clause: String in clauses:
@@ -232,6 +238,21 @@ func _assert_whole_lines(orders: PlayerOrders, context: String) -> void:
 			_assert_false(span.x > start and span.x < end, "%s: line %d starts inside %s" % [context, line, clause])
 			_assert_false(span.y > start and span.y < end, "%s: line %d ends inside %s" % [context, line, clause])
 		cursor = end
+	for line in paragraph.get_line_count():
+		var span := paragraph.get_line_range(line)
+		var rendered := plain.substr(span.x, span.y - span.x).strip_edges()
+		_assert_false(rendered.begins_with("·"), "%s: rendered line %d starts without a separator: %s" % [context, line, rendered])
+		_assert_false(rendered.ends_with("·"), "%s: rendered line %d ends without a separator: %s" % [context, line, rendered])
+		var on_line: Array[String] = []
+		cursor = 0
+		for clause: String in clauses:
+			var start := plain.find(clause, cursor)
+			if start >= span.x and start + clause.length() <= span.y:
+				on_line.append(clause)
+			cursor = start + clause.length()
+		_assert_equal(rendered, "  ·  ".join(on_line), "%s: rendered line %d retains separators exactly between its clauses" % [context, line])
+		_same_line_separators += maxi(0, on_line.size() - 1)
+	_separator_wraps += maxi(0, paragraph.get_line_count() - 1)
 
 
 func _set_clauses(orders: PlayerOrders, clauses: Array[String]) -> void:
@@ -287,7 +308,7 @@ func _test_fold() -> void:
 	_assert_true(font.get_string_size(orders.alert_list[1], HORIZONTAL_ALIGNMENT_LEFT, -1,
 		orders.alert_label.get_theme_default_font_size()).x > orders.alert_label.size.x, "second clause is wider than the real rail")
 	_assert_equal(orders.alert_hidden_count, orders.alert_list.size() - 1, "folding increments +N by one")
-	_assert_equal(orders.alert_label.text.replace("\u00a0", " "), "OXYGEN CRITICAL  ·  +%d more" % (orders.alert_list.size() - 1),
+	_assert_equal(orders.alert_label.text.replace("\u00a0", " ").replace("\n", "  ·  "), "OXYGEN CRITICAL  ·  +%d more" % (orders.alert_list.size() - 1),
 		"line shows first clause plus the incremented whole +N more")
 	orders._toggle_details_rail()
 	await _layout()
@@ -322,7 +343,7 @@ func _test_line_budget() -> void:
 	_assert_true(font.get_string_size(clause, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x <= label.size.x,
 		"each candidate clause fits individually")
 	_assert_equal(orders.alert_hidden_count, 2, "second clause folds when +N would need a third line")
-	_assert_equal(orders.alert_label.text.replace("\u00a0", " "), clause + "  ·  +2 more", "two-line budget preserves the first and suffix")
+	_assert_equal(orders.alert_label.text.replace("\u00a0", " ").replace("\n", "  ·  "), clause + "  ·  +2 more", "two-line budget preserves the first and suffix")
 	_assert_layout(orders, "third-line budget")
 	_dispose(game)
 
@@ -342,4 +363,58 @@ func _test_fixed_font() -> void:
 		await _layout()
 		_assert_false(label.has_theme_font_size_override("font_size"), "crowded refresh/resize never overrides font size")
 		_assert_equal(label.get_theme_font_size("font_size"), expected_size, "crowded text keeps the inherited font size")
+	_dispose(game)
+
+
+func _test_separator_matrix() -> void:
+	var game := _game()
+	var orders := game.player_orders
+	var label := orders.alert_label
+	var panel := label.get_parent().get_parent().get_parent().get_parent() as Control
+	var alert_sets: Array[Array] = [
+		[], ["OXYGEN LOW"], ["OXYGEN LOW", "LOW MEALS"],
+		["OXYGEN CRITICAL", "CRITICAL: Bo"],
+		["SEAL WARNING · 00:09", "LOW MEALS", "NO COOK ENABLED"],
+		["CRITICAL: Ari With A Very Long Resident Name", "LOW MEALS", "NO COOK ENABLED"],
+		["DRAFTED CREW 1 · AUTO WORK PAUSED", "HATCH RESPONSE EXCLUDES DRAFTED CREW"],
+		["LOW MEALS", "NO COOK ENABLED", "LOW MOOD: Bo", "BEDS NEEDED 2", "OXYGEN LOW"],
+		["LOW MEALS", "LOW MOOD: Bo", "BEDS NEEDED 2", "NO COOK ENABLED", "OXYGEN LOW",
+			"CRITICAL: Ari", "REST LOW", "MEDICAL", "POWER LOW", "HATCH OPEN", "DRAFTED CREW 1", "COOKING PAUSED"],
+	]
+	var font := label.get_theme_font("font")
+	var font_size := label.get_theme_font_size("font_size")
+	var before_wraps := _separator_wraps
+	var before_same_line := _same_line_separators
+	var combinations := 0
+	for width in [310, 330, 360, 400, 450, 500, 600, 800]:
+		panel.offset_left = -width
+		await _layout()
+		# Bracket the separator's own width, so it can fit before a wrap,
+		# fail to fit, or have the next clause land exactly on the boundary.
+		var first := "ALERT"
+		while font.get_string_size(first + "W  ·  ", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x <= label.size.x:
+			first += "W"
+		var sets := alert_sets.duplicate()
+		sets.append([first, "CRITICAL: Bo"])
+		sets.append([first + "WW", "CRITICAL: Bo", "NO COOK ENABLED"])
+		sets.append(["LOW MEALS", first, "NO COOK ENABLED"])
+		for index in sets.size():
+			var clauses: Array[String] = []
+			clauses.assign(sets[index])
+			_set_clauses(orders, clauses)
+			if clauses.is_empty():
+				orders._refresh_alerts({})
+			await _layout()
+			var context := "panel %d / set %d / rail %.1f" % [width, index, label.size.x]
+			_assert_whole_lines(orders, context)
+			_assert_bar(orders, context)
+			_assert_true(label.get_line_count() <= 2, "%s: retains the two-line budget" % context)
+			_assert_equal(label.get_visible_line_count(), label.get_line_count(), "%s: rendered lines are visible" % context)
+			_assert_equal(label.autowrap_mode, TextServer.AUTOWRAP_WORD, "%s: whole-word wrapping stays enabled" % context)
+			combinations += 1
+	_assert_equal(combinations, 96, "matrix covers twelve alert sets at eight real rail widths")
+	_assert_true(_separator_wraps - before_wraps >= 20, "matrix exercises many actual rendered wraps")
+	_assert_true(_same_line_separators - before_same_line >= 20, "matrix exercises many same-line clause separators")
+	print("SEPARATOR MATRIX: %d layouts, %d rendered wraps, %d same-line separators" % [
+		combinations, _separator_wraps - before_wraps, _same_line_separators - before_same_line])
 	_dispose(game)
