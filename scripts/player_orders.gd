@@ -2372,6 +2372,76 @@ func _next_in_progress_suffix(names: Array) -> String:
 
 # Only skip a build link when the selected placement actually repeats a queued
 # blueprint. Existing finish/funding tips still return unchanged on the first pass.
+# Post-seal early air warning: O2 reaches LOW within AIR_WARNING_LEAD_S at the current drain.
+const AIR_WARNING_LEAD_S := 60.0
+var _air_warning_latched := false
+var _air_next_latched := false
+var _air_chain_named := false
+
+
+# Latched: once live it stays until the drain stops, so a brief dip in the drain
+# rate cannot flip Next back and forth.
+func air_early_warning() -> bool:
+	if game.ended or not game.breach_system.is_sealed() or game.oxygen_system.is_low():
+		_air_warning_latched = false
+		return false
+	var to_low: float = game.oxygen_system.get_seconds_to_low()
+	if is_inf(to_low):
+		_air_warning_latched = false
+	elif to_low <= AIR_WARNING_LEAD_S:
+		_air_warning_latched = true
+	return _air_warning_latched
+
+
+# Air warning (early or LOW) is live after the seal and no Air Recycler exists yet.
+func _air_warning_needs_recycler() -> bool:
+	if game.ended or not game.breach_system.is_sealed() or _count_kind(VaultBuilding.Kind.AIR_RECYCLER) > 0:
+		_air_next_latched = false
+		return false
+	return _air_next_latched or air_early_warning() or game.oxygen_system.is_low()
+
+
+func _air_warning_power_short() -> bool:
+	return game.power_grid.supply - game.power_grid.demand < int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.AIR_RECYCLER])
+
+
+# The one build that answers the air warning: Charge Node first when power is short.
+func _air_warning_kind() -> int:
+	if not _air_warning_needs_recycler():
+		return -1
+	return VaultBuilding.Kind.GENERATOR if _air_warning_power_short() else VaultBuilding.Kind.AIR_RECYCLER
+
+
+# A resident's own urgent step still wins, unless it would send the player to Rec Console.
+func _air_warning_step(chain_step: Dictionary) -> Dictionary:
+	_air_chain_named = false
+	# Once Next has named the Air Recycler after the seal, it keeps naming it.
+	if _next_named_build_kind(chain_step) == VaultBuilding.Kind.AIR_RECYCLER and game.breach_system.is_sealed() and not game.ended:
+		_air_next_latched = true
+		_air_chain_named = true
+		# The chain already names it: keep its wording rather than restating it.
+		return {}
+	var kind := _air_warning_kind()
+	if kind < 0:
+		return {}
+	if bool(chain_step.get("urgent", false)) and _next_named_build_kind(chain_step) != VaultBuilding.Kind.RECREATION_CONSOLE:
+		return {}
+	var cost := int(VaultBuilding.COSTS[kind])
+	var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
+	var them := "THEY power the Air Recycler" if kind == VaultBuilding.Kind.GENERATOR else "THEY craft it"
+	var step := {
+		"text": "Next: YOU place %s · %s" % ["a Charge Node" if kind == VaultBuilding.Kind.GENERATOR else "Air Recycler", them],
+		"help": "Oxygen reaches LOW within a minute. Place an Air Recycler (3 power)%s; Craft auto-builds the blueprint." % (", after a Charge Node for power" if kind == VaultBuilding.Kind.GENERATOR else ""),
+		"tool": "generator" if kind == VaultBuilding.Kind.GENERATOR else "air",
+		"cause": "air",
+	}
+	if spendable >= cost:
+		step.text = "Next: YOU spend %d: build %s · %s" % [cost, VaultBuilding.KIND_NAMES[kind], them]
+		step["tool"] = "select"
+		step["action"] = "spend"
+	return step
+
+
 func _primary_next_step() -> Dictionary:
 	var suppressed_builds: Dictionary = {}
 	var in_progress: Array[String] = []
@@ -2388,6 +2458,9 @@ func _primary_next_step() -> Dictionary:
 		suppressed_builds[kind] = true
 		in_progress.append(str(NEXT_BUILD_PROGRESS_NAMES[kind]))
 		step = _primary_next_step_chain(suppressed_builds)
+	var air_first := _air_warning_step(step)
+	if not air_first.is_empty():
+		return _salvage_next_step(air_first)
 	if in_progress.is_empty():
 		var first_air := _post_seal_air_step(step, game.food_system.salvage - game.job_system.get_breach_salvage_reserve())
 		return _salvage_next_step(first_air if not first_air.is_empty() else step)
@@ -3026,7 +3099,7 @@ func _expand_details_on_urgency() -> void:
 		active["breach_open"] = true
 	if game.power_grid.brownout_active:
 		active["brownout"] = true
-	if game.oxygen_system.is_low():
+	if game.oxygen_system.is_low() or air_early_warning():
 		active["low_o2"] = true
 	if game.day_cycle.completed and not game.ended and not game.keep_running and (
 		not game.breach_system.is_sealed() or not game.oxygen_system.is_breathable()
@@ -3289,6 +3362,8 @@ func _refresh_alerts(step: Dictionary) -> void:
 		alerts.append("OXYGEN CRITICAL")
 	elif game.oxygen_system.is_low():
 		alerts.append("OXYGEN LOW")
+	elif air_early_warning():
+		alerts.append("OXYGEN LOW IN %s" % _format_seconds(game.oxygen_system.get_seconds_to_low()))
 	if game.breach_system.phase == BreachSystem.Phase.OPEN:
 		alerts.append("BREACH OPEN · O2 VENTING")
 	elif game.breach_system.phase == BreachSystem.Phase.WARNING:
@@ -4179,6 +4254,9 @@ func _saving_tip_for(resident: VaultResident) -> String:
 func death_recap_for(resident: VaultResident) -> Dictionary:
 	# Use the HUD's clock source at the death signal, before the tick aborts.
 	var clock := game.day_cycle.get_clock_text()
+	if game.day_cycle.completed and not game.day_cycle.wing_lost:
+		# A death on the last tick of day 7 is not a completed day.
+		clock = "DAY %d/7  ·  24:00" % DayCycle.DAYS_TO_SURVIVE
 	if game.keep_running:
 		var fraction := fmod(game.keep_running_seconds, DayCycle.SECONDS_PER_DAY) / DayCycle.SECONDS_PER_DAY
 		var hours := floori(fraction * 24.0)
@@ -5058,6 +5136,12 @@ func _food_card_offer_kind() -> int:
 
 
 func _upgrade_offer_nudge_kind() -> int:
+	var air_kind := _air_warning_kind()
+	if air_kind >= 0 and _air_chain_named:
+		# Spend offers what Next already names.
+		air_kind = VaultBuilding.Kind.AIR_RECYCLER
+	if air_kind >= 0:
+		return air_kind if game.food_system.salvage >= int(VaultBuilding.COSTS[air_kind]) else -1
 	if _food_nudge_active():
 		if game.ended or not game.breach_system.is_sealed():
 			return -1
