@@ -11,6 +11,8 @@ func _run() -> void:
 	_run_case("the ended status line names every outcome button", _test_ended_status)
 	_run_case("real seeded win shows each LOAD error until expiry and keeps outcome actions", _test_real_win_footer)
 	_run_case("real seeded loss shows each LOAD error until expiry and keeps outcome actions", _test_real_loss_footer)
+	_run_case("successful LOAD of a real seeded win keeps outcome actions throughout", _test_real_win_load_footer)
+	_run_case("successful LOAD of a real seeded loss keeps outcome actions throughout", _test_real_loss_load_footer)
 	_run_case("a seeded panel followed by a legacy one hides the button again", _test_seeded_then_legacy)
 	_run_case("NEW WING still opens a fresh seeded briefing", _test_new_wing_action)
 	_run_case("legacy outcomes keep live messages and LOAD feedback", _test_legacy_load_feedback)
@@ -171,7 +173,15 @@ func _test_real_loss_footer() -> void:
 	_test_real_footer(false)
 
 
-func _test_real_footer(won: bool) -> void:
+func _test_real_win_load_footer() -> void:
+	_test_real_footer(true, true)
+
+
+func _test_real_loss_load_footer() -> void:
+	_test_real_footer(false, true)
+
+
+func _test_real_footer(won: bool, load_ended := false) -> void:
 	var kind := "win" if won else "loss"
 	var directory := "user://headless_replay_footer"
 	_assert_equal(DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory)), OK, "isolated footer records directory")
@@ -225,7 +235,10 @@ func _test_real_footer(won: bool) -> void:
 	_assert_true(orders.outcome_panel.is_visible_in_tree(), "real " + kind + " panel visible")
 	_assert_true(orders.outcome_replay_button.is_visible_in_tree(), "real " + kind + " replay action visible")
 	_assert_equal(_visible_buttons(orders), ["LOAD LAST CHECKPOINT", "NEW WING", "REPLAY WING"] as Array[String], "real " + kind + " action order agrees with footer")
-	_assert_failed_loads(game, kind)
+	if load_ended:
+		_assert_successful_ended_load(game, kind)
+	else:
+		_assert_failed_loads(game, kind)
 	if won:
 		orders.keep_running_button.pressed.emit()
 		_assert_true(game.keep_running and not game.ended, "real win KEEP RUNNING stays live")
@@ -245,6 +258,25 @@ func _test_real_footer(won: bool) -> void:
 	for path in [game.records_path, game.best_path, game.save_path, game.checkpoint_path]:
 		_remove_test_save(path)
 	_dispose(game)
+
+
+func _assert_successful_ended_load(game: VaultGame, kind: String) -> void:
+	# Wins auto-save the ended wing; losses need that natural outcome saved explicitly.
+	if kind == "loss":
+		_assert_true(game.save_game(false), "save the natural ended loss")
+	_press_outcome_action(game, "LOAD LAST CHECKPOINT")
+	_assert_true(game.ended and game.outcome == kind, "successful LOAD restores the ended " + kind)
+	_assert_equal(game.status_message, "Wing loaded.", "ended " + kind + " LOAD succeeds")
+	_assert_almost(game.status_message_left, 5.0, "ended " + kind + " LOAD starts its timer")
+	var elapsed := 0.0
+	for delta in [0.0, 4.9, 0.2]:
+		elapsed += delta
+		# A zero-delta UI frame also checks the immediate, unexpired success message.
+		game._process(delta)
+		var label := "ended %s LOAD at %.1fs" % [kind, elapsed]
+		_assert_footer(game, "SHIFT ENDED // LOAD LAST CHECKPOINT, NEW WING or REPLAY WING", label)
+		_assert_false("Wing loaded." in game.player_orders.tool_status.text, label + " hides success in footer")
+		_assert_false("Wing loaded." in game.player_orders.tool_status.tooltip_text, label + " hides success in tooltip")
 
 
 func _assert_footer(game: VaultGame, expected: String, label: String) -> void:

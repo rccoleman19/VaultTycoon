@@ -1171,6 +1171,9 @@ func load_game(path := "") -> bool:
 	if not apply_snapshot(result.snapshot):
 		status_message = "The save did not contain a valid vault wing."
 		return false
+	if ended:
+		# A restored outcome keeps its actions; only failed LOADs need fresh feedback.
+		_outcome_status_serial = _status_message_serial
 	player_orders.show_work_priorities(false)
 	tutorial_open = false
 	user_paused = true
