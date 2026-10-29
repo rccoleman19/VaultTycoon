@@ -580,6 +580,9 @@ func set_speed(speed: int) -> void:
 
 
 func set_tool(tool: String) -> void:
+	# Ended wings have no tool actions; keep outcome guidance or fresh LOAD feedback.
+	if ended:
+		return
 	active_tool = tool if tool in ["select", "dig", "cancel", "bed", "lamp", "generator", "grow", "kitchen", "stockpile", "air", "rec", "medical", "zone"] else "select"
 	status_message = _tool_help(active_tool)
 	status_message_left = 4.0
