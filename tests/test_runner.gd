@@ -244,10 +244,11 @@ func _test_alert_severity_order() -> void:
 	game.residents[0].needs.food = 10.0
 	game.player_orders.refresh()
 	segments = game.player_orders.all_alerts
-	_assert_equal(segments[0], "NO MEALS", "zero food runway remains earlier than a resident's projected death")
-	_assert_equal(segments[1], "OXYGEN LOW", "air reaches critical before it kills the critical resident")
-	_assert_equal(segments[2], "CRITICAL: Ari", "the resident threat ranks before alerts without a death deadline")
-	_assert_true(segments.find("DRAFTED CREW 1 · AUTO WORK PAUSED") > 2, "the rest keep their wording behind the threats")
+	_assert_equal(segments[0], "STARVING: Ari", "a starving resident Next names leads the alert line")
+	_assert_equal(segments[1], "NO MEALS", "zero food runway remains earlier than a resident's projected death")
+	_assert_equal(segments[2], "OXYGEN LOW", "air reaches critical before it kills the critical resident")
+	_assert_equal(segments[3], "CRITICAL: Ari", "the resident threat ranks before alerts without a death deadline")
+	_assert_true(segments.find("DRAFTED CREW 1 · AUTO WORK PAUSED") > 3, "the rest keep their wording behind the threats")
 	_assert_equal("  ·  ".join(segments).count("CRITICAL: "), 1, "the CRITICAL alert appears once")
 	var expected := ["CRITICAL: Ari", "OXYGEN LOW", "NO MEALS", "DRAFTED CREW 1 · AUTO WORK PAUSED"]
 	for segment in expected:

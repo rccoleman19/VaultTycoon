@@ -650,8 +650,10 @@ func _test_alerts_no_duplicate_with_next() -> void:
 	_assert_next_alert_omitted(game, "NO MEALS", "food recovery action")
 	_assert_true("INJURED 1 · NO MED BED" in _triage_alerts(orders, "alert_list"),
 		"Next's food advice preserves Bo's unrelated injury alert")
-	_assert_true(_triage_bar_text(orders).begins_with("INJURED 1 · NO MED BED  ·  "),
-		"the uncovered injury remains visible with the count excluding deduped food alerts")
+	# Playtest 2026-10-30 (d): the starving resident leads the line; the injury follows it.
+	var shown := _triage_alerts(orders, "alert_list")
+	_assert_true(_triage_bar_text(orders).begins_with("STARVING: Ari") and shown.size() > 1 and shown[1] == "INJURED 1 · NO MED BED",
+		"the uncovered injury comes right after the leading starving alert: %s / %s" % [_triage_bar_text(orders), str(shown)])
 	_dispose(game)
 
 	game = _triage_game()
