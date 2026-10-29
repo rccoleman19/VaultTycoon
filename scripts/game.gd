@@ -228,6 +228,8 @@ const RECLAIM_DELIVERY := 18
 const RECLAIM_INTERVAL := 30.0
 const RECLAIM_DELIVERIES := 6
 var reclaim_active := false
+# A player tap on the reclaim button pauses reclamation the Cook started (not saved: a load resumes).
+var reclaim_paused := false
 var keep_running := false
 var keep_running_seconds := 0.0
 # Annex (north star slice 2): one keep-running project fed with meals above a reserve plus salvage.
@@ -818,6 +820,7 @@ func is_upgrade_unlocked(kind: int) -> bool:
 
 func _reset_reclamation() -> void:
 	reclaim_active = false
+	reclaim_paused = false
 	reclaim_elapsed = 0.0
 	reclaim_paid = 0
 
@@ -846,7 +849,7 @@ func reclaim_seconds_to_next() -> float:
 
 
 func _advance_reclamation(delta_seconds: float) -> void:
-	if not reclaim_active or ended or reclaim_paid >= RECLAIM_DELIVERIES:
+	if not reclaim_active or reclaim_paused or ended or reclaim_paid >= RECLAIM_DELIVERIES:
 		return
 	reclaim_elapsed += delta_seconds
 	while reclaim_paid < RECLAIM_DELIVERIES and reclaim_elapsed >= float(reclaim_paid + 1) * RECLAIM_INTERVAL - 0.0001:
@@ -2914,72 +2917,176 @@ func apply_food_plan(lead_kind: int = -1) -> bool:
 	return true
 
 
-# Cook auto food step: an idle vault never places a fixture, so with food short the Cook queues the
-# food card's step itself, one blueprint at a time, paid only from salvage left after the hatch reserve.
-# Air/power order (QA-d #8): after the seal (before it only for a resident at 0 food, never in a
-# WARNING/OPEN hatch, and always keeping the patch reserve), never while an Air Recycler is
-# unfinished or air is low without a powered recycler, and a powered step only when planned power
-# carries it (a Charge Node first otherwise), so no Air or Rec load is ever shed. The player wins:
-# a player food blueprint makes the Cook wait, and cancelling a Cook blueprint stops that kind.
+# Cook auto food step: an idle vault never places a fixture, so with food short the Cook takes one
+# food step per shortage episode (re-armed once cook_food_short() clears): one tap's worth, the whole
+# missing chain (Charge Node when planned power is short, Station, Grow Tray) or nothing, since a
+# lone piece raises no food. Paid only from food_plan_spendable() (salvage minus the hatch reserve
+# and queued unpaid costs). Never while anyone is critical (air critical, or a fed resident at
+# <= COOK_AUTO_MEDICAL_HP). Air/power order (QA-d #8): after the seal (before it only for a resident
+# at 0 food, never in a WARNING/OPEN hatch), never while an Air Recycler is unfinished or air is low
+# without a powered recycler. After the seal, when only salvage blocks the step, the Cook starts
+# reclamation (alert "Cook started reclamation"). The player wins: a player food blueprint makes the
+# Cook wait, cancelling a Cook blueprint stops that kind, and a reclaim-button tap pauses the Cook's
+# reclamation.
 const COOK_AUTO_ALERT := "Cook queued %s"
 const COOK_AUTO_CHECK_SECONDS := 1.0
 const COOK_AUTO_CHAIN := [VaultBuilding.Kind.GENERATOR, VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GROW_TRAY]
 var cook_auto_building_id := -1
+var cook_auto_building_ids: Array[int] = []
 var cook_auto_vetoed: Dictionary = {}
+var cook_auto_episode_used := false
+var cook_auto_started_reclaim := false
+var _cook_auto_reclaim_alert_left := 0.0
 var _cook_auto_wait := 0.0
 
 
 func _reset_cook_auto() -> void:
 	cook_auto_building_id = -1
+	cook_auto_building_ids.clear()
 	cook_auto_vetoed.clear()
+	cook_auto_episode_used = false
+	cook_auto_started_reclaim = false
+	_cook_auto_reclaim_alert_left = 0.0
 	_cook_auto_wait = 0.0
 
 
 func _advance_cook_auto_food(delta_seconds: float) -> void:
+	_cook_auto_reclaim_alert_left = maxf(0.0, _cook_auto_reclaim_alert_left - delta_seconds)
 	_cook_auto_wait -= delta_seconds
 	if _cook_auto_wait > 0.0:
 		return
 	_cook_auto_wait = COOK_AUTO_CHECK_SECONDS
-	var kind := cook_auto_step()
-	if kind < 0:
+	if not ended and not player_orders.cook_food_short():
+		cook_auto_episode_used = false
+	var kinds := cook_auto_plan()
+	if kinds.is_empty() and _cook_auto_wants_reclamation():
+		if start_reclamation():
+			cook_auto_started_reclaim = true
+			_cook_auto_reclaim_alert_left = COOK_AUTO_RECLAIM_ALERT_SECONDS
+		kinds = cook_auto_plan()
+	if kinds.is_empty():
 		return
-	var cells := _annex_free_cells(1)
-	if cells.is_empty():
+	var cells := _annex_free_cells(kinds.size())
+	if cells.size() < kinds.size():
 		return
-	var before := buildings.size()
 	var message := status_message
 	var left := status_message_left
-	if place_blueprint(kind, cells[0]) and buildings.size() > before:
-		cook_auto_building_id = buildings[-1].building_id
-		status_message = message
-		status_message_left = left
+	var placed: Array[int] = []
+	for index in kinds.size():
+		var before := buildings.size()
+		if place_blueprint(kinds[index], cells[index]) and buildings.size() > before:
+			placed.append(buildings[-1].building_id)
+	if placed.is_empty():
+		return
+	cook_auto_episode_used = true
+	cook_auto_building_ids = placed
+	cook_auto_building_id = placed[0]
+	status_message = message
+	status_message_left = left
 
 
-# The build the Cook would queue right now, or -1 (gates above).
+# The first build the Cook would queue right now, or -1.
 func cook_auto_step() -> int:
-	if ended or alive_count_is_zero() or not player_orders.cook_food_short():
-		return -1
+	var kinds := cook_auto_plan()
+	return -1 if kinds.is_empty() else kinds[0]
+
+
+# The Cook's one food step for this shortage episode: every missing food-plan build plus a
+# Charge Node when planned power cannot carry them, queued together or not at all (a lone
+# Charge Node or an unfed Station raises no food). Empty when gated (see the block comment).
+func cook_auto_plan() -> Array[int]:
+	var empty: Array[int] = []
+	var kinds := _cook_auto_needed()
+	if kinds.is_empty() or food_plan_spendable() < _cook_auto_cost(kinds):
+		return empty
+	return kinds
+
+
+func _cook_auto_needed() -> Array[int]:
+	var empty: Array[int] = []
+	if ended or alive_count_is_zero() or cook_auto_episode_used or not player_orders.cook_food_short():
+		return empty
+	if cook_auto_crew_critical():
+		return empty
 	if not breach_system.is_sealed() and (breach_system.phase != BreachSystem.Phase.DORMANT or not _cook_auto_anyone_starving()):
-		return -1
+		return empty
 	if annex_waiting_for_room():
-		return -1
+		return empty
 	for building in buildings:
 		if building.complete:
 			continue
 		if building.kind == VaultBuilding.Kind.AIR_RECYCLER or COOK_AUTO_CHAIN.has(building.kind):
-			return -1
+			return empty
 	if oxygen_system.is_low() and not is_air_ready():
-		return -1
-	var offer := food_plan_offer(player_orders.food_plan_lead_kind())
-	if offer.is_empty():
-		return -1
-	var step := offer[0]
-	var demand := int(VaultBuilding.POWER_DEMAND.get(step, 0))
-	if demand > 0 and _planned_power_spare() < demand:
-		step = VaultBuilding.Kind.GENERATOR
-	if cook_auto_vetoed.has(step) or food_plan_spendable() < int(VaultBuilding.COSTS[step]):
-		return -1
-	return step
+		return empty
+	if not food_plan_pending():
+		return empty
+	var kinds := food_plan_kinds()
+	for kind in kinds:
+		if cook_auto_vetoed.has(kind):
+			return empty
+	return kinds
+
+
+func _cook_auto_cost(kinds: Array[int]) -> int:
+	var cost := 0
+	for kind in kinds:
+		cost += int(VaultBuilding.COSTS[kind])
+	return cost
+
+
+# After the seal, when the step is gated only by salvage, the Cook starts reclamation (free:
+# +18 now and +18 every 30 s) rather than leave the crew starving with an unreachable Grow Tray.
+func _cook_auto_wants_reclamation() -> bool:
+	var kinds := _cook_auto_needed()
+	return not kinds.is_empty() and breach_system.is_sealed() and can_start_reclamation()
+
+
+# "Cook started reclamation" shows for COOK_AUTO_RECLAIM_ALERT_SECONDS after the Cook starts it.
+const COOK_AUTO_RECLAIM_ALERT := "Cook started reclamation"
+const COOK_AUTO_RECLAIM_ALERT_SECONDS := 10.0
+
+
+func cook_auto_reclaim_alert() -> String:
+	if ended or not cook_auto_started_reclaim or reclaim_paused or _cook_auto_reclaim_alert_left <= 0.0:
+		return ""
+	return COOK_AUTO_RECLAIM_ALERT
+
+
+# The player's tap wins: the reclaim button pauses reclamation the Cook started (it stays active,
+# so the Cook cannot start it again), and a second tap resumes it as the player's own choice.
+func cook_reclaim_tappable() -> bool:
+	return not ended and reclaim_active and (reclaim_paused or cook_auto_started_reclaim) and reclaim_paid < RECLAIM_DELIVERIES
+
+
+func toggle_cook_reclamation() -> bool:
+	if not cook_reclaim_tappable():
+		return false
+	if reclaim_paused:
+		reclaim_paused = false
+		status_message = "Reclamation resumed."
+	else:
+		reclaim_paused = true
+		cook_auto_started_reclaim = false
+		_cook_auto_reclaim_alert_left = 0.0
+		status_message = "Reclamation paused; the Cook will not restart it."
+	status_message_left = 4.0
+	return true
+
+
+# Option (a): no Cook build while anyone is critical: air at the critical line, or a living
+# resident at or below COOK_AUTO_MEDICAL_HP health while not starving (starvation is what the
+# food step treats, so it does not count as a medical emergency).
+const COOK_AUTO_MEDICAL_HP := 50.0
+
+
+func cook_auto_crew_critical() -> bool:
+	if oxygen_system.is_critical():
+		return true
+	for resident in residents:
+		if resident.alive and resident.needs.food > 0.0 and resident.needs.health <= COOK_AUTO_MEDICAL_HP:
+			return true
+	return false
 
 
 # Before the seal the Cook acts only for a resident already at 0 food, and still holds the patch reserve.
@@ -2996,18 +3103,20 @@ func alive_count_is_zero() -> bool:
 
 # One alert line while the Cook's own blueprint is still unbuilt; "" otherwise.
 func cook_auto_alert() -> String:
-	if cook_auto_building_id < 0 or ended:
+	if ended:
 		return ""
-	var building := get_building_by_id(cook_auto_building_id)
-	if building == null or building.complete:
-		return ""
-	return COOK_AUTO_ALERT % building.get_display_name()
+	for building_id in cook_auto_building_ids:
+		var building := get_building_by_id(building_id)
+		if building != null and not building.complete:
+			return COOK_AUTO_ALERT % building.get_display_name()
+	return ""
 
 
 func _cook_auto_note_cancel(building: VaultBuilding) -> void:
-	if building != null and building.building_id == cook_auto_building_id:
+	if building != null and cook_auto_building_ids.has(building.building_id):
 		cook_auto_vetoed[building.kind] = true
-		cook_auto_building_id = -1
+		cook_auto_building_ids.erase(building.building_id)
+		cook_auto_building_id = cook_auto_building_ids[0] if not cook_auto_building_ids.is_empty() else -1
 
 
 # Feast (north star slice 5): surplus meals become morale. At each keep-running day rollover, with
