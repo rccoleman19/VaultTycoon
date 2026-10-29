@@ -3389,6 +3389,9 @@ func _refresh_alerts(step: Dictionary) -> void:
 	var cache_notice := game.supply_cache_alert()
 	if not cache_notice.is_empty():
 		alerts.append(cache_notice)
+	var cook_notice := game.cook_auto_alert()
+	if not cook_notice.is_empty():
+		alerts.append(cook_notice)
 	all_alerts = _order_alerts_by_urgency(alerts)
 	for alert: String in all_alerts:
 		if not _alert_stated_by_next(alert, step):
@@ -5026,6 +5029,15 @@ func _food_nudge_active() -> bool:
 		if resident.alive and (resident.resident_id == _starving_resident_id or resident.needs.food <= 0.0):
 			return true
 	return _salvage_food_crisis_live()
+
+
+# Cook auto food step: the same food-short test the Spend nudge uses.
+func cook_food_short() -> bool:
+	return _food_nudge_active()
+
+
+func food_plan_lead_kind() -> int:
+	return _food_plan_lead_kind()
 
 
 # The food build the card leads with, when it is shown and tappable; else -1.

@@ -15,6 +15,9 @@ func _run() -> void:
 func _test_repro() -> void:
 	var game := _spawn_game()
 	game.new_game(false, 4242, 5)
+	# Isolate the spend/Next agreement from the Cook's auto food step (as if each Cook blueprint was cancelled).
+	for kind in VaultGame.COOK_AUTO_CHAIN:
+		game.cook_auto_vetoed[kind] = true
 	game.begin_shift()
 	# Only begin and acknowledge the warning, as in the idle player replay.
 	# Keep the Day 4 cache and all ordinary simulation work enabled. At 123.4 s

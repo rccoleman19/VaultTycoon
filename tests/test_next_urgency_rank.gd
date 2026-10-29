@@ -256,6 +256,9 @@ func _test_idle_kitchen_prefix() -> void:
 	game.new_game(true, 4242, 5)
 	# Isolate the original starvation ranking from the optional cache rescue.
 	game._reset_supply_cache(false, game.wing_seed)
+	# Also isolate it from the Cook's auto food step (as if the player cancelled each Cook blueprint).
+	for kind in VaultGame.COOK_AUTO_CHAIN:
+		game.cook_auto_vetoed[kind] = true
 	game.begin_shift()
 	# The idle driver only begins the shift and acknowledges the breach modal.
 	# Its real-time delay holds simulation still; acknowledge immediately here
