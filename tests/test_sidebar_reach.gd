@@ -254,6 +254,8 @@ func _test_pre_seal_details() -> void:
 	_assert_true(orders.details_box.visible, "the hatch warning opens DETAILS")
 	_assert_equal(orders.right_scroll.scroll_vertical, 0, "the warning open scrolls to the readouts")
 	_assert_scroll_usable(orders, "hatch warning DETAILS open")
+	var food_card: Control = orders.find_child("FoodPlanCard", true, false)
+	_assert_true(food_card == null or not food_card.is_visible_in_tree(), "the Food plan card is hidden during the hatch warning")
 	var readouts := {
 		"crew mood": orders.crew_mood_label,
 		"power grid": orders.power_detail_label,
