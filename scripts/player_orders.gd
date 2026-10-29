@@ -2623,7 +2623,7 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 # A single Mk I tray can feed a small crew before Air unlocks the next fits.
 # Offer that prerequisite during the ordinary bunk plateau, without an Idle wait.
 func _post_seal_air_step(step: Dictionary, spendable: int) -> Dictionary:
-	if not _is_bunk_place_step(step) or game.ended or not game.breach_system.is_sealed() or not game.reclaim_active:
+	if not _is_bunk_place_step(step) or str(step.get("text", "")) != "Next: YOU place bunks · THEY craft" or game.ended or not game.breach_system.is_sealed() or not game.reclaim_active:
 		return {}
 	if _count_kind(VaultBuilding.Kind.AIR_RECYCLER) > 0 or spendable < int(VaultBuilding.COSTS[VaultBuilding.Kind.AIR_RECYCLER]):
 		return {}

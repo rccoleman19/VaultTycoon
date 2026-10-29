@@ -15,6 +15,7 @@ func _run() -> void:
 	_run_case("resident danger keeps priority", _test_danger)
 	_run_case("reclamation and material commitments gate the opportunity", _test_commitments)
 	_run_case("multiple trays and Mk II are outside the single-tray plateau", _test_trays)
+	_run_case("Keep Running opening bunks preserve the Annex Next", _test_keep_running_opening)
 	print("POST-SEAL AIR TIP: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -129,3 +130,35 @@ func _test_trays() -> void:
 	game.power_grid.recalculate(game.buildings)
 	_assert_equal(_next(game), BUNK_TIP, "two trays leave the single-tray predicate")
 	_dispose(game)
+
+
+func _test_keep_running_opening() -> void:
+	for power_room: bool in [false, true]:
+		var game := _plateau(power_room)
+		game.food_system.salvage = 18
+		game.residents[0].needs.rest = 100.0
+		for building: VaultBuilding in game.buildings.duplicate():
+			if building.kind == VaultBuilding.Kind.BED:
+				game.deconstruct_building(building.building_id)
+		# Reach the opening bunk diagnosis without introducing any pending digs.
+		for i in 12:
+			var dug := false
+			for cell: Vector2i in game.map_grid.get_floor_cells():
+				for neighbor: Vector2i in game.map_grid.get_neighbors(cell):
+					if neighbor != BreachSystem.HATCH_CELL and game.map_grid.can_queue_dig(neighbor) and game.map_grid.queue_dig(neighbor):
+						game.map_grid.apply_dig_work(neighbor, 100.0)
+						dug = true
+						break
+				if dug:
+					break
+		_add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(26, 12))
+		game.power_grid.recalculate(game.buildings)
+		game.ended = true
+		game.outcome = "win"
+		_assert_true(game.start_keep_running(), "enter Keep Running with power_room=%s" % power_room)
+		game.user_paused = true
+		game.status_message_left = 0.0
+		var primary: Dictionary = game.player_orders._primary_next_step()
+		_assert_equal(str(primary.text), "Next: YOU place 2 bunks · THEY craft from Craft", "Air/Charge eligibility preserves the opening diagnosis with power_room=%s" % power_room)
+		_assert_equal(_next(game), "Next: YOU set the meal reserve · THEY build the Annex", "opening bunks still give way to Annex with power_room=%s" % power_room)
+		_dispose(game)
