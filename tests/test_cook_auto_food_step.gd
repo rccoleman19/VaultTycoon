@@ -28,6 +28,8 @@ func _run() -> void:
 	_run_case("queued unpaid costs are reserved like the hatch patch", _test_queued_reserved)
 	_run_case("salvage-short after the seal: the Cook starts reclamation and says so", _test_reclaim_alert)
 	_run_case("a player tap on the reclaim button pauses the Cook's reclamation", _test_reclaim_tap)
+	_run_case("after LOAD the Cook still owns its blueprints: alert back, cancel vetoes", _test_load_ownership)
+	_run_case("an old save without Cook state loads with no ownership", _test_load_old_save)
 	print("")
 	if _failure_count == 0:
 		print("COOK AUTO FOOD STEP TESTS PASSED: %d cases, %d assertions" % [_case_count, _assertion_count])
@@ -350,4 +352,81 @@ func _test_reclaim_tap() -> void:
 	_assert_true(not (game.get("reclaim_paused") == true) and game.reclaim_active, "a second tap resumes it")
 	_run_for(game, VaultGame.RECLAIM_INTERVAL + 2.0)
 	_assert_true(game.reclaim_paid > paid, "and deliveries continue")
+	_dispose(game)
+
+
+# Save/LOAD round trip through the real save file path (JSON on disk).
+func _reload(game: VaultGame, drop_cook_key := false) -> bool:
+	var path := "user://test_cook_auto_load_%d.json" % OS.get_process_id()
+	if not bool(game.save_load.save_snapshot(game.create_snapshot(), path).ok):
+		return false
+	var loaded: Dictionary = game.save_load.load_snapshot(path)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	if not bool(loaded.ok):
+		return false
+	var snapshot: Dictionary = loaded.snapshot
+	if drop_cook_key:
+		snapshot.erase("cook_auto")
+	var ok := game.apply_snapshot(snapshot)
+	game.player_orders.refresh()
+	return ok
+
+
+# The Cook-owned ids; the pre-rework head only has the single id (so this file still runs there).
+func _cook_ids(game: VaultGame) -> Array:
+	var ids: Variant = game.get("cook_auto_building_ids")
+	if ids is Array:
+		return (ids as Array).duplicate()
+	var one := int(game.get("cook_auto_building_id"))
+	return [one] if one >= 0 else []
+
+
+# Natural idle 05 seed 8: run until the Cook first queues its chain (about 60 s of sim).
+func _natural_cook_game() -> VaultGame:
+	var game := _spawn_game()
+	game.new_game(false, 8, 5)
+	game.begin_shift()
+	for _tick in int(150.0 / VaultGame.SIMULATION_TICK):
+		game.step_simulation(VaultGame.SIMULATION_TICK)
+		if not _cook_ids(game).is_empty() or game.ended:
+			break
+	game.player_orders.refresh()
+	return game
+
+
+func _test_load_ownership() -> void:
+	var game := _natural_cook_game()
+	var ids := _cook_ids(game)
+	var before := game.buildings.size() - ids.size()
+	_assert_false(ids.is_empty(), "fixture: the Cook queued its chain at %.1f s" % game.day_cycle.elapsed_seconds)
+	var kinds := _new_kinds(game, before)
+	_assert_true(game.create_snapshot().has("cook_auto"), "the save carries the Cook's ownership")
+	_assert_true(_reload(game), "the save loads")
+	_assert_equal(_cook_alerts(game).size(), 1, "the Cook alert is back after LOAD: %s" % [game.player_orders.all_alerts])
+	game.active_tool = "cancel"
+	for id: Variant in ids:
+		var building: VaultBuilding = game.get_building_by_id(int(id))
+		_assert_true(building != null and game.issue_order(building.cell), "the player cancels Cook blueprint id %d after LOAD" % int(id))
+	game.active_tool = "select"
+	var count := game.buildings.size()
+	_run_for(game, 40.0)
+	_assert_equal(game.buildings.size(), count, "no replacement is queued in 40 s after the LOAD cancel")
+	var vetoed: Dictionary = game.get("cook_auto_vetoed")
+	for kind: int in kinds:
+		_assert_true(vetoed.has(kind), "the LOAD cancel vetoed kind %d" % kind)
+	_assert_equal(_cook_alerts(game).size(), 0, "and the Cook alert is gone")
+	_dispose(game)
+
+
+func _test_load_old_save() -> void:
+	var game := _natural_cook_game()
+	_assert_false(_cook_ids(game).is_empty(), "fixture: the Cook queued its chain")
+	_assert_true(_reload(game, true), "a save without the cook_auto key still loads")
+	_assert_equal(int(game.get("cook_auto_building_id")), -1, "old save: no Cook-owned blueprint")
+	_assert_equal(_cook_ids(game).size(), 0, "old save: no Cook-owned ids")
+	_assert_equal(_cook_alerts(game).size(), 0, "old save: no Cook alert to restore")
+	# A bad cook_auto block is rejected, not half-applied.
+	var bad := game.create_snapshot()
+	bad["cook_auto"] = {"version": 1, "ids": ["x"], "vetoed": [], "episode": false, "started_reclaim": false, "paused": false, "alert_left": 0.0}
+	_assert_false(game.apply_snapshot(bad), "a malformed cook_auto block is refused")
 	_dispose(game)

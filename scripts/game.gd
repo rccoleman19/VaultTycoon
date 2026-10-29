@@ -234,6 +234,11 @@ var keep_running := false
 var keep_running_seconds := 0.0
 # Annex (north star slice 2): one keep-running project fed with meals above a reserve plus salvage.
 const ANNEX_KEY := "annex"
+# Cook auto food step ownership survives Save/LOAD: the Cook's blueprint ids (so a Cancel after LOAD
+# still vetoes), the vetoed kinds, the once-per-shortage flag and Cook-started reclamation state.
+# Written only when the Cook has acted; older saves without it load as before (no ownership).
+const COOK_AUTO_KEY := "cook_auto"
+const COOK_AUTO_VERSION := 1
 const ANNEX_VERSION := 1
 const ANNEX_MEALS := 30
 const ANNEX_SALVAGE := 150
@@ -1221,6 +1226,9 @@ func create_snapshot() -> Dictionary:
 			"reserve": annex_reserve,
 			"done": annex_done,
 		}
+	var cook_state := _cook_auto_snapshot()
+	if not cook_state.is_empty():
+		snapshot[COOK_AUTO_KEY] = cook_state
 	return snapshot
 
 
@@ -1324,6 +1332,8 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	idle_start_stage = int(snapshot[IDLE_START_KEY].stage) if snapshot.has(IDLE_START_KEY) else 0
 	_reset_keep_running()
 	_reset_cook_auto()
+	if snapshot.has(COOK_AUTO_KEY):
+		_restore_cook_auto(snapshot[COOK_AUTO_KEY])
 	if snapshot.has(KEEP_RUNNING_KEY):
 		keep_running = true
 		keep_running_seconds = float(snapshot[KEEP_RUNNING_KEY].seconds)
@@ -1669,6 +1679,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 			return false
 		if bool(annex.done) and (int(annex.meals) < ANNEX_MEALS or int(annex.salvage) < ANNEX_SALVAGE):
 			return false
+	if snapshot.has(COOK_AUTO_KEY) and not _valid_cook_auto_snapshot(snapshot[COOK_AUTO_KEY]):
+		return false
 	if snapshot.has("wing_orders"):
 		var orders: Variant = snapshot.wing_orders
 		if not orders is Dictionary or not orders.get("claimed") is Array:
@@ -2948,6 +2960,56 @@ func _reset_cook_auto() -> void:
 	cook_auto_started_reclaim = false
 	_cook_auto_reclaim_alert_left = 0.0
 	_cook_auto_wait = 0.0
+
+
+func _cook_auto_snapshot() -> Dictionary:
+	if cook_auto_building_ids.is_empty() and cook_auto_vetoed.is_empty() and not cook_auto_episode_used \
+			and not cook_auto_started_reclaim and not reclaim_paused:
+		return {}
+	var vetoed: Array = []
+	for kind: Variant in cook_auto_vetoed:
+		vetoed.append(int(kind))
+	vetoed.sort()
+	return {
+		"version": COOK_AUTO_VERSION,
+		"ids": cook_auto_building_ids.duplicate(),
+		"vetoed": vetoed,
+		"episode": cook_auto_episode_used,
+		"started_reclaim": cook_auto_started_reclaim,
+		"paused": reclaim_paused,
+		"alert_left": _cook_auto_reclaim_alert_left,
+	}
+
+
+func _valid_cook_auto_snapshot(data: Variant) -> bool:
+	if not data is Dictionary or not _is_integer_in_range(data.get("version"), COOK_AUTO_VERSION, COOK_AUTO_VERSION):
+		return false
+	for list_key in ["ids", "vetoed"]:
+		if not data.get(list_key) is Array:
+			return false
+		for value: Variant in data[list_key]:
+			if not _is_integer_in_range(value, 0, 1 << 30):
+				return false
+	for flag in ["episode", "started_reclaim", "paused"]:
+		if typeof(data.get(flag)) != TYPE_BOOL:
+			return false
+	var left: Variant = data.get("alert_left")
+	return typeof(left) in [TYPE_INT, TYPE_FLOAT] and is_finite(float(left)) and float(left) >= 0.0 \
+		and float(left) <= COOK_AUTO_RECLAIM_ALERT_SECONDS
+
+
+# Restore runs after buildings and reclamation are restored; ids that no longer exist are dropped.
+func _restore_cook_auto(data: Dictionary) -> void:
+	for id: Variant in data.ids:
+		if get_building_by_id(int(id)) != null:
+			cook_auto_building_ids.append(int(id))
+	cook_auto_building_id = cook_auto_building_ids[0] if not cook_auto_building_ids.is_empty() else -1
+	for kind: Variant in data.vetoed:
+		cook_auto_vetoed[int(kind)] = true
+	cook_auto_episode_used = bool(data.episode)
+	cook_auto_started_reclaim = bool(data.started_reclaim) and reclaim_active
+	reclaim_paused = bool(data.paused) and reclaim_active
+	_cook_auto_reclaim_alert_left = float(data.alert_left) if cook_auto_started_reclaim else 0.0
 
 
 func _advance_cook_auto_food(delta_seconds: float) -> void:
