@@ -5489,7 +5489,8 @@ func _build_food_plan_card(parent: Control) -> void:
 func _refresh_food_plan() -> void:
 	if food_plan_box == null:
 		return
-	food_plan_box.visible = game.food_plan_pending() and not game.keep_running
+	# The pre-seal hatch warning opens DETAILS with every readout: the card would push them off-screen.
+	food_plan_box.visible = game.food_plan_pending() and not game.keep_running and game.breach_system.phase != BreachSystem.Phase.WARNING
 	if not food_plan_box.visible:
 		return
 	var gate_open := game.food_plan_gate_open()

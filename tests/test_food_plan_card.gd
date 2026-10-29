@@ -8,6 +8,7 @@ func _run() -> void:
 	_run_case("opening wing: the card offers Charge + Station + Tray and one tap queues them in order", _test_power_short)
 	_run_case("with spare power the plan skips the Charge Node", _test_power_ok)
 	_run_case("the card is held while the live hatch needs its patch salvage", _test_gate)
+	_run_case("the card hides while the pre-seal hatch warning is up", _test_warning_hide)
 	print("")
 	if _failure_count == 0:
 		print("FOOD PLAN CARD TESTS PASSED: %d cases, %d assertions" % [_case_count, _assertion_count])
@@ -101,4 +102,15 @@ func _test_gate() -> void:
 	game.breach_system.patch_delivered = BreachSystem.PATCH_COST
 	game.player_orders.refresh()
 	_assert_true(not _button(game).disabled, "a patched hatch lifts the gate")
+	_dispose(game)
+
+
+func _test_warning_hide() -> void:
+	var game := _game(48, false)
+	game.breach_system.phase = BreachSystem.Phase.WARNING
+	game.player_orders.refresh()
+	_assert_true(not _card(game).is_visible_in_tree(), "card hidden during the hatch warning")
+	game.breach_system.phase = BreachSystem.Phase.OPEN
+	game.player_orders.refresh()
+	_assert_true(_card(game).is_visible_in_tree(), "card back once the hatch is open")
 	_dispose(game)
