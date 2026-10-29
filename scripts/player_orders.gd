@@ -5457,8 +5457,8 @@ func _refresh_comfort() -> void:
 
 const FOOD_PLAN_TEXT := {
 	"header": "FOOD PLAN",
-	"button": "Food plan · %s · %d",
-	"held": "Food plan · keep %d salvage for the hatch",
+	"button": "%s · %d",
+	"held": "Keep %d salvage for the hatch",
 }
 var food_plan_box: VBoxContainer
 var food_plan_button: Button
