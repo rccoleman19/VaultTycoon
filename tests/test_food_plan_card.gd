@@ -71,6 +71,17 @@ func _test_power_ok() -> void:
 	_assert_true(button != null and button.text == "Food plan · Station + Tray · 22", "no Charge Node with spare power: %s" % (button.text if button else "none"))
 	_assert_equal(_press(game), [VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GROW_TRAY], "queues Station then Tray only")
 	_dispose(game)
+	# Planned spare exactly equal to Station 2 + Tray 3 is enough: still no Charge Node.
+	game = _game(48, true)
+	var x := 16
+	while game._planned_power_spare() > 5 and x < 34:
+		_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(x, 13))
+		x += 2
+	game.power_grid.recalculate(game.buildings)
+	game.player_orders.refresh()
+	_assert_equal(game._planned_power_spare(), 5, "fixture plans exactly 5 spare power")
+	_assert_equal(_button(game).text, "Food plan · Station + Tray · 22", "exactly enough power skips the Charge Node")
+	_dispose(game)
 
 
 func _test_gate() -> void:
