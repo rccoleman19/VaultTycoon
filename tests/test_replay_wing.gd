@@ -9,9 +9,11 @@ func _run() -> void:
 	_run_case("REPLAY WING starts a fresh run of the same seed", _test_replay)
 	_run_case("the replay briefing hides LOAD of the ended run's checkpoint", _test_replay_hides_load)
 	_run_case("the ended status line names every outcome button", _test_ended_status)
-	_run_case("a real seeded win footer names replay over the last live message", _test_real_win_footer)
-	_run_case("a real seeded loss footer names replay over the last death message", _test_real_loss_footer)
+	_run_case("real seeded win shows each LOAD error until expiry and keeps outcome actions", _test_real_win_footer)
+	_run_case("real seeded loss shows each LOAD error until expiry and keeps outcome actions", _test_real_loss_footer)
 	_run_case("a seeded panel followed by a legacy one hides the button again", _test_seeded_then_legacy)
+	_run_case("NEW WING still opens a fresh seeded briefing", _test_new_wing_action)
+	_run_case("legacy outcomes keep live messages and LOAD feedback", _test_legacy_load_feedback)
 	_finish()
 
 
@@ -90,6 +92,11 @@ func _test_replay() -> void:
 	_assert_equal(game.breach_system.warning_at, BreachSystem.warning_at_for_seed(4242), "same hatch window")
 	_assert_false(game.player_orders.outcome_panel.visible, "outcome closes")
 	_assert_true(game.player_orders.is_briefing_open(), "the NEW WING briefing opens")
+	game.player_orders.briefing_begin_button.pressed.emit()
+	_assert_false(game.tutorial_open, "replay BEGIN closes the briefing")
+	_assert_false(game.user_paused, "replay BEGIN starts the shift")
+	game.step_simulation(1.0)
+	_assert_almost(game.day_cycle.elapsed_seconds, 1.0, "replay clock advances after BEGIN")
 	_dispose(game)
 
 
@@ -137,25 +144,23 @@ func _test_replay_hides_load() -> void:
 func _test_ended_status() -> void:
 	for seed_value in [0, 4242]:
 		for won in [true, false]:
-			var game := _spawn_game()
-			game.new_game(false, seed_value)
-			if won:
-				game._finish_win()
-			else:
-				game._finish_loss()
-			var expected := "SHIFT ENDED // LOAD LAST CHECKPOINT, NEW WING or REPLAY WING" if seed_value != 0 else "SHIFT ENDED // LOAD LAST CHECKPOINT or NEW WING"
 			var tools := ["select", "dig", "air"] if seed_value != 0 else ["select"]
-			var message_times := [0.0, 4.0] if seed_value != 0 else [0.0]
 			for tool in tools:
+				var game := _spawn_game()
+				game.new_game(false, seed_value)
+				game.set_tool(tool)
+				if won:
+					game._finish_win()
+				else:
+					game._finish_loss()
+				var expected := "SHIFT ENDED // LOAD LAST CHECKPOINT, NEW WING or REPLAY WING" if seed_value != 0 else "SHIFT ENDED // LOAD LAST CHECKPOINT or NEW WING"
+				var message_times := [0.0, 4.0] if seed_value != 0 else [0.0]
 				for message_left in message_times:
-					game.set_tool(tool)
 					game.status_message_left = message_left
 					game.player_orders.refresh()
-					var label := "seed %d %s tool %s message %.1fs" % [seed_value, "win" if won else "loss", tool, message_left]
-					_assert_equal(game.player_orders.tool_status.text, expected, label + " status line")
-					_assert_equal(game.player_orders.tool_status.tooltip_text, expected, label + " tooltip")
-					_assert_true(game.player_orders.tool_status.is_visible_in_tree(), label + " footer visible")
-			_dispose(game)
+					var label := "seed %d %s tool %s stale message %.1fs" % [seed_value, "win" if won else "loss", tool, message_left]
+					_assert_footer(game, expected, label)
+				_dispose(game)
 
 
 func _test_real_win_footer() -> void:
@@ -174,12 +179,14 @@ func _test_real_footer(won: bool) -> void:
 	game.records_path = directory.path_join(kind + "-records.json")
 	game.best_path = directory.path_join(kind + "-best.json")
 	game.save_path = directory.path_join(kind + "-save.json")
-	for path in [game.records_path, game.best_path, game.save_path]:
+	game.checkpoint_path = directory.path_join(kind + "-checkpoint.json")
+	for path in [game.records_path, game.best_path, game.save_path, game.checkpoint_path]:
 		_remove_test_save(path)
 	root.add_child(game)
 	# Seed 45 leaves all twelve route cells as rock and warns naturally at 60 s.
 	game.new_game(false, 45)
 	game.begin_shift()
+	var live_checkpoint := game.create_snapshot()
 	if won:
 		game.set_tool("dig")
 		for x in [16, 15, 14, 13]:
@@ -218,6 +225,116 @@ func _test_real_footer(won: bool) -> void:
 	_assert_true(orders.outcome_panel.is_visible_in_tree(), "real " + kind + " panel visible")
 	_assert_true(orders.outcome_replay_button.is_visible_in_tree(), "real " + kind + " replay action visible")
 	_assert_equal(_visible_buttons(orders), ["LOAD LAST CHECKPOINT", "NEW WING", "REPLAY WING"] as Array[String], "real " + kind + " action order agrees with footer")
-	for path in [game.records_path, game.best_path, game.save_path]:
+	_assert_failed_loads(game, kind)
+	if won:
+		orders.keep_running_button.pressed.emit()
+		_assert_true(game.keep_running and not game.ended, "real win KEEP RUNNING stays live")
+		_assert_false(orders.outcome_panel.visible, "KEEP RUNNING closes the outcome")
+		orders.refresh()
+		_assert_footer(game, "SELECT // Keep running: the seal win is recorded. The vault carries on.", "KEEP RUNNING feedback")
+	else:
+		# Exercise the actual successful LOAD action after all failed attempts.
+		_assert_true(game.save_load.save_snapshot(live_checkpoint, game.save_path).ok, "write valid live checkpoint")
+		_press_outcome_action(game, "LOAD LAST CHECKPOINT")
+		_assert_false(game.ended, "successful LOAD restores a live shift")
+		_assert_equal(game.outcome, "", "successful LOAD clears the loss")
+		_assert_true(game.user_paused, "successful LOAD stays paused")
+		_assert_false(orders.outcome_panel.visible, "successful LOAD closes the outcome")
+		orders.refresh()
+		_assert_footer(game, "SELECT // Wing loaded.", "successful LOAD feedback")
+	for path in [game.records_path, game.best_path, game.save_path, game.checkpoint_path]:
 		_remove_test_save(path)
 	_dispose(game)
+
+
+func _assert_footer(game: VaultGame, expected: String, label: String) -> void:
+	_assert_equal(game.player_orders.tool_status.text, expected, label + " footer text")
+	_assert_equal(game.player_orders.tool_status.tooltip_text, expected, label + " footer tooltip")
+	_assert_true(game.player_orders.tool_status.is_visible_in_tree(), label + " footer visible")
+
+
+func _press_outcome_action(game: VaultGame, text: String) -> void:
+	for child: Node in game.player_orders.outcome_replay_button.get_parent().get_children():
+		if child is Button and (child as Button).text == text:
+			var button := child as Button
+			_assert_true(button.is_visible_in_tree() and not button.disabled, text + " is available")
+			button.pressed.emit()
+			return
+	_assert_true(false, "outcome action exists: " + text)
+
+
+func _assert_failed_loads(game: VaultGame, kind: String) -> void:
+	var before := game.create_snapshot()
+	var records_md5 := FileAccess.get_md5(game.records_path)
+	var best_md5 := FileAccess.get_md5(game.best_path)
+	var failures := [
+		["missing", "", "No local save exists yet."],
+		["damaged", "[]", "The local save is damaged."],
+		["unsupported-version", '{"version":2,"game":{}}', "The local save uses an unsupported version."],
+		["invalid-shape", '{"version":1,"game":{}}', "The save did not contain a valid vault wing."],
+	]
+	for failure: Array in failures:
+		var label := "real %s %s LOAD" % [kind, failure[0]]
+		_remove_test_save(game.save_path)
+		if failure[0] != "missing":
+			var file := FileAccess.open(game.save_path, FileAccess.WRITE)
+			file.store_string(failure[1])
+			file.close()
+		_press_outcome_action(game, "LOAD LAST CHECKPOINT")
+		game.player_orders.refresh()
+		_assert_footer(game, "%s // %s" % [game.active_tool.to_upper(), failure[2]], label)
+		_assert_almost(game.status_message_left, 5.0, label + " starts a five-second timer")
+		_assert_true(game.ended and game.outcome == kind, label + " keeps the outcome")
+		_assert_true(game.player_orders.outcome_panel.is_visible_in_tree(), label + " keeps actions visible")
+		# Use the real UI frame timer: the simulation is paused on an outcome.
+		game._process(4.9)
+		_assert_footer(game, "%s // %s" % [game.active_tool.to_upper(), failure[2]], label + " before expiry")
+		game._process(0.2)
+		_assert_footer(game, "SHIFT ENDED // LOAD LAST CHECKPOINT, NEW WING or REPLAY WING", label + " after expiry")
+		_assert_variants_equal(before, game.create_snapshot(), label + " leaves the vault snapshot unchanged")
+		_assert_equal(FileAccess.get_md5(game.records_path), records_md5, label + " leaves records unchanged")
+		_assert_equal(FileAccess.get_md5(game.best_path), best_md5, label + " leaves best unchanged")
+		if failure[0] != "missing":
+			_assert_equal(FileAccess.get_file_as_string(game.save_path), failure[1], label + " leaves save bytes unchanged")
+		else:
+			_assert_false(FileAccess.file_exists(game.save_path), label + " does not create a save")
+
+
+func _test_new_wing_action() -> void:
+	for won in [true, false]:
+		var game := _spawn_game()
+		game.new_game(false, 45)
+		if won:
+			game._finish_win()
+		else:
+			game._finish_loss()
+		_press_outcome_action(game, "NEW WING")
+		_assert_true(game.wing_seed != 0, "NEW WING rolls a seeded wing")
+		_assert_false(game.ended, "NEW WING clears the outcome")
+		_assert_equal(game.outcome, "", "NEW WING clears the result")
+		_assert_equal(game.get_alive_count(), 4, "NEW WING resets the crew")
+		_assert_almost(game.day_cycle.elapsed_seconds, 0.0, "NEW WING resets the clock")
+		_assert_true(game.player_orders.is_briefing_open(), "NEW WING opens the briefing")
+		_assert_true(game.player_orders.briefing_load_button.visible, "NEW WING retains briefing LOAD")
+		_dispose(game)
+
+
+func _test_legacy_load_feedback() -> void:
+	for won in [true, false]:
+		var game := _spawn_game()
+		game.save_path = "user://legacy_outcome_feedback.json"
+		game.new_game(false, 0)
+		game.set_tool("select")
+		if won:
+			game._finish_win()
+		else:
+			game._finish_loss()
+		game.player_orders.refresh()
+		_assert_footer(game, "SELECT // " + game._tool_help("select"), "legacy keeps the last live message")
+		_remove_test_save(game.save_path)
+		_press_outcome_action(game, "LOAD LAST CHECKPOINT")
+		game.player_orders.refresh()
+		_assert_footer(game, "SELECT // No local save exists yet.", "legacy LOAD feedback")
+		game._process(5.1)
+		_assert_footer(game, "SHIFT ENDED // LOAD LAST CHECKPOINT or NEW WING", "legacy expired feedback")
+		_dispose(game)

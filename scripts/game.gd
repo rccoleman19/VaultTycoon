@@ -173,7 +173,13 @@ var outcome := "":
 const DEATH_RECAP_KEY := "death_recap"
 const DEATH_RECAP_VERSION := 1
 var death_recap := {}
-var status_message := "Select DIG and mark rock beside the chamber."
+# Presentation-only serials distinguish feedback after an outcome from the last live message.
+var _status_message_serial := 0
+var _outcome_status_serial := 0
+var status_message := "Select DIG and mark rock beside the chamber.":
+	set(value):
+		status_message = value
+		_status_message_serial += 1
 var status_message_left := 0.0
 
 # Wing orders (QA 2026-10-18c #3, slice 2): post-seal goals whose rewards unlock Mk II fits.
@@ -2538,10 +2544,15 @@ func _on_breach_sealed() -> void:
 	status_message_left = 8.0
 
 
+func has_post_outcome_status() -> bool:
+	return status_message_left > 0.0 and _status_message_serial > _outcome_status_serial
+
+
 func _finish_win() -> void:
 	if ended or keep_running or outcome == "death":
 		return
 	ended = true
+	_outcome_status_serial = _status_message_serial
 	outcome = "win"
 	user_paused = true
 	_record_finish(true)
@@ -2554,6 +2565,7 @@ func _finish_loss() -> void:
 	if ended:
 		return
 	ended = true
+	_outcome_status_serial = _status_message_serial
 	outcome = "loss"
 	user_paused = true
 	_record_finish(false)
