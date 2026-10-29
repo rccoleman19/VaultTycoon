@@ -4176,14 +4176,32 @@ func death_recap_for(resident: VaultResident) -> Dictionary:
 		var hours := floori(fraction * 24.0)
 		var minutes := floori(fmod(fraction * 24.0, 1.0) * 60.0)
 		clock = "DAY %d  ·  %02d:%02d" % [game.keep_running_day(), hours, minutes]
+	var cause: String = ["starvation", "exhaustion", "despair", "suffocation", "unknown causes"][_resident_loss_cause(resident)]
 	return {
 		"resident_id": resident.resident_id,
 		"name": resident.resident_name,
-		"cause": ["starvation", "exhaustion", "despair", "suffocation", "unknown causes"][_resident_loss_cause(resident)],
+		"cause": cause,
 		"time": clock,
 		"elapsed_seconds": game.keep_running_seconds if game.keep_running else game.day_cycle.elapsed_seconds,
-		"tip": _saving_tip_for(resident),
+		"tip": _tip_naming_sidebar_build(_saving_tip_for(resident), cause),
 	}
+
+
+# For a starvation loss the recap names the food build the sidebar offers at the loss, not an older
+# one from the first warning. Other causes keep their own advice (a suffocation Charge Node stays).
+func _tip_naming_sidebar_build(tip: String, cause: String) -> String:
+	if cause != "starvation":
+		return tip
+	var offered := _food_card_offer_kind()
+	if offered < 0:
+		offered = _upgrade_offer_nudge_kind() if _upgrade_offer_target() == null else -1
+	if offered < 0 or not FOOD_PLAN_STEP_NAMES.has(offered) or not "YOU place a " in tip:
+		return tip
+	for kind: int in FOOD_PLAN_STEP_NAMES:
+		var said := "YOU place a %s" % FOOD_PLAN_STEP_NAMES[kind]
+		if said in tip:
+			return tip.replace(said, "YOU place a %s" % FOOD_PLAN_STEP_NAMES[offered])
+	return tip
 
 
 func show_outcome(won: bool, survivors: int) -> void:
@@ -5004,7 +5022,31 @@ func _on_idle_start_dismissed() -> void:
 	refresh()
 
 
+# While anyone starves or the food runway is short, Spend names only the food card's step.
+func _food_nudge_active() -> bool:
+	if game.get_alive_count() == 0:
+		return false
+	for resident: VaultResident in game.residents:
+		if resident.alive and (resident.resident_id == _starving_resident_id or resident.needs.food <= 0.0):
+			return true
+	return _salvage_food_crisis_live()
+
+
+# The food build the card leads with, when it is shown and tappable; else -1.
+func _food_card_offer_kind() -> int:
+	if not game.food_plan_pending() or game.keep_running or game.breach_system.phase == BreachSystem.Phase.WARNING:
+		return -1
+	var offer := game.food_plan_offer(_food_plan_lead_kind())
+	return -1 if offer.is_empty() else offer[0]
+
+
 func _upgrade_offer_nudge_kind() -> int:
+	if _food_nudge_active():
+		if game.ended or not game.breach_system.is_sealed():
+			return -1
+		var food := _food_card_offer_kind()
+		var urgent := next_urgent_build_kind()
+		return food if food >= 0 and (urgent < 0 or urgent == food) else -1
 	var nudge := salvage_nudge_kind()
 	var urgent_kind := next_urgent_build_kind()
 	return -1 if urgent_kind >= 0 and nudge != urgent_kind else nudge
