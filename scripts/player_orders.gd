@@ -256,6 +256,7 @@ func _build_interface() -> void:
 	summary.add_child(alert_label)
 	_build_idle_start_card(summary)
 	_build_comfort_card(summary)
+	_build_food_plan_card(summary)
 	_build_annex_card(summary)
 	upgrade_offer_button = Button.new()
 	upgrade_offer_button.visible = false
@@ -1186,6 +1187,7 @@ func refresh() -> void:
 	_refresh_upgrade_offer()
 	_refresh_idle_start()
 	_refresh_comfort()
+	_refresh_food_plan()
 	_refresh_annex()
 	_refresh_roster()
 	_refresh_work_priorities_board()
@@ -5451,6 +5453,54 @@ func _refresh_comfort() -> void:
 	comfort_box.visible = game.comfort_pending() and not (game.annex_waiting_for_room() and game.annex_room_short() > 0)
 	if comfort_box.visible:
 		comfort_button.text = COMFORT_TEXT.button % game.comfort_cost()
+
+
+const FOOD_PLAN_TEXT := {
+	"header": "FOOD PLAN",
+	"button": "Food plan · %s · %d",
+	"held": "Food plan · keep %d salvage for the hatch",
+}
+var food_plan_box: VBoxContainer
+var food_plan_button: Button
+
+
+func _build_food_plan_card(parent: Control) -> void:
+	food_plan_box = VBoxContainer.new()
+	food_plan_box.name = "FoodPlanCard"
+	food_plan_box.visible = false
+	food_plan_box.add_theme_constant_override("separation", 2)
+	parent.add_child(food_plan_box)
+	var header := Label.new()
+	header.text = FOOD_PLAN_TEXT.header
+	header.add_theme_color_override("font_color", Color("8faeb7"))
+	header.add_theme_font_size_override("font_size", 13)
+	food_plan_box.add_child(header)
+	food_plan_button = Button.new()
+	food_plan_button.name = "FoodPlanButton"
+	food_plan_button.clip_text = true
+	food_plan_button.custom_minimum_size.y = 26
+	food_plan_button.tooltip_text = "Queues a Nutrient Station and a Grow Tray, plus a Charge Node first if power is short. Held while the hatch still needs its patch salvage."
+	food_plan_button.pressed.connect(func() -> void:
+		game.apply_food_plan()
+		refresh())
+	food_plan_box.add_child(food_plan_button)
+
+
+func _refresh_food_plan() -> void:
+	if food_plan_box == null:
+		return
+	food_plan_box.visible = game.food_plan_pending() and not game.keep_running
+	if not food_plan_box.visible:
+		return
+	var gate_open := game.food_plan_gate_open()
+	food_plan_button.disabled = not gate_open
+	if gate_open:
+		var names: Array[String] = []
+		for kind in game.food_plan_kinds():
+			names.append({VaultBuilding.Kind.GENERATOR: "Charge", VaultBuilding.Kind.KITCHEN: "Station", VaultBuilding.Kind.GROW_TRAY: "Tray"}[kind])
+		food_plan_button.text = FOOD_PLAN_TEXT.button % [" + ".join(names), game.food_plan_cost()]
+	else:
+		food_plan_button.text = FOOD_PLAN_TEXT.held % game.food_plan_patch_owed()
 
 
 func _build_annex_card(parent: Control) -> void:
