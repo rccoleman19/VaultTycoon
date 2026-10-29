@@ -59,7 +59,7 @@ func _test_power_short() -> void:
 	if button == null:
 		_dispose(game)
 		return
-	_assert_equal(button.text, "Food plan · Charge + Station + Tray · 40", "card names the plan and its cost")
+	_assert_equal(button.text, "Charge + Station + Tray · 40", "card names the plan and its cost")
 	var queued := _press(game)
 	_assert_equal(queued, [VaultBuilding.Kind.GENERATOR, VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GROW_TRAY], "one tap queues Charge Node, Station, Grow Tray")
 	_assert_true(not card.is_visible_in_tree(), "card hides once the plan is queued")
@@ -69,7 +69,7 @@ func _test_power_short() -> void:
 func _test_power_ok() -> void:
 	var game := _game(48, true)
 	var button := _button(game)
-	_assert_true(button != null and button.text == "Food plan · Station + Tray · 22", "no Charge Node with spare power: %s" % (button.text if button else "none"))
+	_assert_true(button != null and button.text == "Station + Tray · 22", "no Charge Node with spare power: %s" % (button.text if button else "none"))
 	_assert_equal(_press(game), [VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GROW_TRAY], "queues Station then Tray only")
 	_dispose(game)
 	# Planned spare exactly equal to Station 2 + Tray 3 is enough: still no Charge Node.
@@ -81,7 +81,7 @@ func _test_power_ok() -> void:
 	game.power_grid.recalculate(game.buildings)
 	game.player_orders.refresh()
 	_assert_equal(game._planned_power_spare(), 5, "fixture plans exactly 5 spare power")
-	_assert_equal(_button(game).text, "Food plan · Station + Tray · 22", "exactly enough power skips the Charge Node")
+	_assert_equal(_button(game).text, "Station + Tray · 22", "exactly enough power skips the Charge Node")
 	_dispose(game)
 
 
@@ -90,7 +90,7 @@ func _test_gate() -> void:
 	var game := _game(43, false)
 	var button := _button(game)
 	_assert_true(button != null and button.disabled, "43 salvage: card held")
-	_assert_true(button != null and button.text == "Food plan · keep 4 salvage for the hatch", "held card says why: %s" % (button.text if button else "none"))
+	_assert_true(button != null and button.text == "Keep 4 salvage for the hatch", "held card says why: %s" % (button.text if button else "none"))
 	_assert_equal(_press(game).size(), 0, "a held card queues nothing")
 	_assert_true(not game.apply_food_plan(), "apply is refused while held")
 	_dispose(game)

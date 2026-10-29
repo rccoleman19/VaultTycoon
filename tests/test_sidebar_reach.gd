@@ -16,6 +16,7 @@ func _run() -> void:
 	await _run_frame_case("opening DETAILS shows its readouts at the top, by hand or on an urgency", _test_details_scroll_to_top)
 	await _run_frame_case("pre-seal DETAILS still shows every readout and FOCUS HATCH at once", _test_pre_seal_details)
 	await _run_frame_case("the right panel holds its width and the Mk II offer fits it", _test_panel_width)
+	await _run_frame_case("the Food plan card shows its whole line, cost included, at 1280x720", _test_food_plan_fit)
 
 	print("")
 	if _failure_count == 0:
@@ -307,4 +308,26 @@ func _test_panel_width() -> void:
 	var content_width := orders.right_scroll.size.x - orders.right_scroll.get_v_scroll_bar().size.x
 	_assert_true(row.get_combined_minimum_size().x <= content_width, "the lighting row's minimum (%.0f px) fits beside the scroll bar (%.0f px)" % [row.get_combined_minimum_size().x, content_width])
 	_assert_true(orders.lighting_overlay_button.get_global_rect().end.x <= orders.right_scroll.get_global_rect().end.x, "[L] MAP OFF stays inside the rail")
+	_dispose(game)
+
+
+func _test_food_plan_fit() -> void:
+	var game := _new_game()
+	game.food_system.salvage = 48
+	game.power_grid.recalculate(game.buildings)
+	var orders := game.player_orders
+	orders.refresh()
+	await _layout()
+	var button: Button = orders.find_child("FoodPlanButton", true, false)
+	_assert_true(button != null and button.is_visible_in_tree(), "the Food plan card shows on the opening wing")
+	if button == null:
+		_dispose(game)
+		return
+	_assert_true(button.text.ends_with("· 40"), "the card line carries its cost: %s" % button.text)
+	var font := button.get_theme_font("font")
+	var font_size := button.get_theme_font_size("font_size")
+	var style := button.get_theme_stylebox("normal")
+	var need := font.get_string_size(button.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x + style.get_content_margin(SIDE_LEFT) + style.get_content_margin(SIDE_RIGHT)
+	_assert_true(need <= button.size.x, "the whole card line fits its button (%.1f needed, %.1f wide): %s" % [need, button.size.x, button.text])
+	_assert_true(_right_panel(orders).get_global_rect().encloses(button.get_global_rect()), "the card button sits inside the right panel")
 	_dispose(game)
