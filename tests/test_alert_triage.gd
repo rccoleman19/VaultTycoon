@@ -345,9 +345,16 @@ func _triage_expected_key(game: VaultGame, alert: String) -> float:
 
 func _assert_triage_sorted(game: VaultGame, alerts: Array, message: String) -> void:
 	_assert_true(alerts.size() >= 2, "%s has multiple independently ranked threats" % message)
+	# #139: lethality tier (air, starvation, critical HP, rest) first, then the death runway.
 	var previous := -INF
+	var previous_tier := -1
 	for alert: Variant in alerts:
+		var tier: int = game.player_orders._alert_lethality_tier(str(alert))
 		var key := _triage_expected_key(game, str(alert))
+		if tier != previous_tier:
+			_assert_true(tier > previous_tier, "%s: %s has tier %d after %d" % [message, str(alert), tier, previous_tier])
+			previous_tier = tier
+			previous = -INF
 		_assert_true(key >= previous, "%s: %s has key %s after %s" % [message, str(alert), str(key), str(previous)])
 		previous = key
 	# The old severity grouping remains the stable tie-breaker, including INF.
@@ -468,11 +475,11 @@ func _test_alerts_rank_by_urgency() -> void:
 	_assert_triage_sorted(game, generated, "longer oxygen runway")
 	_assert_triage_sorted(game, visible, "longer oxygen runway after dedupe")
 	_assert_true(generated.find(seal_alert) >= 0 and generated.find("OXYGEN LOW") >= 0
-		and generated.find(seal_alert) < generated.find("OXYGEN LOW"),
-		"the alert ordering flips when oxygen outlasts the hatch grace")
-	_assert_true(_triage_bar_text(orders).begins_with(seal_alert + "  ·  ")
-		and visible.slice(0, 2) == [seal_alert, "OXYGEN LOW"],
-		"the earlier hatch-opening deadline leads oxygen after the flip")
+		and generated.find("OXYGEN LOW") < generated.find(seal_alert),
+		"air outranks the hatch even when oxygen outlasts the hatch grace")
+	_assert_true(_triage_bar_text(orders).begins_with("OXYGEN LOW  ·  ")
+		and visible.slice(0, 2) == ["OXYGEN LOW", seal_alert],
+		"oxygen still leads the earlier hatch-opening deadline")
 	_assert_triage_count_and_bar(game, visible, _triage_hidden(orders))
 
 	game.oxygen_system.oxygen = 10.0
@@ -492,8 +499,8 @@ func _test_alerts_rank_by_urgency() -> void:
 	_assert_true(game.oxygen_system.net_rate > 0.0 and game.oxygen_system.get_seconds_to_critical_crossing() < 0.0,
 		"a genuinely powered recycler recovers low oxygen without a future critical crossing")
 	_assert_triage_sorted(game, generated, "recovering low oxygen")
-	_assert_true(generated.find(seal_alert) >= 0 and generated.find("OXYGEN LOW") > generated.find(seal_alert),
-		"recovering low oxygen has an infinite threat key and follows the finite hatch deadline")
+	_assert_true(generated.find(seal_alert) >= 0 and generated.find("OXYGEN LOW") < generated.find(seal_alert),
+		"recovering low oxygen keeps the air tier ahead of the finite hatch deadline (#139)")
 	_dispose(game)
 
 	game = _triage_game()

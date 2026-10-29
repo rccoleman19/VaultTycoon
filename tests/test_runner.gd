@@ -238,15 +238,15 @@ func _test_alert_severity_order() -> void:
 	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
 	game.player_orders.refresh()
 	var segments := game.player_orders.all_alerts
-	_assert_equal(segments[0], "NO MEALS", "zero pantry runway ranks before future critical air")
-	_assert_equal(segments[1], "OXYGEN LOW", "declining air ranks before nonlethal drafted-work advice")
+	_assert_equal(segments[0], "OXYGEN LOW", "air leads starvation (#139 lethality tiers)")
+	_assert_equal(segments[1], "NO MEALS", "the pantry threat follows air, before nonlethal drafted-work advice")
 	_assert_true(segments.find("NO MEALS") < segments.find("DRAFTED CREW 1 · AUTO WORK PAUSED"), "drafted crew falls behind the food threat")
 	game.residents[0].needs.food = 10.0
 	game.player_orders.refresh()
 	segments = game.player_orders.all_alerts
-	_assert_equal(segments[0], "STARVING: Ari", "a starving resident Next names leads the alert line")
-	_assert_equal(segments[1], "NO MEALS", "zero food runway remains earlier than a resident's projected death")
-	_assert_equal(segments[2], "OXYGEN LOW", "air reaches critical before it kills the critical resident")
+	_assert_equal(segments[1], "STARVING: Ari", "a starving resident Next names leads the alert line right after air (#139)")
+	_assert_equal(segments[2], "NO MEALS", "both starvation alerts sit in the starvation tier (#139)")
+	_assert_equal(segments[0], "OXYGEN LOW", "air leads the lethality tiers (#139)")
 	_assert_equal(segments[3], "CRITICAL: Ari", "the resident threat ranks before alerts without a death deadline")
 	_assert_true(segments.find("DRAFTED CREW 1 · AUTO WORK PAUSED") > 3, "the rest keep their wording behind the threats")
 	_assert_equal("  ·  ".join(segments).count("CRITICAL: "), 1, "the CRITICAL alert appears once")
@@ -265,8 +265,8 @@ func _test_alert_severity_order() -> void:
 	game.residents[0].needs.health = 1.0
 	game.player_orders.refresh()
 	segments = game.player_orders.all_alerts
-	_assert_equal(segments[0], "CRITICAL: Ari", "an exhausted resident near death leads future critical air")
-	_assert_equal(segments[1], "OXYGEN LOW", "future critical air follows the nearer resident deadline")
+	_assert_equal(segments[1], "CRITICAL: Ari", "an exhausted resident near death follows air (#139)")
+	_assert_equal(segments[0], "OXYGEN LOW", "future critical air leads the nearer resident deadline (#139)")
 	game.residents[0].needs.rest = 80.0
 	game.residents[0].needs.health = 100.0
 	game.residents[1].drafted = false

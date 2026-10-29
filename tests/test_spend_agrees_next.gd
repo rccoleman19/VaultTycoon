@@ -86,7 +86,7 @@ func _test_non_urgent() -> void:
 	var orders := game.player_orders
 	_assert_equal(orders.objective_label.text, "Next: YOU place bunks · THEY craft", "non-urgent Next names a different build")
 	_assert_true(orders.upgrade_offer_button.visible, "the old nudge still shows when Next is not urgent")
-	_assert_equal(orders.upgrade_offer_button.text, "Spend 26: build Rec Console", "non-urgent nudge text stays exactly unchanged")
+	_assert_equal(orders.upgrade_offer_button.text, "Spend 8: build Rec Console", "non-urgent nudge text stays exactly unchanged")
 	orders.upgrade_offer_button.pressed.emit()
 	_assert_equal(game.active_tool, "rec", "the unchanged nudge still selects its original build tool")
 	# Return to urgency in the same HUD, then back, to catch stale urgency state.
@@ -100,14 +100,14 @@ func _test_non_urgent() -> void:
 	orders.refresh()
 	_assert_equal(orders.objective_label.text, "Next: YOU place bunks · THEY craft", "feeding the crew clears urgent Next")
 	_assert_true(orders.upgrade_offer_button.visible, "the old nudge returns as urgency clears")
-	_assert_equal(orders.upgrade_offer_button.text, "Spend 26: build Rec Console", "the restored nudge keeps its original wording")
+	_assert_equal(orders.upgrade_offer_button.text, "Spend 8: build Rec Console", "the restored nudge keeps its original wording")
 	_dispose(game)
 
 
 func _assert_nudge_agrees(game: VaultGame, build_name: String, tool: String) -> void:
 	var orders := game.player_orders
 	var button := orders.upgrade_offer_button
-	var expected := "Spend %d: build %s" % [game.food_system.salvage, build_name]
+	var expected := "Spend %d: build %s" % [game.player_orders.upgrade_offer_cost(game.player_orders._upgrade_offer_nudge_kind()), build_name]
 	_assert_true(not button.visible or button.text == expected,
 		"spend nudge must agree with [%s] or hide; visible=%s text=[%s]" % [orders.objective_label.text, button.visible, button.text])
 	var previous_tool := game.active_tool
