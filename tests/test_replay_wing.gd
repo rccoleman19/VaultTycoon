@@ -13,6 +13,9 @@ func _run() -> void:
 	_run_case("real seeded loss shows each LOAD error until expiry and keeps outcome actions", _test_real_loss_footer)
 	_run_case("successful LOAD of a real seeded win keeps outcome actions throughout", _test_real_win_load_footer)
 	_run_case("successful LOAD of a real seeded loss keeps outcome actions throughout", _test_real_loss_load_footer)
+	_run_case("real seeded win keeps outcome guidance and LOAD errors across tool hotkeys", _test_real_win_tool_hotkeys)
+	_run_case("real seeded loss keeps outcome guidance and LOAD errors across tool hotkeys", _test_real_loss_tool_hotkeys)
+	_run_case("tool key events work live and preserve legacy ended wording", _test_legacy_tool_hotkeys)
 	_run_case("a seeded panel followed by a legacy one hides the button again", _test_seeded_then_legacy)
 	_run_case("NEW WING still opens a fresh seeded briefing", _test_new_wing_action)
 	_run_case("legacy outcomes keep live messages and LOAD feedback", _test_legacy_load_feedback)
@@ -181,7 +184,15 @@ func _test_real_loss_load_footer() -> void:
 	_test_real_footer(false, true)
 
 
-func _test_real_footer(won: bool, load_ended := false) -> void:
+func _test_real_win_tool_hotkeys() -> void:
+	_test_real_footer(true, false, true)
+
+
+func _test_real_loss_tool_hotkeys() -> void:
+	_test_real_footer(false, false, true)
+
+
+func _test_real_footer(won: bool, load_ended := false, tool_hotkeys := false) -> void:
 	var kind := "win" if won else "loss"
 	var directory := "user://headless_replay_footer"
 	_assert_equal(DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory)), OK, "isolated footer records directory")
@@ -235,7 +246,9 @@ func _test_real_footer(won: bool, load_ended := false) -> void:
 	_assert_true(orders.outcome_panel.is_visible_in_tree(), "real " + kind + " panel visible")
 	_assert_true(orders.outcome_replay_button.is_visible_in_tree(), "real " + kind + " replay action visible")
 	_assert_equal(_visible_buttons(orders), ["LOAD LAST CHECKPOINT", "NEW WING", "REPLAY WING"] as Array[String], "real " + kind + " action order agrees with footer")
-	if load_ended:
+	if tool_hotkeys:
+		_assert_ended_tool_hotkeys(game, kind)
+	elif load_ended:
 		_assert_successful_ended_load(game, kind)
 	else:
 		_assert_failed_loads(game, kind)
@@ -258,6 +271,66 @@ func _test_real_footer(won: bool, load_ended := false) -> void:
 	for path in [game.records_path, game.best_path, game.save_path, game.checkpoint_path]:
 		_remove_test_save(path)
 	_dispose(game)
+
+
+func _tool_key(game: VaultGame, key: Key) -> void:
+	# Use physical key events in the production handler (including InputMap actions).
+	# Release too, so these model separate presses rather than held-key repeats.
+	for pressed in [true, false]:
+		var event := InputEventKey.new()
+		event.physical_keycode = key
+		event.pressed = pressed
+		game._unhandled_input(event)
+
+
+func _assert_ended_tool_hotkeys(game: VaultGame, kind: String) -> void:
+	var expected := "SHIFT ENDED // LOAD LAST CHECKPOINT, NEW WING or REPLAY WING"
+	for key: Key in [KEY_E, KEY_X, KEY_ESCAPE]:
+		var label := "real %s hotkey %s" % [kind, OS.get_keycode_string(key)]
+		_tool_key(game, key)
+		var elapsed := 0.0
+		for delta in [0.0, 3.9, 0.2]:
+			elapsed += delta
+			game._process(delta)
+			_assert_footer(game, expected, "%s at %.1fs" % [label, elapsed])
+		# A fresh failure must survive the same key without losing its serial or timer.
+		_remove_test_save(game.save_path)
+		_press_outcome_action(game, "LOAD LAST CHECKPOINT")
+		_tool_key(game, key)
+		elapsed = 0.0
+		for delta in [0.0, 3.9, 0.2]:
+			elapsed += delta
+			game._process(delta)
+			_assert_footer(game, "%s // No local save exists yet." % game.active_tool.to_upper(), "%s failed LOAD at %.1fs" % [label, elapsed])
+			_assert_almost(game.status_message_left, 5.0 - elapsed, label + " preserves the LOAD countdown")
+		game._process(1.0)
+		_assert_footer(game, expected, label + " after LOAD expiry")
+	# UI buttons and programmatic callers share the same set_tool guard.
+	game.set_tool("air")
+	game._process(0.0)
+	_assert_footer(game, expected, "real " + kind + " direct tool selection")
+
+
+func _test_legacy_tool_hotkeys() -> void:
+	for won in [true, false]:
+		var game := _spawn_game()
+		game.new_game(false, 0)
+		for binding in [[KEY_E, "dig"], [KEY_X, "cancel"], [KEY_ESCAPE, "select"]]:
+			_tool_key(game, binding[0])
+			_assert_equal(game.active_tool, binding[1], "physical key dispatch selects " + binding[1] + " while live")
+		if won:
+			game._finish_win()
+		else:
+			game._finish_loss()
+		game._process(4.1)
+		for key: Key in [KEY_E, KEY_X, KEY_ESCAPE]:
+			_tool_key(game, key)
+			var elapsed := 0.0
+			for delta in [0.0, 3.9, 0.2]:
+				elapsed += delta
+				game._process(delta)
+				_assert_footer(game, "SHIFT ENDED // LOAD LAST CHECKPOINT or NEW WING", "legacy %s hotkey %s at %.1fs" % ["win" if won else "loss", OS.get_keycode_string(key), elapsed])
+		_dispose(game)
 
 
 func _assert_successful_ended_load(game: VaultGame, kind: String) -> void:
