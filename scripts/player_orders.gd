@@ -278,7 +278,9 @@ func _build_interface() -> void:
 	reclaim_button.custom_minimum_size.y = 24
 	reclaim_button.add_theme_font_size_override("font_size", 13)
 	reclaim_button.tooltip_text = "Optional: start reclaiming the sealed wing for salvage (+%d now, +%d every %d s, %d times)." % [VaultGame.RECLAIM_START_SALVAGE, VaultGame.RECLAIM_DELIVERY, roundi(VaultGame.RECLAIM_INTERVAL), VaultGame.RECLAIM_DELIVERIES]
-	reclaim_button.pressed.connect(func() -> void: game.start_reclamation())
+	reclaim_button.pressed.connect(func() -> void:
+		if not game.toggle_cook_reclamation():
+			game.start_reclamation())
 	wing_orders_box.add_child(reclaim_button)
 	for order_id: String in VaultGame.WING_ORDER_IDS:
 		var row := Button.new()
@@ -3389,6 +3391,12 @@ func _refresh_alerts(step: Dictionary) -> void:
 	var cache_notice := game.supply_cache_alert()
 	if not cache_notice.is_empty():
 		alerts.append(cache_notice)
+	var cook_notice := game.cook_auto_alert()
+	if not cook_notice.is_empty():
+		alerts.append(cook_notice)
+	var reclaim_notice := game.cook_auto_reclaim_alert()
+	if not reclaim_notice.is_empty():
+		alerts.append(reclaim_notice)
 	all_alerts = _order_alerts_by_urgency(alerts)
 	for alert: String in all_alerts:
 		if not _alert_stated_by_next(alert, step):
@@ -5032,6 +5040,15 @@ func _food_nudge_active() -> bool:
 	return _salvage_food_crisis_live()
 
 
+# Cook auto food step: the same food-short test the Spend nudge uses.
+func cook_food_short() -> bool:
+	return _food_nudge_active()
+
+
+func food_plan_lead_kind() -> int:
+	return _food_plan_lead_kind()
+
+
 # The food build the card leads with, when it is shown and tappable; else -1.
 func _food_card_offer_kind() -> int:
 	if not game.food_plan_pending() or game.keep_running or game.breach_system.phase == BreachSystem.Phase.WARNING:
@@ -5142,6 +5159,10 @@ func reclaim_button_text() -> String:
 	var left := VaultGame.RECLAIM_DELIVERIES - game.reclaim_paid
 	if left <= 0:
 		return "Reclamation complete"
+	if game.reclaim_paused:
+		return "Reclamation paused · tap to resume · %d left" % left
+	if game.cook_auto_started_reclaim:
+		return "Cook's reclamation · tap to pause · %d left" % left
 	return "Reclamation · +%d in %d s · %d left" % [VaultGame.RECLAIM_DELIVERY, ceili(game.reclaim_seconds_to_next()), left]
 
 
@@ -5149,7 +5170,7 @@ func _refresh_reclaim_button() -> void:
 	if reclaim_button == null:
 		return
 	reclaim_button.text = reclaim_button_text()
-	reclaim_button.disabled = not game.can_start_reclamation()
+	reclaim_button.disabled = not game.can_start_reclamation() and not game.cook_reclaim_tappable()
 
 
 func _wing_order_target(order_id: String) -> VaultBuilding:

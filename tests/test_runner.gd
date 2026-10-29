@@ -2588,6 +2588,9 @@ func _test_atomic_save_recovery() -> void:
 
 func _test_unmanaged_loss() -> void:
 	var game := _spawn_game()
+	# Unmanaged means no Cook help either: veto the Cook's auto food step (as if each Cook blueprint was cancelled).
+	for kind_id in VaultGame.COOK_AUTO_CHAIN:
+		game.cook_auto_vetoed[kind_id] = true
 	game.begin_shift()
 	var step_limit := int(round(DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE / VaultGame.SIMULATION_TICK))
 	for _tick: int in step_limit:

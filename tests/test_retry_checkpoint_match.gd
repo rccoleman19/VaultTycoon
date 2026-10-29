@@ -36,6 +36,9 @@ func _test_cross_wing(with_cache := true) -> void:
 		var legacy := game.create_snapshot()
 		legacy.erase(VaultGame.SUPPLY_CACHE_KEY)
 		_assert_true(game.apply_snapshot(legacy), "the no-cache control loads a legacy wing")
+		if "cook_auto_vetoed" in game:
+			for kind_id in VaultGame.COOK_AUTO_CHAIN:
+				game.cook_auto_vetoed[kind_id] = true
 	_idle_until(game, 185.1)
 	_assert_true(game.outcome == "" and game.residents[0].alive, "wing A is still live at the ordinary player save")
 	_assert_equal(game.residents[0].resident_name, "Ari", "the real idle fixture follows Ari")
@@ -52,6 +55,10 @@ func _test_cross_wing(with_cache := true) -> void:
 		_assert_approximately(float(wing_b.snapshot.day.elapsed_seconds), 0.0, 0.0001, "B's checkpoint is day one")
 	var checkpoint_bytes := _checkpoint_files()
 	_assert_true(game.load_game(_player_path), "ordinary Load restores A after B replaced the checkpoint")
+	# The Cook's veto is not saved: re-veto so the loaded wing stays idle.
+	if "cook_auto_vetoed" in game:
+		for kind_id in VaultGame.COOK_AUTO_CHAIN:
+			game.cook_auto_vetoed[kind_id] = true
 	_assert_equal(_checkpoint_files(), checkpoint_bytes, "Load never overwrites the foreign checkpoint")
 	_assert_equal(game.wing_seed, 4242, "Load restores A's seed")
 	_assert_equal(game.sublevel, 5, "Load restores A's sublevel")

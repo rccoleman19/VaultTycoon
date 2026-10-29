@@ -134,6 +134,9 @@ func _advance_idle_to_outcome(game: VaultGame) -> void:
 
 
 func _idle_until_death(game: VaultGame) -> void:
+	# A truly idle wipe: the Cook's auto food step is vetoed (as if each Cook blueprint was cancelled).
+	for kind in VaultGame.COOK_AUTO_CHAIN:
+		game.cook_auto_vetoed[kind] = true
 	game.begin_shift()
 	_advance_idle_to_outcome(game)
 	_assert_equal(game.outcome, "death", "untouched level-05 supplies reach a real death before the tick cap")

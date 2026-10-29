@@ -206,6 +206,10 @@ func _test_real_footer(won: bool, load_ended := false, tool_hotkeys := false) ->
 	root.add_child(game)
 	# Seed 45 leaves all twelve route cells as rock and warns naturally at 60 s.
 	game.new_game(false, 45)
+	if not won:
+		# The real loss stays idle: veto the Cook's auto food step (as if each Cook blueprint was cancelled).
+		for kind_id in VaultGame.COOK_AUTO_CHAIN:
+			game.cook_auto_vetoed[kind_id] = true
 	game.begin_shift()
 	var live_checkpoint := game.create_snapshot()
 	if won:

@@ -132,6 +132,10 @@ func _game(sublevel := 3, relay := false, tutorial := false, observe_tips := fal
 	if relay:
 		game.equipped_perk = VaultGame.PERK_RELAY_LUMEN
 	game.new_game(tutorial, 4242, sublevel)
+	# These replays play idle: veto the Cook's auto food step (as if each Cook blueprint was cancelled).
+	if "cook_auto_vetoed" in game:
+		for kind_id in VaultGame.COOK_AUTO_CHAIN:
+			game.cook_auto_vetoed[kind_id] = true
 	_frame = 0
 	_breach_seen_frame = -1
 	_frame_accumulator = 0.0

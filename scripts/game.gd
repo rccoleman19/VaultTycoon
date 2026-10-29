@@ -228,10 +228,17 @@ const RECLAIM_DELIVERY := 18
 const RECLAIM_INTERVAL := 30.0
 const RECLAIM_DELIVERIES := 6
 var reclaim_active := false
+# A player tap on the reclaim button pauses reclamation the Cook started (not saved: a load resumes).
+var reclaim_paused := false
 var keep_running := false
 var keep_running_seconds := 0.0
 # Annex (north star slice 2): one keep-running project fed with meals above a reserve plus salvage.
 const ANNEX_KEY := "annex"
+# Cook auto food step ownership survives Save/LOAD: the Cook's blueprint ids (so a Cancel after LOAD
+# still vetoes), the vetoed kinds, the once-per-shortage flag and Cook-started reclamation state.
+# Written only when the Cook has acted; older saves without it load as before (no ownership).
+const COOK_AUTO_KEY := "cook_auto"
+const COOK_AUTO_VERSION := 1
 const ANNEX_VERSION := 1
 const ANNEX_MEALS := 30
 const ANNEX_SALVAGE := 150
@@ -396,6 +403,7 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 	wing_orders_claimed.clear()
 	_reset_reclamation()
 	_reset_keep_running()
+	_reset_cook_auto()
 	_spawn_starting_fixture(VaultBuilding.Kind.GENERATOR, Vector2i(24, 15), true)
 	# Ladder QA: 04 DARK START with no Lumen at all was 1/6 (mood 0 by 60 s); an unbuilt one is 6/6.
 	if sublevel == 4:
@@ -473,6 +481,7 @@ func _simulation_step(delta_seconds: float) -> void:
 	# Sample the actual live Next selector before damage can kill its named resident.
 	# This runs for manual/headless steps too, independently of UI refreshes.
 	player_orders.record_survival_tip(delta_seconds)
+	_advance_cook_auto_food(delta_seconds)
 	for resident in residents:
 		if not resident.alive:
 			continue
@@ -623,6 +632,7 @@ func issue_order(cell: Vector2i) -> bool:
 			return true
 		var blueprint := get_building_at(cell)
 		if blueprint != null and not blueprint.complete:
+			_cook_auto_note_cancel(blueprint)
 			return _remove_building(blueprint, blueprint.delivered, "Blueprint canceled; delivered salvage refunded.")
 		return false
 	if BUILD_KIND_BY_TOOL.has(active_tool):
@@ -815,6 +825,7 @@ func is_upgrade_unlocked(kind: int) -> bool:
 
 func _reset_reclamation() -> void:
 	reclaim_active = false
+	reclaim_paused = false
 	reclaim_elapsed = 0.0
 	reclaim_paid = 0
 
@@ -843,7 +854,7 @@ func reclaim_seconds_to_next() -> float:
 
 
 func _advance_reclamation(delta_seconds: float) -> void:
-	if not reclaim_active or ended or reclaim_paid >= RECLAIM_DELIVERIES:
+	if not reclaim_active or reclaim_paused or ended or reclaim_paid >= RECLAIM_DELIVERIES:
 		return
 	reclaim_elapsed += delta_seconds
 	while reclaim_paid < RECLAIM_DELIVERIES and reclaim_elapsed >= float(reclaim_paid + 1) * RECLAIM_INTERVAL - 0.0001:
@@ -1215,6 +1226,9 @@ func create_snapshot() -> Dictionary:
 			"reserve": annex_reserve,
 			"done": annex_done,
 		}
+	var cook_state := _cook_auto_snapshot()
+	if not cook_state.is_empty():
+		snapshot[COOK_AUTO_KEY] = cook_state
 	return snapshot
 
 
@@ -1317,6 +1331,9 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 		reclaim_paid = int(snapshot[RECLAIM_KEY].paid)
 	idle_start_stage = int(snapshot[IDLE_START_KEY].stage) if snapshot.has(IDLE_START_KEY) else 0
 	_reset_keep_running()
+	_reset_cook_auto()
+	if snapshot.has(COOK_AUTO_KEY):
+		_restore_cook_auto(snapshot[COOK_AUTO_KEY])
 	if snapshot.has(KEEP_RUNNING_KEY):
 		keep_running = true
 		keep_running_seconds = float(snapshot[KEEP_RUNNING_KEY].seconds)
@@ -1662,6 +1679,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 			return false
 		if bool(annex.done) and (int(annex.meals) < ANNEX_MEALS or int(annex.salvage) < ANNEX_SALVAGE):
 			return false
+	if snapshot.has(COOK_AUTO_KEY) and not _valid_cook_auto_snapshot(snapshot[COOK_AUTO_KEY]):
+		return false
 	if snapshot.has("wing_orders"):
 		var orders: Variant = snapshot.wing_orders
 		if not orders is Dictionary or not orders.get("claimed") is Array:
@@ -2908,6 +2927,258 @@ func apply_food_plan(lead_kind: int = -1) -> bool:
 	status_message = FOOD_PLAN_STATUS
 	status_message_left = 5.0
 	return true
+
+
+# Cook auto food step: an idle vault never places a fixture, so with food short the Cook takes one
+# food step per shortage episode (re-armed once cook_food_short() clears): one tap's worth, the whole
+# missing chain (Charge Node when planned power is short, Station, Grow Tray) or nothing, since a
+# lone piece raises no food. Paid only from food_plan_spendable() (salvage minus the hatch reserve
+# and queued unpaid costs). Never while anyone is critical (air critical, or a fed resident at
+# <= COOK_AUTO_MEDICAL_HP). Air/power order (QA-d #8): after the seal (before it only for a resident
+# at 0 food, never in a WARNING/OPEN hatch), never while an Air Recycler is unfinished or air is low
+# without a powered recycler. After the seal, when only salvage blocks the step, the Cook starts
+# reclamation (alert "Cook started reclamation"). The player wins: a player food blueprint makes the
+# Cook wait, cancelling a Cook blueprint stops that kind, and a reclaim-button tap pauses the Cook's
+# reclamation.
+const COOK_AUTO_ALERT := "Cook queued %s"
+const COOK_AUTO_CHECK_SECONDS := 1.0
+const COOK_AUTO_CHAIN := [VaultBuilding.Kind.GENERATOR, VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GROW_TRAY]
+var cook_auto_building_id := -1
+var cook_auto_building_ids: Array[int] = []
+var cook_auto_vetoed: Dictionary = {}
+var cook_auto_episode_used := false
+var cook_auto_started_reclaim := false
+var _cook_auto_reclaim_alert_left := 0.0
+var _cook_auto_wait := 0.0
+
+
+func _reset_cook_auto() -> void:
+	cook_auto_building_id = -1
+	cook_auto_building_ids.clear()
+	cook_auto_vetoed.clear()
+	cook_auto_episode_used = false
+	cook_auto_started_reclaim = false
+	_cook_auto_reclaim_alert_left = 0.0
+	_cook_auto_wait = 0.0
+
+
+func _cook_auto_snapshot() -> Dictionary:
+	if cook_auto_building_ids.is_empty() and cook_auto_vetoed.is_empty() and not cook_auto_episode_used \
+			and not cook_auto_started_reclaim and not reclaim_paused:
+		return {}
+	var vetoed: Array = []
+	for kind: Variant in cook_auto_vetoed:
+		vetoed.append(int(kind))
+	vetoed.sort()
+	return {
+		"version": COOK_AUTO_VERSION,
+		"ids": cook_auto_building_ids.duplicate(),
+		"vetoed": vetoed,
+		"episode": cook_auto_episode_used,
+		"started_reclaim": cook_auto_started_reclaim,
+		"paused": reclaim_paused,
+		"alert_left": _cook_auto_reclaim_alert_left,
+	}
+
+
+func _valid_cook_auto_snapshot(data: Variant) -> bool:
+	if not data is Dictionary or not _is_integer_in_range(data.get("version"), COOK_AUTO_VERSION, COOK_AUTO_VERSION):
+		return false
+	for list_key in ["ids", "vetoed"]:
+		if not data.get(list_key) is Array:
+			return false
+		for value: Variant in data[list_key]:
+			if not _is_integer_in_range(value, 0, 1 << 30):
+				return false
+	for flag in ["episode", "started_reclaim", "paused"]:
+		if typeof(data.get(flag)) != TYPE_BOOL:
+			return false
+	var left: Variant = data.get("alert_left")
+	return typeof(left) in [TYPE_INT, TYPE_FLOAT] and is_finite(float(left)) and float(left) >= 0.0 \
+		and float(left) <= COOK_AUTO_RECLAIM_ALERT_SECONDS
+
+
+# Restore runs after buildings and reclamation are restored; ids that no longer exist are dropped.
+func _restore_cook_auto(data: Dictionary) -> void:
+	for id: Variant in data.ids:
+		if get_building_by_id(int(id)) != null:
+			cook_auto_building_ids.append(int(id))
+	cook_auto_building_id = cook_auto_building_ids[0] if not cook_auto_building_ids.is_empty() else -1
+	for kind: Variant in data.vetoed:
+		cook_auto_vetoed[int(kind)] = true
+	cook_auto_episode_used = bool(data.episode)
+	cook_auto_started_reclaim = bool(data.started_reclaim) and reclaim_active
+	reclaim_paused = bool(data.paused) and reclaim_active
+	_cook_auto_reclaim_alert_left = float(data.alert_left) if cook_auto_started_reclaim else 0.0
+
+
+func _advance_cook_auto_food(delta_seconds: float) -> void:
+	_cook_auto_reclaim_alert_left = maxf(0.0, _cook_auto_reclaim_alert_left - delta_seconds)
+	_cook_auto_wait -= delta_seconds
+	if _cook_auto_wait > 0.0:
+		return
+	_cook_auto_wait = COOK_AUTO_CHECK_SECONDS
+	if not ended and not player_orders.cook_food_short():
+		cook_auto_episode_used = false
+	var kinds := cook_auto_plan()
+	if kinds.is_empty() and _cook_auto_wants_reclamation():
+		if start_reclamation():
+			cook_auto_started_reclaim = true
+			_cook_auto_reclaim_alert_left = COOK_AUTO_RECLAIM_ALERT_SECONDS
+		kinds = cook_auto_plan()
+	if kinds.is_empty():
+		return
+	var cells := _annex_free_cells(kinds.size())
+	if cells.size() < kinds.size():
+		return
+	var message := status_message
+	var left := status_message_left
+	var placed: Array[int] = []
+	for index in kinds.size():
+		var before := buildings.size()
+		if place_blueprint(kinds[index], cells[index]) and buildings.size() > before:
+			placed.append(buildings[-1].building_id)
+	if placed.is_empty():
+		return
+	cook_auto_episode_used = true
+	cook_auto_building_ids = placed
+	cook_auto_building_id = placed[0]
+	status_message = message
+	status_message_left = left
+
+
+# The first build the Cook would queue right now, or -1.
+func cook_auto_step() -> int:
+	var kinds := cook_auto_plan()
+	return -1 if kinds.is_empty() else kinds[0]
+
+
+# The Cook's one food step for this shortage episode: every missing food-plan build plus a
+# Charge Node when planned power cannot carry them, queued together or not at all (a lone
+# Charge Node or an unfed Station raises no food). Empty when gated (see the block comment).
+func cook_auto_plan() -> Array[int]:
+	var empty: Array[int] = []
+	var kinds := _cook_auto_needed()
+	if kinds.is_empty() or food_plan_spendable() < _cook_auto_cost(kinds):
+		return empty
+	return kinds
+
+
+func _cook_auto_needed() -> Array[int]:
+	var empty: Array[int] = []
+	if ended or alive_count_is_zero() or cook_auto_episode_used or not player_orders.cook_food_short():
+		return empty
+	if cook_auto_crew_critical():
+		return empty
+	if not breach_system.is_sealed() and (breach_system.phase != BreachSystem.Phase.DORMANT or not _cook_auto_anyone_starving()):
+		return empty
+	if annex_waiting_for_room():
+		return empty
+	for building in buildings:
+		if building.complete:
+			continue
+		if building.kind == VaultBuilding.Kind.AIR_RECYCLER or COOK_AUTO_CHAIN.has(building.kind):
+			return empty
+	if oxygen_system.is_low() and not is_air_ready():
+		return empty
+	if not food_plan_pending():
+		return empty
+	var kinds := food_plan_kinds()
+	for kind in kinds:
+		if cook_auto_vetoed.has(kind):
+			return empty
+	return kinds
+
+
+func _cook_auto_cost(kinds: Array[int]) -> int:
+	var cost := 0
+	for kind in kinds:
+		cost += int(VaultBuilding.COSTS[kind])
+	return cost
+
+
+# After the seal, when the step is gated only by salvage, the Cook starts reclamation (free:
+# +18 now and +18 every 30 s) rather than leave the crew starving with an unreachable Grow Tray.
+func _cook_auto_wants_reclamation() -> bool:
+	var kinds := _cook_auto_needed()
+	return not kinds.is_empty() and breach_system.is_sealed() and can_start_reclamation()
+
+
+# "Cook started reclamation" shows for COOK_AUTO_RECLAIM_ALERT_SECONDS after the Cook starts it.
+const COOK_AUTO_RECLAIM_ALERT := "Cook started reclamation"
+const COOK_AUTO_RECLAIM_ALERT_SECONDS := 10.0
+
+
+func cook_auto_reclaim_alert() -> String:
+	if ended or not cook_auto_started_reclaim or reclaim_paused or _cook_auto_reclaim_alert_left <= 0.0:
+		return ""
+	return COOK_AUTO_RECLAIM_ALERT
+
+
+# The player's tap wins: the reclaim button pauses reclamation the Cook started (it stays active,
+# so the Cook cannot start it again), and a second tap resumes it as the player's own choice.
+func cook_reclaim_tappable() -> bool:
+	return not ended and reclaim_active and (reclaim_paused or cook_auto_started_reclaim) and reclaim_paid < RECLAIM_DELIVERIES
+
+
+func toggle_cook_reclamation() -> bool:
+	if not cook_reclaim_tappable():
+		return false
+	if reclaim_paused:
+		reclaim_paused = false
+		status_message = "Reclamation resumed."
+	else:
+		reclaim_paused = true
+		cook_auto_started_reclaim = false
+		_cook_auto_reclaim_alert_left = 0.0
+		status_message = "Reclamation paused; the Cook will not restart it."
+	status_message_left = 4.0
+	return true
+
+
+# Option (a): no Cook build while anyone is critical: air at the critical line, or a living
+# resident at or below COOK_AUTO_MEDICAL_HP health while not starving (starvation is what the
+# food step treats, so it does not count as a medical emergency).
+const COOK_AUTO_MEDICAL_HP := 50.0
+
+
+func cook_auto_crew_critical() -> bool:
+	if oxygen_system.is_critical():
+		return true
+	for resident in residents:
+		if resident.alive and resident.needs.food > 0.0 and resident.needs.health <= COOK_AUTO_MEDICAL_HP:
+			return true
+	return false
+
+
+# Before the seal the Cook acts only for a resident already at 0 food, and still holds the patch reserve.
+func _cook_auto_anyone_starving() -> bool:
+	for resident in residents:
+		if resident.alive and resident.needs.food <= 0.0:
+			return true
+	return false
+
+
+func alive_count_is_zero() -> bool:
+	return get_alive_count() <= 0
+
+
+# One alert line while the Cook's own blueprint is still unbuilt; "" otherwise.
+func cook_auto_alert() -> String:
+	if ended:
+		return ""
+	for building_id in cook_auto_building_ids:
+		var building := get_building_by_id(building_id)
+		if building != null and not building.complete:
+			return COOK_AUTO_ALERT % building.get_display_name()
+	return ""
+
+
+func _cook_auto_note_cancel(building: VaultBuilding) -> void:
+	if building != null and cook_auto_building_ids.has(building.building_id):
+		cook_auto_vetoed[building.kind] = true
+		cook_auto_building_ids.erase(building.building_id)
+		cook_auto_building_id = cook_auto_building_ids[0] if not cook_auto_building_ids.is_empty() else -1
 
 
 # Feast (north star slice 5): surplus meals become morale. At each keep-running day rollover, with

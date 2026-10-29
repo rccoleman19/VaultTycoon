@@ -147,9 +147,10 @@ func _test_recap_matches_sidebar() -> void:
 	var game := _game(26, true)
 	var name := _starve(game, 1)
 	_assert_true("YOU place a Nutrient Station" in _next(game), "fixture: first warning says Station: %s" % _next(game))
+	# The player taps before the sim runs; otherwise the Cook (auto food step) queues first.
+	_press(game)
 	game.user_paused = false
 	game.step_simulation(1.0)
-	_press(game)
 	game.player_orders.refresh()
 	var offered := _card_build(game)
 	_assert_equal(offered, "Grow Tray", "fixture: with the Station queued the sidebar offers the Grow Tray: %s" % _button(game).text)
