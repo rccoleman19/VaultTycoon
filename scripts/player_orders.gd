@@ -2552,12 +2552,23 @@ func _hatch_reserve_step(step: Dictionary) -> Dictionary:
 		return step
 	var owed := game.food_plan_patch_owed()
 	var held := step.duplicate(true)
+	var queued := game.queued_build_commitment()
+	var cost := int(VaultBuilding.COSTS[kind])
+	var free := maxi(0, game.food_plan_spendable())
+	var kind_name: String = VaultBuilding.KIND_NAMES[kind]
+	var kept: PackedStringArray = []
 	if owed > 0:
 		held.text = prefix + "YOU save %d for the hatch patch · THEY dig salvage" % owed
+		kept.append("%d salvage for the hatch patch" % owed)
+	elif queued > 0:
+		held.text = prefix + "YOU save %d for the queued builds · THEY finish them" % queued
 	else:
-		held.text = prefix + "YOU save %d for the queued builds · THEY finish them" % game.queued_build_commitment()
-	held.help = "Before the seal, keep %d salvage for the hatch patch and %d for queued builds. %s costs %d; only %d is free. Place it after the seal." % [
-		owed, game.queued_build_commitment(), VaultBuilding.KIND_NAMES[kind], int(VaultBuilding.COSTS[kind]), maxi(0, game.food_plan_spendable())]
+		# Patch paid and nothing queued: the only shortfall is this build's own cost.
+		held.text = prefix + "YOU need %d more salvage for the %s · THEY dig salvage" % [cost - free, kind_name]
+	if queued > 0:
+		kept.append("%d for queued builds" % queued)
+	var keep := ("Before the seal, keep %s. " % " and ".join(kept)) if not kept.is_empty() else "The hatch patch is paid. "
+	held.help = "%s%s costs %d; only %d is free. Place it after the seal." % [keep, kind_name, cost, free]
 	held.tool = "select"
 	held.erase("action")
 	_next_reclamation_kind = -1
@@ -3629,11 +3640,36 @@ func _alert_line_text(visible_count: int) -> String:
 	for alert: String in alert_list.slice(0, visible_count):
 		# Internal spaces (including those around an internal dot) never wrap.
 		clauses.append(alert.replace(" ", "\u00a0"))
+	if not clauses.is_empty():
+		clauses[0] = _break_overwide_clause(clauses[0])
 	var hidden := alert_list.size() - visible_count
 	if hidden > 0:
 		clauses.append("+%d\u00a0more" % hidden)
 	# Only the separators between complete clauses offer line breaks.
 	return "  ·  ".join(clauses)
+
+
+# A first clause wider than the rail (e.g. "BREACH OPEN · O2 VENTING · ENABLE CRAFT [P]" at
+# 310 px) breaks at its own " · " separators instead of overflowing the right edge.
+func _break_overwide_clause(clause: String) -> String:
+	var width := alert_label.size.x
+	if width <= 0.0:
+		return clause
+	var font := alert_label.get_theme_font("font")
+	var font_size := alert_label.get_theme_font_size("font_size")
+	if font.get_string_size(clause, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x <= width:
+		return clause
+	var lines: PackedStringArray = []
+	var line := ""
+	for part: String in clause.split("\u00a0·\u00a0"):
+		var candidate := line + "\u00a0·\u00a0" + part if not line.is_empty() else part
+		if not line.is_empty() and font.get_string_size(candidate, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > width:
+			lines.append(line)
+			line = part
+		else:
+			line = candidate
+	lines.append(line)
+	return "\n".join(lines)
 
 
 func _wrap_alert_line(text: String) -> String:
@@ -3646,7 +3682,9 @@ func _wrap_alert_line(text: String) -> String:
 	var line := ""
 	for clause: String in text.split("  ·  "):
 		var candidate := line + "  ·  " + clause if not line.is_empty() else clause
-		if not line.is_empty() and font.get_string_size(candidate, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > width:
+		# Measure only the rendered last line (a broken first clause already holds newlines).
+		var last_line := candidate.get_slice("\n", candidate.count("\n"))
+		if not line.is_empty() and font.get_string_size(last_line, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > width:
 			lines.append(line)
 			line = clause
 		else:

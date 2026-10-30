@@ -10,6 +10,7 @@ func _run() -> void:
 	await _frame_case("busy real scene stays within two rendered lines at 1280x720", _test_layout)
 	await _frame_case("countdown ticks preserve text width and wrapping", _test_countdown)
 	await _frame_case("CRITICAL: Bo and internal dots never split across rendered lines", _test_clause_boundaries)
+	await _frame_case("an overwide breach lead wraps at its dots on 310/330/360 px panels", _test_breach_lead_width)
 	await _frame_case("an overwide second clause folds into +N and DETAILS", _test_fold)
 	await _frame_case("a second clause that needs a third line folds too", _test_line_budget)
 	await _frame_case("the theme font stays fixed through refresh and resize", _test_fixed_font)
@@ -80,7 +81,7 @@ func _assert_bar(orders: PlayerOrders, context: String) -> void:
 		expected += "  ·  +%d more" % hidden
 	if alerts.is_empty():
 		expected = "STATUS NOMINAL" if orders.all_alerts.is_empty() else "SEE NEXT"
-	_assert_equal(orders.alert_label.text.replace("\u00a0", " ").replace("\n", "  ·  "), expected, "%s: exact leading clauses and +%d more" % [context, hidden])
+	_assert_equal(_bar_text(orders), expected, "%s: exact leading clauses and +%d more" % [context, hidden])
 	_assert_equal(orders.alert_more_label.text, "\n".join(alerts.slice(shown)), "%s: DETAILS contains exactly the dropped clauses" % context)
 
 
@@ -227,17 +228,28 @@ func _assert_whole_lines(orders: PlayerOrders, context: String) -> void:
 	if clauses.is_empty():
 		clauses.append("STATUS NOMINAL" if orders.all_alerts.is_empty() else "SEE NEXT")
 	var plain := label.text.replace("\u00a0", " ")
+	# An overwide lead may break only at its own " · " (a "\n" in the text).
+	var lead_end := _lead_length(plain, clauses[0])
+	if lead_end <= 0 or not "\n" in plain.substr(0, lead_end):
+		lead_end = -1
+	var lead_breaks: Array[int] = []
+	if lead_end > 0:
+		for i in lead_end:
+			if plain[i] == "\n":
+				lead_breaks.append(i)
+		_assert_true(font_width(label, clauses[0]) > label.size.x, "%s: only a lead wider than the rail breaks inside" % context)
 	var cursor := 0
-	for clause: String in clauses:
-		var start := plain.find(clause, cursor)
+	for index in clauses.size():
+		var clause: String = clauses[index]
+		var start := 0 if index == 0 and lead_end > 0 else plain.find(clause, cursor)
 		_assert_true(start >= 0, "%s: whole clause is present: %s" % [context, clause])
 		if start < 0:
 			continue
-		var end := start + clause.length()
+		var end := lead_end if index == 0 and lead_end > 0 else start + clause.length()
 		for line in paragraph.get_line_count():
 			var span := paragraph.get_line_range(line)
-			_assert_false(span.x > start and span.x < end, "%s: line %d starts inside %s" % [context, line, clause])
-			_assert_false(span.y > start and span.y < end, "%s: line %d ends inside %s" % [context, line, clause])
+			_assert_false(span.x > start and span.x < end and not (span.x - 1) in lead_breaks, "%s: line %d starts inside %s" % [context, line, clause])
+			_assert_false(span.y > start and span.y < end and not span.y in lead_breaks and not (span.y - 1) in lead_breaks, "%s: line %d ends inside %s" % [context, line, clause])
 		cursor = end
 	for line in paragraph.get_line_count():
 		var span := paragraph.get_line_range(line)
@@ -246,7 +258,10 @@ func _assert_whole_lines(orders: PlayerOrders, context: String) -> void:
 		_assert_false(rendered.ends_with("·"), "%s: rendered line %d ends without a separator: %s" % [context, line, rendered])
 		var on_line: Array[String] = []
 		cursor = 0
-		for clause: String in clauses:
+		if lead_end > 0 and span.x < lead_end:
+			on_line.append(plain.substr(span.x, mini(span.y, lead_end) - span.x).strip_edges())
+			cursor = lead_end
+		for clause: String in clauses.slice(1 if lead_end > 0 else 0):
 			var start := plain.find(clause, cursor)
 			if start >= span.x and start + clause.length() <= span.y:
 				on_line.append(clause)
@@ -254,6 +269,40 @@ func _assert_whole_lines(orders: PlayerOrders, context: String) -> void:
 		_assert_equal(rendered, "  ·  ".join(on_line), "%s: rendered line %d retains separators exactly between its clauses" % [context, line])
 		_same_line_separators += maxi(0, on_line.size() - 1)
 	_separator_wraps += maxi(0, paragraph.get_line_count() - 1)
+
+
+# A first clause wider than the rail may break at its own " · " separators ("\n" in the
+# text). Returns the length of that rendered lead in `plain`, or -1 if `plain` doesn't start
+# with it.
+static func _lead_length(plain: String, lead: String) -> int:
+	var pieces := lead.split(" · ")
+	var pos := 0
+	for i in pieces.size():
+		if not plain.substr(pos).begins_with(pieces[i]):
+			return -1
+		pos += pieces[i].length()
+		if i < pieces.size() - 1:
+			if plain.substr(pos, 3) == " · ":
+				pos += 3
+			elif plain.substr(pos, 1) == "\n":
+				pos += 1
+			else:
+				return -1
+	return pos
+
+
+# The bar's clauses joined by "  ·  ", with the lead clause's own breaks restored to " · ".
+static func _bar_text(orders: PlayerOrders) -> String:
+	var plain := orders.alert_label.text.replace("\u00a0", " ")
+	if not orders.alert_list.is_empty():
+		var n := _lead_length(plain, orders.alert_list[0])
+		if n > 0:
+			plain = orders.alert_list[0] + plain.substr(n)
+	return plain.replace("\n", "  ·  ")
+
+
+static func font_width(label: Label, text: String) -> float:
+	return label.get_theme_font("font").get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, label.get_theme_font_size("font_size")).x
 
 
 func _set_clauses(orders: PlayerOrders, clauses: Array[String]) -> void:
@@ -286,11 +335,35 @@ func _test_clause_boundaries() -> void:
 	await _layout()
 	_assert_layout(orders, "reviewed CRITICAL: Bo boundary")
 	_assert_equal(orders.alert_hidden_count, 0, "two short whole clauses remain visible")
-	# A first clause wider than the rail still shows as one indivisible unit.
+	# A first clause wider than the rail breaks only at its own " · " and is never folded.
 	_set_clauses(orders, ["DRAFTED CREW 123 · AUTO WORK PAUSED UNTIL UNDRAFTED"])
 	await _layout()
 	_assert_layout(orders, "overwide first with internal dot")
 	_assert_equal(orders.alert_hidden_count, 0, "the first clause is never folded")
+	_dispose(game)
+
+
+# Codex 6530847810 on #140: at 1280 px the open-breach lead (369 px) ran off the 284 px rail.
+func _test_breach_lead_width() -> void:
+	var game := _game()
+	var orders := game.player_orders
+	var label := orders.alert_label
+	var panel := label.get_parent().get_parent().get_parent().get_parent() as Control
+	var lead := "BREACH OPEN · O2 VENTING · ENABLE CRAFT [P]"
+	for width in [310, 330, 360, 600]:
+		panel.offset_left = -width
+		_set_clauses(orders, [lead, "CRITICAL: Bo"])
+		await _layout()
+		var context := "breach lead on a %d px panel" % width
+		_assert_true(font_width(label, lead) > label.size.x or width == 600, "%s: the lead is wider than the %.0f px rail" % [context, label.size.x])
+		for line: String in label.text.replace("\u00a0", " ").split("\n"):
+			_assert_true(font_width(label, line) <= label.size.x, "%s: line fits (%.0f <= %.0f px): %s" % [context, font_width(label, line), label.size.x, line])
+		_assert_layout(orders, context)
+		_assert_equal(_bar_text(orders).begins_with(lead), true, "%s: the whole lead is shown, got %s" % [context, label.text])
+		if width == 600:
+			_assert_equal(label.get_line_count(), 1, "a rail that fits the lead keeps it on one line with CRITICAL: Bo")
+			_assert_false("\n" in label.text, "a lead that fits is not broken")
+	panel.offset_left = -VaultGame.RIGHT_PANEL_WIDTH
 	_dispose(game)
 
 
@@ -309,7 +382,7 @@ func _test_fold() -> void:
 	_assert_true(font.get_string_size(orders.alert_list[1], HORIZONTAL_ALIGNMENT_LEFT, -1,
 		orders.alert_label.get_theme_default_font_size()).x > orders.alert_label.size.x, "second clause is wider than the real rail")
 	_assert_equal(orders.alert_hidden_count, orders.alert_list.size() - 1, "folding increments +N by one")
-	_assert_equal(orders.alert_label.text.replace("\u00a0", " ").replace("\n", "  ·  "), "OXYGEN CRITICAL  ·  +%d more" % (orders.alert_list.size() - 1),
+	_assert_equal(_bar_text(orders), "OXYGEN CRITICAL  ·  +%d more" % (orders.alert_list.size() - 1),
 		"line shows first clause plus the incremented whole +N more")
 	orders._toggle_details_rail()
 	await _layout()
@@ -344,7 +417,7 @@ func _test_line_budget() -> void:
 	_assert_true(font.get_string_size(clause, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x <= label.size.x,
 		"each candidate clause fits individually")
 	_assert_equal(orders.alert_hidden_count, 2, "second clause folds when +N would need a third line")
-	_assert_equal(orders.alert_label.text.replace("\u00a0", " ").replace("\n", "  ·  "), clause + "  ·  +2 more", "two-line budget preserves the first and suffix")
+	_assert_equal(_bar_text(orders), clause + "  ·  +2 more", "two-line budget preserves the first and suffix")
 	_assert_layout(orders, "third-line budget")
 	_dispose(game)
 
