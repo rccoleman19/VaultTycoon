@@ -44,6 +44,8 @@ run_godot_check wing-orders --script res://tests/test_wing_orders.gd
 run_godot_check post-seal-pacing --script res://tests/test_post_seal_pacing.gd
 run_godot_check idle-start --script res://tests/test_idle_start.gd
 run_godot_check postseal-help --script res://tests/test_postseal_help.gd
+run_godot_check mk2-air-gate --script res://tests/test_mk2_air_gate.gd
+run_godot_check mk2-fit-gate --script res://tests/test_mk2_fit_gate.gd
 run_godot_check keep-running --script res://tests/test_keep_running.gd
 run_godot_check keep-running-food --script res://tests/test_keep_running_food.gd
 run_godot_check annex --script res://tests/test_annex.gd
