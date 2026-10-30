@@ -3636,16 +3636,30 @@ func _order_alerts_by_urgency(alerts: Array[String]) -> Array[String]:
 		ordered.insert(index, alert)
 	# Lethality tiers lead: air, then starvation, then critical HP, then the rest.
 	# Each tier keeps the deadline order above.
+	var air_deadline := _air_alert_deadline(ordered)
 	var tiered: Array[String] = []
 	for tier in 4:
 		for alert: String in ordered:
-			if _alert_lethality_tier(alert) == tier:
+			if _alert_lethality_tier(alert, air_deadline) == tier:
 				tiered.append(alert)
 	return tiered
 
 
-func _alert_lethality_tier(alert: String) -> int:
+# Earliest oxygen deadline among the alerts, or -INF when no oxygen alert is listed.
+func _air_alert_deadline(alerts: Array[String]) -> float:
+	var deadline := -INF
+	for alert: String in alerts:
+		if alert.begins_with("OXYGEN "):
+			var seconds := _alert_urgency_seconds(alert)
+			deadline = seconds if deadline == -INF else minf(deadline, seconds)
+	return deadline
+
+
+func _alert_lethality_tier(alert: String, air_deadline: float = -INF) -> int:
 	if alert.begins_with("OXYGEN "):
+		return 0
+	# A hatch that opens before the air runs out vents the air first: it joins the air tier.
+	if alert.begins_with("SEAL WARNING") and air_deadline != -INF and game.breach_system.get_time_to_open() < air_deadline:
 		return 0
 	if alert == "NO MEALS" or alert == "LOW MEALS" or alert.begins_with(STARVING_ALERT_PREFIX):
 		return 1

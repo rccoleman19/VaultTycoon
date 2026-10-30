@@ -124,7 +124,8 @@ func _test_order() -> void:
 	game.oxygen_system.oxygen = 30.0
 	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
 	orders._refresh_alerts({})
-	_assert_true(orders.alert_list[0].begins_with("OXYGEN "), "air still leads the hatch deadline (#139 lethality tiers)")
+	var air_first := game.breach_system.get_time_to_open() >= orders._alert_urgency_seconds(orders.alert_list.filter(func(a: String) -> bool: return a.begins_with("OXYGEN "))[0])
+	_assert_true(orders.alert_list[0].begins_with("OXYGEN " if air_first else "SEAL WARNING"), "the earlier of air and hatch leads the air tier [%s]" % orders.alert_list[0])
 	_assert_equal(orders.all_alerts, orders._order_alerts_by_urgency(orders.all_alerts), "changed deadlines still use existing triage")
 	_assert_bar(orders, "air first")
 	# Exercise the normal refresh path and its existing Next suppression too.
