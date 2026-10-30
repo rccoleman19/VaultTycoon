@@ -2385,7 +2385,8 @@ func _primary_next_step() -> Dictionary:
 		in_progress.append(str(NEXT_BUILD_PROGRESS_NAMES[kind]))
 		step = _primary_next_step_chain(suppressed_builds)
 	if in_progress.is_empty():
-		return _salvage_next_step(step)
+		var first_air := _post_seal_air_step(step, game.food_system.salvage - game.job_system.get_breach_salvage_reserve())
+		return _salvage_next_step(first_air if not first_air.is_empty() else step)
 	if step.is_empty():
 		step = {
 			"text": "Next: %s · THEY finish it" % _next_in_progress_suffix(in_progress).trim_prefix(" · "),
@@ -2617,6 +2618,42 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		step["action"] = "spend"
 		return step
 	return _next_spend_build(step, sink, prefix) if sink >= 0 else step
+
+
+# A single Mk I tray can feed a small crew before Air unlocks the next fits.
+# Offer that prerequisite during the ordinary bunk plateau, without an Idle wait.
+func _post_seal_air_step(step: Dictionary, spendable: int) -> Dictionary:
+	if not _is_bunk_place_step(step) or str(step.get("text", "")) != "Next: YOU place bunks · THEY craft" or game.ended or not game.breach_system.is_sealed() or not game.reclaim_active:
+		return {}
+	if _count_kind(VaultBuilding.Kind.AIR_RECYCLER) > 0 or spendable < int(VaultBuilding.COSTS[VaultBuilding.Kind.AIR_RECYCLER]):
+		return {}
+	if _blueprints_awaiting_salvage() > 0 or _count_kind(VaultBuilding.Kind.GROW_TRAY) != 1 or game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) == 0:
+		return {}
+	var tray: VaultBuilding
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			tray = building
+	if tray == null or not tray.complete or not tray.powered or tray.upgrade_tier != VaultBuilding.UPGRADE_TIER_BASE:
+		return {}
+	if DayCycle.SECONDS_PER_DAY / tray.get_grow_seconds() <= _crew_meals_per_day():
+		return {}
+	# Keep every current service, including optional Rec, powered after Air.
+	if game.power_grid.supply - game.power_grid.demand < int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.AIR_RECYCLER]):
+		if _unfinished_charge_count() > 0:
+			return _charge_finish_step()
+		if spendable >= int(VaultBuilding.COSTS[VaultBuilding.Kind.GENERATOR]):
+			return _next_spend_build(step, VaultBuilding.Kind.GENERATOR, "Next: ")
+		return {
+			"text": "Next: YOU place a Charge Node · THEY power the Air Recycler",
+			"help": "The grid lacks available power for the Air Recycler. Place a Charge Node to add 7 power.",
+			"tool": "generator",
+		}
+	return {
+		"text": "Next: YOU spend 14: build Air Recycler",
+		"help": "Place an Air Recycler blueprint on free floor. Keep Haul + Craft above OFF so crew supply and build it.",
+		"tool": "select",
+		"action": "spend",
+	}
 
 
 func _next_spend_build(step: Dictionary, sink: int, prefix: String) -> Dictionary:
