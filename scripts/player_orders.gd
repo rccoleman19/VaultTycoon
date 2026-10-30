@@ -3159,7 +3159,8 @@ func _refresh_objective() -> Dictionary:
 	if game.keep_running and not game.ended:
 		var kr_step := keep_running_next_step()
 		_remember_survival_tip(kr_step)
-		objective_label.text = str(kr_step.text)
+		# Same clock as the alert line (Codex 6531176283): the air step counts down here too.
+		objective_label.text = _with_air_countdown(str(kr_step.text))
 		objective_label.add_theme_color_override("font_color", Color("efc56b"))
 		_expand_details_on_urgency()
 		return kr_step
@@ -5700,6 +5701,9 @@ func keep_running_next_step() -> Dictionary:
 const KEEP_RUNNING_PASS := ["Air Recycler", "Nutrient Station", "Charge Node", "power", "Med Bed", "Rec Console"]
 # Steps classified by the diagnosis that produced them, so their wording never decides it.
 const STEP_KIND_FOOD := "food"
+# Every "<name> <condition>" prefix a resident step puts on Next (_resident_step); the follow
+# playtest driver reads this list so it acts on each of them.
+const NEXT_DANGER_CONDITIONS: Array[String] = ["starving", "suffocating", "low on air", "exhausted", "in despair"]
 const KEEP_RUNNING_PASS_KINDS := [STEP_KIND_FOOD]
 
 

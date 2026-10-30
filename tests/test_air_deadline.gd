@@ -10,12 +10,15 @@ extends "res://tests/test_air_early_warning.gd"
 const NextCountdown := preload("res://scripts/next_countdown.gd")
 const MEASURED_WIN_TAP_S := 250.0
 const MEASURED_LOSS_TAP_S := 258.0
+const FollowDriver := preload("res://tools/playtest/follow_driver.gd")
 
 
 func _run() -> void:
 	_run_case("idle 05 s8: the air alert counts down to the last safe tap, not to 35% or 15%", _test_deadline)
 	_run_case("idle 05 s8: the countdown escalates at 60 s and 30 s and survives O2 < 35%", _test_escalation)
 	_run_case("idle 05 s8: Next says 'suffocating' only while O2 is below 15%", _test_suffocating)
+	_run_case("idle 05 s8: the follow playtest acts on the 'low on air' Air Recycler step", _test_follow_low_on_air)
+	_run_case("keep running: Next counts down to the same air clock as the alert", _test_keep_running_clock)
 	_run_case("the flicker counter counts stage-word changes but not clock-only ticks", _test_flicker_counter)
 	print("")
 	if _failure_count == 0:
@@ -127,4 +130,33 @@ func _test_flicker_counter() -> void:
 			texts.append(t)
 	_assert_true(texts.size() > 60, "Next ticked its air clock %d times" % texts.size())
 	_assert_equal(NextCountdown.count_changes(texts), 3, "live countdown Next counts as its 3 stages")
+	_dispose(game)
+
+
+func _test_follow_low_on_air() -> void:
+	var game := _idle_05_s8()
+	_step_until(game, func() -> bool: return " low on air · " in game.player_orders.objective_label.text)
+	var next := game.player_orders.objective_label.text
+	_assert_true(" low on air · YOU place Air Recycler" in next, "Next reaches the 'low on air' Air Recycler step (%s)" % next)
+	var action := FollowDriver.followed_action(next, game.residents)
+	_assert_true(action.begins_with("YOU place Air Recycler"), "the follow driver acts on it (action '%s')" % action)
+	_assert_equal(FollowDriver._kind_named(action), VaultBuilding.Kind.AIR_RECYCLER, "and places an Air Recycler")
+	_assert_true(_clock_seconds(next) > 0.0 and _clock_seconds(NextCountdown.strip_clock(next)) < 0.0,
+		"the followed-tip key drops the ticking clock, so the step is followed once")
+	_dispose(game)
+
+
+func _test_keep_running_clock() -> void:
+	var game := _idle_05_s8()
+	_step_until(game, func() -> bool: return _air_alert(game).contains("BUILD AIR"), 200.0)
+	game.ended = true
+	game.outcome = "win"
+	_assert_true(game.start_keep_running(), "KEEP RUNNING starts on the won wing")
+	game.player_orders.refresh()
+	var alert := _air_alert(game)
+	var next := game.player_orders.objective_label.text
+	_assert_true(alert.contains("BUILD AIR IN "), "the air alert still counts down (%s)" % alert)
+	_assert_true("Air Recycler" in next, "Next names the Air Recycler (%s)" % next)
+	_assert_true(_clock_seconds(next) >= 0.0 and absf(_clock_seconds(next) - _clock_seconds(alert)) <= 1.0,
+		"Next carries the alert's clock (%s vs %s)" % [next, alert])
 	_dispose(game)

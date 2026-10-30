@@ -4,6 +4,7 @@ extends SceneTree
 # Env: PT_SUB, PT_SEED, PT_MODE(engaged|idle), PT_FRAMES, PT_RELAY(1), PT_RECORDS, PT_LOG.
 # Responses use player APIs. No needs, inventory, jobs or build progress are set.
 const MAIN_SCENE := preload("res://scenes/main.tscn")
+const NextCountdown := preload("res://scripts/next_countdown.gd")
 var game: VaultGame
 var frame := 0
 var breach_seen_frame := -1
@@ -186,13 +187,12 @@ func _follow_next() -> void:
 	if game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged:
 		return
 	var tip := game.player_orders.objective_label.text
-	var danger_tip := _has_resident_danger_prefix(tip)
-	var salvage_tip := tip.begins_with("Next: YOU begin reclamation") or tip.begins_with("Next: YOU spend")
-	if not danger_tip and not salvage_tip:
+	var action := followed_action(tip, game.residents)
+	if action.is_empty():
 		return
-	var action := tip.get_slice(" · ", 1) if danger_tip else tip.get_slice(" · ", 0).trim_prefix("Next: ")
 	var lower := action.to_lower()
-	var tip_key := tip
+	# The air step's clock ticks every second; the same step is followed once.
+	var tip_key := NextCountdown.strip_clock(tip)
 	if lower.begins_with("you spend") and "fit " in lower and "mk ii" in lower:
 		var building := _upgrade_target(action)
 		if building != null:
@@ -272,20 +272,30 @@ func _follow_next() -> void:
 	_log("FOLLOW observe action=%s" % action)
 
 
-func _has_resident_danger_prefix(tip: String) -> bool:
+# The action this driver takes for a Next tip ("" when it only observes): the YOU clause
+# after a resident-danger prefix, or a reclamation/spend tip.
+static func followed_action(tip: String, residents: Array[VaultResident]) -> String:
+	if has_resident_danger_prefix(tip, residents):
+		return tip.get_slice(" · ", 1)
+	if tip.begins_with("Next: YOU begin reclamation") or tip.begins_with("Next: YOU spend"):
+		return tip.get_slice(" · ", 0).trim_prefix("Next: ")
+	return ""
+
+
+static func has_resident_danger_prefix(tip: String, residents: Array[VaultResident]) -> bool:
 	var prefix := tip.get_slice(" · ", 0)
 	if prefix == "Next: food runway short":
 		return true
-	for resident: VaultResident in game.residents:
+	for resident: VaultResident in residents:
 		if not resident.alive or not prefix.begins_with("Next: %s " % resident.resident_name):
 			continue
-		for condition in ["starving", "suffocating", "exhausted", "in despair", "breaking", "injured"]:
+		for condition: String in PlayerOrders.NEXT_DANGER_CONDITIONS:
 			if prefix == "Next: %s %s" % [resident.resident_name, condition]:
 				return true
 	return false
 
 
-func _kind_named(action: String) -> int:
+static func _kind_named(action: String) -> int:
 	var lower := action.to_lower()
 	if "charge node" in lower:
 		return VaultBuilding.Kind.GENERATOR
