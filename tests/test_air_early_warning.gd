@@ -7,7 +7,8 @@ extends "res://tests/test_cook_auto_food_step.gd"
 # first when power is short) and the Spend button agrees. A death at exactly 280.0 s records a
 # day-and-clock recap, not "DAY 7 COMPLETE". Assertions read the alerts, Next, Spend and recap.
 
-const EARLY_PREFIX := "OXYGEN LOW IN "
+# The early alert now counts down to the last safe Air Recycler tap (test_air_deadline.gd).
+const EARLY_PREFIX := "OXYGEN · BUILD AIR IN "
 # Sample like a watching player; refreshing every tick floods the headless message queue.
 const SAMPLE_S := 0.5
 
@@ -134,7 +135,8 @@ func _test_warning_controls() -> void:
 	_assert_equal(_early_alert(game) == "", lead > 60.0, "no warning more than 60 s out (%.1f s)" % lead)
 	game.oxygen_system.oxygen = OxygenSystem.LOW_OXYGEN_THRESHOLD + (-game.oxygen_system.net_rate) * 50.0
 	game.player_orders.refresh()
-	_assert_true(_early_alert(game) == "OXYGEN LOW IN 00:50", "a 50 s lead reads OXYGEN LOW IN 00:50 (%s)" % _early_alert(game))
+	# 50 s to LOW is 51 O2: (51 - 15) / 0.32 - 24 s spin-up = 88.5 s to the last safe tap.
+	_assert_true(_early_alert(game) == "OXYGEN · BUILD AIR IN 1:29", "a 50 s lead to LOW reads BUILD AIR IN 1:29 (%s)" % _early_alert(game))
 	_assert_true("Air Recycler" in _next(game), "and Next names the Air Recycler: %s" % _next(game))
 	# A powered recycler stops the drain: no warning, Next released.
 	_add_complete(game, VaultBuilding.Kind.GENERATOR)

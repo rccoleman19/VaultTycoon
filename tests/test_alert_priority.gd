@@ -42,7 +42,7 @@ func _test_air_visible() -> void:
 		var game := _idle_05(seed)
 		_to_seconds(game, 145.0)
 		var line: String = game.player_orders.alert_label.text.replace("\u00a0", " ")
-		_assert_true(line.begins_with("OXYGEN LOW IN "), "seed %d at %.1f s: the alert line leads with the oxygen alert [%s]" % [seed, game.day_cycle.elapsed_seconds, line])
+		_assert_true(line.begins_with("OXYGEN · BUILD AIR IN "), "seed %d at %.1f s: the alert line leads with the oxygen alert [%s]" % [seed, game.day_cycle.elapsed_seconds, line])
 		_dispose(game)
 
 
