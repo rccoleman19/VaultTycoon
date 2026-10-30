@@ -2401,8 +2401,13 @@ func _air_warning_needs_recycler() -> bool:
 	return _air_next_latched or air_early_warning() or game.oxygen_system.is_low()
 
 
+# A queued Charge Node counts as the power it will add, so Next moves on to the Air Recycler.
 func _air_warning_power_short() -> bool:
-	return game.power_grid.supply - game.power_grid.demand < int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.AIR_RECYCLER])
+	var supply: int = game.power_grid.supply
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GENERATOR and not building.complete and not building.is_emergency_core:
+			supply += 7
+	return supply - game.power_grid.demand < int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.AIR_RECYCLER])
 
 
 # The one build that answers the air warning: Charge Node first when power is short.
@@ -2460,6 +2465,9 @@ func _primary_next_step() -> Dictionary:
 		step = _primary_next_step_chain(suppressed_builds)
 	var air_first := _air_warning_step(step)
 	if not air_first.is_empty():
+		if not in_progress.is_empty():
+			air_first.text = str(air_first.text) + _next_in_progress_suffix(in_progress)
+			air_first["in_progress"] = in_progress
 		return _salvage_next_step(air_first)
 	if in_progress.is_empty():
 		var first_air := _post_seal_air_step(step, game.food_system.salvage - game.job_system.get_breach_salvage_reserve())
@@ -4169,6 +4177,10 @@ func _reveal_fixture_controls() -> void:
 
 
 func clear_survival_tips() -> void:
+	# New Game, LOAD and Retry all pass here: air latches recompute from the restored state.
+	_air_warning_latched = false
+	_air_next_latched = false
+	_air_chain_named = false
 	_idle_crew_since.clear()
 	_idle_crew_sample_time = -1.0
 	_next_hold_signature.clear()
@@ -4885,6 +4897,7 @@ const NUDGE_TOOLS := {
 	VaultBuilding.Kind.RECREATION_CONSOLE: "rec",
 	VaultBuilding.Kind.GROW_TRAY: "grow",
 	VaultBuilding.Kind.GENERATOR: "generator",
+	VaultBuilding.Kind.AIR_RECYCLER: "air",
 }
 
 
@@ -5136,12 +5149,17 @@ func _food_card_offer_kind() -> int:
 
 
 func _upgrade_offer_nudge_kind() -> int:
-	var air_kind := _air_warning_kind()
-	if air_kind >= 0 and _air_chain_named:
-		# Spend offers what Next already names.
-		air_kind = VaultBuilding.Kind.AIR_RECYCLER
-	if air_kind >= 0:
-		return air_kind if game.food_system.salvage >= int(VaultBuilding.COSTS[air_kind]) else -1
+	if _air_warning_kind() >= 0:
+		# Spend offers what the displayed Next names; an urgent resident step that wins Next wins here too.
+		var air_kind := -1
+		if str(_displayed_next_step.get("cause", "")) == "air":
+			air_kind = _next_named_build_kind(_displayed_next_step)
+		elif _air_chain_named:
+			air_kind = VaultBuilding.Kind.AIR_RECYCLER
+		if air_kind != VaultBuilding.Kind.AIR_RECYCLER and air_kind != VaultBuilding.Kind.GENERATOR:
+			return -1
+		var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
+		return air_kind if spendable >= int(VaultBuilding.COSTS[air_kind]) else -1
 	if _food_nudge_active():
 		if game.ended or not game.breach_system.is_sealed():
 			return -1
@@ -5277,7 +5295,7 @@ func _on_upgrade_offer_pressed() -> void:
 	var nudge := _upgrade_offer_nudge_kind() if target == null else -1
 	if target != null:
 		game.select_building(target.building_id)
-	elif nudge >= 0:
+	elif NUDGE_TOOLS.has(nudge):
 		game.set_tool(NUDGE_TOOLS[nudge])
 
 
