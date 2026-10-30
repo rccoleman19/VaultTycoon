@@ -1135,13 +1135,13 @@ func refresh() -> void:
 		# The objective showed an outcome line; the help still follows Next.
 		step = _primary_next_step() if not game.keep_running else keep_running_next_step()
 	var tool_label := game.active_tool.to_upper()
-	if game.status_message_left <= 0.0 and game.active_tool == "select":
+	if game.ended and ((game.wing_seed != 0 and not game.has_post_outcome_status()) or (game.status_message_left <= 0.0 and game.active_tool == "select")):
+		# Seeded actions replace stale live messages, then yield to fresh outcome feedback.
+		tool_label = "SHIFT ENDED"
+		active_help = "LOAD LAST CHECKPOINT, NEW WING or REPLAY WING" if game.wing_seed != 0 else "LOAD LAST CHECKPOINT or NEW WING"
+	elif game.status_message_left <= 0.0 and game.active_tool == "select":
 		var select_help := "Select a living resident, then [R] to draft/undraft. Right-click: drafted = move; undrafted = force context job."
-		if game.ended:
-			# Outcome panel is up: point at the panel actions, not drafting help for a dead/finished wing.
-			tool_label = "SHIFT ENDED"
-			active_help = "LOAD LAST CHECKPOINT, NEW WING or REPLAY WING" if game.wing_seed != 0 else "LOAD LAST CHECKPOINT or NEW WING"
-		elif not game.tutorial_open:
+		if not game.tutorial_open:
 			var next_help := str(step.get("help", "")).strip_edges()
 			if not next_help.is_empty():
 				active_help = "%s %s" % [next_help, select_help]
