@@ -190,7 +190,7 @@ func _assert_recap(game: VaultGame) -> void:
 	_assert_true("DAY " in clock and ":" in clock and clock in body, "recap displays the HUD-style day and clock")
 	var tip := str(recap.get("tip", ""))
 	var saving_line := "This would have saved %s: %s" % [str(recap.get("name", "")), tip.trim_prefix("Next: ")]
-	_assert_true((tip.begins_with("Next: ") and saving_line in body) or (tip.is_empty() and "No tip could have saved them." in body), "recap explains the first saving tip or plainly says no tip could save them")
+	_assert_true((tip.begins_with("Next: ") and saving_line in body) or (tip.is_empty() and not "No tip could have saved them." in body), "recap explains the first saving tip or omits the line")
 	_assert_false("nothing lands in time" in tip, "too_late is never recorded as an actionable tip")
 	var resume := _button(orders, "outcome_resume_button")
 	var can_resume := game.get_alive_count() > 0 and game.outcome == "death"
@@ -586,7 +586,7 @@ func _test_fatal_tick_tip_is_not_saving() -> void:
 	_assert_true(str(first.get("text", "")).begins_with("Next: ") and "undraft" in str(first.get("text", "")), "real fatal-tick sampler encounters an otherwise actionable named tip")
 	_assert_approximately(float(first.get("seconds", -1.0)), game.day_cycle.elapsed_seconds, 0.000001, "first actionable sample occurs at the frozen death time")
 	_assert_equal(_recap(game).get("tip", "missing"), "", "a tip first sampled on the death tick is excluded from the recap")
-	_assert_true("No tip could have saved them." in game.player_orders.outcome_text.text, "death without an earlier actionable tip shows the existing no-tip line")
+	_assert_false("No tip could have saved them." in game.player_orders.outcome_text.text, "death without an earlier actionable tip shows the existing no-tip line")
 	_assert_false("This would have saved" in game.player_orders.outcome_text.text, "fatal-tick-only tip never claims it could save the resident")
 	_assert_false(str(first.get("text", "missing")) in game.player_orders.outcome_text.text, "fatal-tick live tip is absent from the panel")
 	_assert_tip_round_trip(game)
@@ -610,7 +610,7 @@ func _test_tip_cause_and_resets() -> void:
 	target.advance_needs(VaultGame.SIMULATION_TICK / DayCycle.SECONDS_PER_DAY, true, false)
 	_assert_equal(_recap(game).get("cause", ""), "exhaustion", "a different threat actually kills the warned resident")
 	_assert_equal(_recap(game).get("tip", "missing"), "", "a hunger tip is not offered as a rescue for exhaustion")
-	_assert_true("No tip could have saved them." in game.player_orders.outcome_text.text, "unrelated earliest warning uses the no-tip line")
+	_assert_false("No tip could have saved them." in game.player_orders.outcome_text.text, "unrelated earliest warning uses the no-tip line")
 	_assert_false("This would have saved" in game.player_orders.outcome_text.text, "unrelated warning never claims it would save this death")
 	game.new_game(false, 4242, 3)
 	game.begin_shift()
@@ -624,7 +624,7 @@ func _test_tip_cause_and_resets() -> void:
 	_assert_true(game.apply_snapshot(clean), "applying a live snapshot clears warning history again")
 	_force_starvation(game, game.residents[0])
 	_assert_equal(_recap(game).get("tip", "missing"), "", "apply_snapshot clears prior earliest warning and its metadata")
-	_assert_true("No tip could have saved them." in game.player_orders.outcome_text.text, "restored live game cannot inherit another timeline's saving tip")
+	_assert_false("No tip could have saved them." in game.player_orders.outcome_text.text, "restored live game cannot inherit another timeline's saving tip")
 	_dispose(game)
 
 
@@ -635,7 +635,7 @@ func _test_loss_and_death_save_load() -> void:
 	_force_starvation(game, game.residents[0])
 	_assert_equal(game.outcome, "death", "a saved partial loss has the explicit death outcome")
 	_assert_equal(str(_recap(game).get("tip", "")), "", "a resident killed before any live warning has no invented tip")
-	_assert_true("No tip could have saved them." in game.player_orders.outcome_text.text, "recap plainly states when no actionable tip ever existed")
+	_assert_false("No tip could have saved them." in game.player_orders.outcome_text.text, "recap plainly states when no actionable tip ever existed")
 	var snapshot := game.create_snapshot()
 	_assert_true(game.save_game(false, _player_path), "a death snapshot uses the existing atomic SaveLoad path")
 	game.new_game(false, 4242, 3)

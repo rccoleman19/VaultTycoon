@@ -176,7 +176,7 @@ func _test_loss_unchanged() -> void:
 	_assert_true(not orders.outcome_grade.visible and orders.outcome_grade.text == "", "loss hides and clears the grade")
 	_assert_equal(orders.outcome_title.text, "WING LOST", "loss title")
 	_assert_true(orders.outcome_text.text.begins_with("No residents remain alive."), "loss recap keeps the final-loss explanation")
-	_assert_true("No tip could have saved them." in orders.outcome_text.text, "loss without an actionable history explains that no tip was available")
+	_assert_false("No tip could have saved them." in orders.outcome_text.text, "loss without an actionable history explains that no tip was available")
 	_assert_equal(orders.outcome_panel.position, loss_pos, "panel position never moved")
 	_assert_equal(orders.outcome_panel.size, loss_size, "panel size never changed")
 	_dispose(game)

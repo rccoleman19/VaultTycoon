@@ -2468,10 +2468,10 @@ func _primary_next_step() -> Dictionary:
 		if not in_progress.is_empty():
 			air_first.text = str(air_first.text) + _next_in_progress_suffix(in_progress)
 			air_first["in_progress"] = in_progress
-		return _salvage_next_step(air_first)
+		return _hatch_reserve_step(_salvage_next_step(air_first))
 	if in_progress.is_empty():
 		var first_air := _post_seal_air_step(step, game.food_system.salvage - game.job_system.get_breach_salvage_reserve())
-		return _salvage_next_step(first_air if not first_air.is_empty() else step)
+		return _hatch_reserve_step(_salvage_next_step(first_air if not first_air.is_empty() else step))
 	if step.is_empty():
 		step = {
 			"text": "Next: %s · THEY finish it" % _next_in_progress_suffix(in_progress).trim_prefix(" · "),
@@ -2481,7 +2481,40 @@ func _primary_next_step() -> Dictionary:
 	else:
 		step.text = str(step.text) + _next_in_progress_suffix(in_progress)
 	step["in_progress"] = in_progress
-	return _salvage_next_step(step)
+	return _hatch_reserve_step(_salvage_next_step(step))
+
+
+# Before the seal a tip never spends the hatch patch: a new build must fit in the
+# same spendable salvage as the food plan (salvage - patch owed - queued builds).
+func _hatch_reserve_blocks(kind: int) -> bool:
+	if kind < 0 or game.ended or game.breach_system.is_sealed():
+		return false
+	return int(VaultBuilding.COSTS.get(kind, 0)) > game.food_plan_spendable()
+
+
+func _hatch_reserve_step(step: Dictionary) -> Dictionary:
+	if step.is_empty():
+		return step
+	var text := str(step.get("text", ""))
+	var prefix := _next_step_prefix(step)
+	var body := text.trim_prefix(prefix)
+	if not (body.begins_with("YOU place ") or body.begins_with("YOU spend ")):
+		return step
+	var kind := _next_named_build_kind(step)
+	if not _hatch_reserve_blocks(kind):
+		return step
+	var owed := game.food_plan_patch_owed()
+	var held := step.duplicate(true)
+	if owed > 0:
+		held.text = prefix + "YOU save %d for the hatch patch · THEY dig salvage" % owed
+	else:
+		held.text = prefix + "YOU save %d for the queued builds · THEY finish them" % game.queued_build_commitment()
+	held.help = "Before the seal, keep %d salvage for the hatch patch and %d for queued builds. %s costs %d; only %d is free. Place it after the seal." % [
+		owed, game.queued_build_commitment(), VaultBuilding.KIND_NAMES[kind], int(VaultBuilding.COSTS[kind]), maxi(0, game.food_plan_spendable())]
+	held.tool = "select"
+	held.erase("action")
+	_next_reclamation_kind = -1
+	return held
 
 
 func _update_idle_crew_tracking() -> void:
@@ -2669,7 +2702,10 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 	# The recorded 05 food-worker recovery already places Rec. Express its
 	# affordable recovery as spending too, even though its kind is unchanged.
 	var food_rec_recovery := danger and str(step.get("cause", "")) == "food" and kind == VaultBuilding.Kind.RECREATION_CONSOLE and sink == kind
-	if idle and danger and placing and sink >= 0 and (sink != kind or food_rec_recovery):
+	# The latched air step keeps naming the Air Recycler: an idle-crew blip must not
+	# swap it for another sink every few seconds (05 s8 idle flicker from 230 s).
+	var air_held := kind == VaultBuilding.Kind.AIR_RECYCLER and _air_next_latched
+	if idle and danger and placing and sink >= 0 and (sink != kind or food_rec_recovery) and not air_held:
 		return _next_spend_build(step, sink, prefix)
 	var short := kind >= 0 and not affordable and (funding or placing)
 	var reclaim_kind := kind
@@ -3373,7 +3409,7 @@ func _refresh_alerts(step: Dictionary) -> void:
 	elif air_early_warning():
 		alerts.append("OXYGEN LOW IN %s" % _format_seconds(game.oxygen_system.get_seconds_to_low()))
 	if game.breach_system.phase == BreachSystem.Phase.OPEN:
-		alerts.append("BREACH OPEN · O2 VENTING")
+		alerts.append("BREACH OPEN · O2 VENTING" + _breach_patch_alert_suffix())
 	elif game.breach_system.phase == BreachSystem.Phase.WARNING:
 		alerts.append("SEAL WARNING · %s" % _format_seconds(game.breach_system.get_time_to_open()))
 	if game.food_system.meals <= 0 and game.get_alive_count() > 0:
@@ -3483,7 +3519,8 @@ func _refresh_alerts(step: Dictionary) -> void:
 	all_alerts = _order_alerts_by_urgency(alerts)
 	for alert: String in all_alerts:
 		# Air alerts stay listed even when Next names the fix: they are the most lethal.
-		if alert.begins_with("OXYGEN ") or not _alert_stated_by_next(alert, step):
+		# The open breach's patch step leads and stays listed too: it is what stops the venting.
+		if alert.begins_with("OXYGEN ") or alert.begins_with("BREACH OPEN") or not _alert_stated_by_next(alert, step):
 			alert_list.append(alert)
 	# A starving resident leads the alert line right after any air alert, even though Next names them too.
 	var starving := _starving_alert(step)
@@ -3511,9 +3548,18 @@ func _refresh_alerts(step: Dictionary) -> void:
 const STARVING_ALERT_PREFIX := "STARVING: "
 
 
+# " · MARK 1 ROCK [E]": the YOU action of the hatch blocker step, or "" when the patch is covered.
+func _breach_patch_alert_suffix() -> String:
+	var blocker := _breach_blocker_step()
+	var text := str(blocker.get("text", ""))
+	if not text.begins_with("Next: YOU "):
+		return ""
+	return " · " + text.trim_prefix("Next: YOU ").get_slice(" · ", 0).to_upper()
+
+
 func _air_alert_count(alerts: Array[String]) -> int:
 	var count := 0
-	while count < alerts.size() and alerts[count].begins_with("OXYGEN "):
+	while count < alerts.size() and (alerts[count].begins_with("OXYGEN ") or alerts[count].begins_with("BREACH OPEN")):
 		count += 1
 	return count
 
@@ -3638,8 +3684,14 @@ func _order_alerts_by_urgency(alerts: Array[String]) -> Array[String]:
 	# Each tier keeps the deadline order above.
 	var air_deadline := _air_alert_deadline(ordered)
 	var tiered: Array[String] = []
+	# An open breach vents the air for everyone: its patch step leads every tier.
+	for alert: String in ordered:
+		if alert.begins_with("BREACH OPEN"):
+			tiered.append(alert)
 	for tier in 4:
 		for alert: String in ordered:
+			if alert.begins_with("BREACH OPEN"):
+				continue
 			if _alert_lethality_tier(alert, air_deadline) == tier:
 				tiered.append(alert)
 	return tiered
@@ -4389,11 +4441,12 @@ func show_outcome(won: bool, survivors: int) -> void:
 					recap = death_recap_for(resident)
 		var prefix := "No residents remain alive.\n\n" if survivors <= 0 else ""
 		var tip := str(recap.get("tip", ""))
-		var saving_tip := "This would have saved %s: %s" % [recap.get("name", "A resident"), tip.trim_prefix("Next: ")] if not tip.is_empty() else "No tip could have saved them."
-		outcome_text.text = "%s%s died of %s.\n%s\n\n%s" % [
+		var saving_tip := "This would have saved %s: %s" % [recap.get("name", "A resident"), tip.trim_prefix("Next: ")] if not tip.is_empty() else ""
+		# No recorded tip: say nothing rather than claim no tip could have helped.
+		outcome_text.text = "%s%s died of %s.\n%s%s" % [
 			prefix, recap.get("name", "A resident"), recap.get("cause", "unknown causes"),
 			recap.get("time", game.day_cycle.get_clock_text()),
-			saving_tip,
+			"\n\n" + saving_tip if not saving_tip.is_empty() else "",
 		]
 	outcome_best.text = best_line(true)
 	outcome_best.visible = not outcome_best.text.is_empty()
@@ -5207,6 +5260,8 @@ func _upgrade_offer_nudge_kind() -> int:
 		return food if food >= 0 and (urgent < 0 or urgent == food) else -1
 	var nudge := salvage_nudge_kind()
 	var urgent_kind := next_urgent_build_kind()
+	if _hatch_reserve_blocks(nudge):
+		return -1
 	return -1 if urgent_kind >= 0 and nudge != urgent_kind else nudge
 
 

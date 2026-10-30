@@ -50,7 +50,7 @@ func _test_legacy() -> void:
 	_assert_false(orders.outcome_resume_button.visible, "loss cannot Resume")
 	_assert_true(orders.outcome_text.text.begins_with("No residents remain alive.\n\n"), "loss recap keeps the final-loss explanation")
 	_assert_true("died of" in orders.outcome_text.text and "DAY " in orders.outcome_text.text, "loss recap identifies cause and sim time")
-	_assert_true("No tip could have saved them." in orders.outcome_text.text, "a loss without live tip history says no tip was available")
+	_assert_false("No tip could have saved them." in orders.outcome_text.text, "a loss without live tip history says no tip was available")
 	_dispose(game)
 	game = _spawn_game()
 	game.new_game(false, 0)

@@ -159,6 +159,8 @@ func _test_next_multiple_queued_builds() -> void:
 	ari.needs.health = 5.0
 	var placed_rec := game.place_blueprint(VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(18, 12))
 	var placed_bunk := game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(19, 12))
+	# Cover the queued builds and the hatch patch so the Charge tip is affordable.
+	game.food_system.salvage += 40
 	var step: Dictionary = game.player_orders._refresh_objective()
 	_assert_true(placed_rec and placed_bunk, "two different real unfinished blueprints are queued")
 	_assert_equal(step.get("in_progress", []), ["Rec Consoles", "bunks"],
