@@ -11,6 +11,7 @@ func _run() -> void:
 	await _frame_case("countdown ticks preserve text width and wrapping", _test_countdown)
 	await _frame_case("CRITICAL: Bo and internal dots never split across rendered lines", _test_clause_boundaries)
 	await _frame_case("an overwide breach lead wraps at its dots on 310/330/360 px panels", _test_breach_lead_width)
+	await _frame_case("the LAST CHANCE air lead fits the 284 px rail", _test_air_last_chance_width)
 	await _frame_case("an overwide second clause folds into +N and DETAILS", _test_fold)
 	await _frame_case("a second clause that needs a third line folds too", _test_line_budget)
 	await _frame_case("the theme font stays fixed through refresh and resize", _test_fixed_font)
@@ -340,6 +341,23 @@ func _test_clause_boundaries() -> void:
 	await _layout()
 	_assert_layout(orders, "overwide first with internal dot")
 	_assert_equal(orders.alert_hidden_count, 0, "the first clause is never folded")
+	_dispose(game)
+
+
+# Codex 6531176283 on #141: the LAST CHANCE air lead (~332 px) must fit the real 284 px rail.
+func _test_air_last_chance_width() -> void:
+	var game := _game()
+	var orders := game.player_orders
+	var label := orders.alert_label
+	var lead := "OXYGEN · LAST CHANCE · BUILD AIR IN 0:30"
+	_set_clauses(orders, [lead, "CRITICAL: Bo"])
+	await _layout()
+	_assert_equal(label.size.x, 284.0, "the 1280 px layout gives the real 284 px rail")
+	_assert_true(font_width(label, lead) > label.size.x, "the LAST CHANCE lead is wider than the rail (%.0f px)" % font_width(label, lead))
+	for line: String in label.text.replace("\u00a0", " ").split("\n"):
+		_assert_true(font_width(label, line) <= label.size.x, "air lead line fits (%.0f <= %.0f px): %s" % [font_width(label, line), label.size.x, line])
+	_assert_true(_bar_text(orders).begins_with(lead), "the whole air lead is shown, got %s" % label.text)
+	_assert_layout(orders, "LAST CHANCE air lead at 284 px")
 	_dispose(game)
 
 

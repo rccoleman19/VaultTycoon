@@ -1844,7 +1844,8 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 					step = plan.step
 
 		"air":
-			condition = "suffocating"
+			# "suffocating" only once O2 is below 15% and air is actually hurting crew.
+			condition = "suffocating" if not game.oxygen_system.is_breathable() else "low on air"
 			# A covered hatch response already fixes the air leak. Preserve its
 			# warning/watch priority and wording; blockers were checked first.
 			if game.breach_system.is_response_active():
@@ -2381,6 +2382,52 @@ var _air_chain_named := false
 
 # Latched: once live it stays until the drain stops, so a brief dip in the drain
 # rate cannot flip Next back and forth.
+# Last safe tap: the latest moment a newly placed Air Recycler still comes online
+# before O2 drops below 15%. A recycler takes 20-24 s to place, build and power
+# (05 s8 idle: tapped at 143/240/250 s, online ~24 s later); AIR_SPINUP_S uses the
+# slow end. 05 s8 gives ~242 s; measured taps at 240 and 250 s won, 258 s lost.
+const AIR_SPINUP_S := 24.0
+const AIR_ESCALATE_S := 60.0
+const AIR_LAST_CHANCE_S := 30.0
+
+
+# Seconds until the last safe tap, or INF when no countdown applies (not sealed,
+# a recycler is already placed, or O2 is not falling). Display only.
+func air_safe_tap_seconds() -> float:
+	if game.ended or not game.breach_system.is_sealed() or _count_kind(VaultBuilding.Kind.AIR_RECYCLER) > 0:
+		return INF
+	var oxygen := game.oxygen_system
+	if not (oxygen.net_rate < -0.0001) or not oxygen.is_breathable():
+		return INF
+	return (oxygen.oxygen - OxygenSystem.CRITICAL_OXYGEN_THRESHOLD) / -oxygen.net_rate - AIR_SPINUP_S
+
+
+func _air_countdown_clock(seconds: float) -> String:
+	var total := maxi(0, ceili(seconds))
+	return "%d:%02d" % [total / 60, total % 60]
+
+
+func _air_countdown_text(seconds: float) -> String:
+	var clock := _air_countdown_clock(seconds)
+	if seconds <= AIR_LAST_CHANCE_S:
+		return "LAST CHANCE · BUILD AIR IN %s" % clock
+	if seconds <= AIR_ESCALATE_S:
+		return "BUILD AIR NOW · %s LEFT" % clock
+	return "BUILD AIR IN %s" % clock
+
+
+# Next names the Air Recycler: append the same countdown the alert shows.
+func _with_air_countdown(text: String) -> String:
+	# Only the step that builds or places the recycler carries the clock; a power step for it
+	# ("THEY power the Air Recycler") keeps its text, and the alert line still counts down.
+	if not text.begins_with("Next: ") or not "Air Recycler" in text or "power the Air Recycler" in text:
+		return text
+	var seconds := air_safe_tap_seconds()
+	if is_inf(seconds) or seconds <= 0.0 or not (game.oxygen_system.is_low() or air_early_warning()):
+		return text
+	return "%s · %s" % [text, _air_countdown_text(seconds)]
+
+
 func air_early_warning() -> bool:
 	if game.ended or not game.breach_system.is_sealed() or game.oxygen_system.is_low():
 		_air_warning_latched = false
@@ -3112,7 +3159,8 @@ func _refresh_objective() -> Dictionary:
 	if game.keep_running and not game.ended:
 		var kr_step := keep_running_next_step()
 		_remember_survival_tip(kr_step)
-		objective_label.text = str(kr_step.text)
+		# Same clock as the alert line (Codex 6531176283): the air step counts down here too.
+		objective_label.text = _with_air_countdown(str(kr_step.text))
 		objective_label.add_theme_color_override("font_color", Color("efc56b"))
 		_expand_details_on_urgency()
 		return kr_step
@@ -3134,7 +3182,7 @@ func _refresh_objective() -> Dictionary:
 		return {}
 	var step: Dictionary = _primary_next_step()
 	_remember_survival_tip(step)
-	objective_label.text = str(step.get("text", "NEXT // Survive"))
+	objective_label.text = _with_air_countdown(str(step.get("text", "NEXT // Survive")))
 	objective_label.add_theme_color_override("font_color", Color("efc56b"))
 	_expand_details_on_urgency()
 	return step
@@ -3413,7 +3461,10 @@ func _refresh_alerts(step: Dictionary) -> void:
 		alerts.append("VICTORY PENDING · %s" % " + ".join(victory_blockers))
 	if game.keep_running and game.annex_welcome_left > 0.0 and game.annex_resident() != null:
 		alerts.append(ANNEX_TEXT.welcome % game.annex_resident().resident_name.to_upper())
-	if game.oxygen_system.is_critical():
+	var air_tap := air_safe_tap_seconds()
+	if is_finite(air_tap) and air_tap > 0.0 and (game.oxygen_system.is_low() or air_early_warning()):
+		alerts.append("OXYGEN · " + _air_countdown_text(air_tap))
+	elif game.oxygen_system.is_critical():
 		alerts.append("OXYGEN CRITICAL")
 	elif game.oxygen_system.is_low():
 		alerts.append("OXYGEN LOW")
@@ -3770,7 +3821,7 @@ func _alert_stated_by_next(alert: String, step: Dictionary) -> bool:
 		for resident: VaultResident in game.residents:
 			if resident.resident_name == resident_name and bool(step.get("urgent", false)) and int(step.get("resident_id", -1)) == resident.resident_id:
 				return true
-		for condition: String in ["starving", "exhausted", "critical", "suffocating", "in despair"]:
+		for condition: String in ["starving", "exhausted", "critical", "suffocating", "low on air", "in despair"]:
 			if (" " + resident_name.to_lower() + " " + condition) in (" " + text):
 				return true
 		return false
@@ -5650,6 +5701,9 @@ func keep_running_next_step() -> Dictionary:
 const KEEP_RUNNING_PASS := ["Air Recycler", "Nutrient Station", "Charge Node", "power", "Med Bed", "Rec Console"]
 # Steps classified by the diagnosis that produced them, so their wording never decides it.
 const STEP_KIND_FOOD := "food"
+# Every "<name> <condition>" prefix a resident step puts on Next (_resident_step); the follow
+# playtest driver reads this list so it acts on each of them.
+const NEXT_DANGER_CONDITIONS: Array[String] = ["starving", "suffocating", "low on air", "exhausted", "in despair"]
 const KEEP_RUNNING_PASS_KINDS := [STEP_KIND_FOOD]
 
 

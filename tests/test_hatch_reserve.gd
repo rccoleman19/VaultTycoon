@@ -1,5 +1,7 @@
 extends "res://tests/test_air_early_warning.gd"
 
+const NextCountdown := preload("res://scripts/next_countdown.gd")
+
 # Light-touch QA 05 seed 8 (2026-10-30): following the early food tips spent the hatch
 # salvage before the warning, the breach opened, and the recap said no tip could have
 # saved Dax. Tips now keep the hatch patch before the seal, the patch step leads the
@@ -148,6 +150,7 @@ func _to_seconds_plain(game: VaultGame, seconds: float) -> void:
 func _test_flicker() -> void:
 	var game := _idle_05()
 	var po := game.player_orders
+	var texts: Array = []
 	var changes := 0
 	var rec_swaps := 0
 	var last := ""
@@ -155,12 +158,16 @@ func _test_flicker() -> void:
 		_tick(game)
 		if game.day_cycle.elapsed_seconds < 230.0:
 			continue
-		var text: String = po.objective_label.text
+		# The air clock ticks each second; NextCountdown ignores clock-only ticks.
+		texts.append(po.objective_label.text)
+		var text: String = NextCountdown.strip_clock(po.objective_label.text)
 		if text != last:
-			changes += 1
-			if "suffocating" in text and "Rec Console" in text:
+			if ("suffocating" in text or "low on air" in text) and "Rec Console" in text:
 				rec_swaps += 1
 			last = text
+	changes = NextCountdown.count_changes(texts)
 	_assert_equal(rec_swaps, 0, "a suffocating Next never swaps the Air Recycler for Rec Console")
-	_assert_true(changes <= 4, "Next changes at most 4 times from 230 s, got %d" % changes)
+	# 6: the countdown's end (LAST CHANCE -> plain step, ~241.7 s) and "low on air" ->
+	# "suffocating" at 15% O2 (~265.7 s) are real changes; clock-only ticks are not counted.
+	_assert_true(changes <= 6, "Next changes at most 6 times from 230 s, got %d" % changes)
 	_dispose(game)
