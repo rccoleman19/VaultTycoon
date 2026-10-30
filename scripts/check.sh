@@ -67,6 +67,8 @@ run_godot_check food-plan-card --script res://tests/test_food_plan_card.gd
 run_godot_check food-card-next-step --script res://tests/test_food_card_next_step.gd
 run_godot_check spend-nudge-food-first --script res://tests/test_spend_nudge_food_first.gd
 run_godot_check cook-auto-food-step --script res://tests/test_cook_auto_food_step.gd
+run_godot_check air-early-warning --script res://tests/test_air_early_warning.gd
+run_godot_check air-codex-fixes --script res://tests/test_air_codex_fixes.gd
 run_godot_check stress-break-venting --script res://tests/test_stress_break_venting.gd
 run_godot_check rec-boost --script res://tests/test_rec_boost.gd
 run_godot_check work-priorities --script res://tests/test_work_priorities.gd
