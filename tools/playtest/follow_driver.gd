@@ -191,15 +191,13 @@ func _follow_next() -> void:
 	if action.is_empty():
 		return
 	var lower := action.to_lower()
-	# The air step's clock ticks every second; the same step is followed once.
-	var tip_key := NextCountdown.strip_clock(tip)
+	var key_suffix := ""
 	if lower.begins_with("you spend") and "fit " in lower and "mk ii" in lower:
 		var building := _upgrade_target(action)
 		if building != null:
-			tip_key = "%s id=%d" % [tip, building.building_id]
-	if followed_tips.has(tip_key):
+			key_suffix = " id=%d" % building.building_id
+	if not claim_tip(followed_tips, tip, key_suffix):
 		return
-	followed_tips[tip_key] = true
 	_log("FOLLOW tip=%s" % tip)
 	if lower.begins_with("you begin reclamation"):
 		var ok := game.start_reclamation()
@@ -270,6 +268,16 @@ func _follow_next() -> void:
 				_log("FOLLOW cancel %s at %s success=%s" % [building_name, str(building_cell), str(ok)])
 				return
 	_log("FOLLOW observe action=%s" % action)
+
+
+# Records a tip as followed; false when it was already followed. The air step's clock ticks
+# every second, so the key drops it and the same step is followed once.
+static func claim_tip(followed: Dictionary, tip: String, key_suffix := "") -> bool:
+	var key := NextCountdown.strip_clock(tip) + key_suffix
+	if followed.has(key):
+		return false
+	followed[key] = true
+	return true
 
 
 # The action this driver takes for a Next tip ("" when it only observes): the YOU clause

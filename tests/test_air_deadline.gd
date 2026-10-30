@@ -141,8 +141,16 @@ func _test_follow_low_on_air() -> void:
 	var action := FollowDriver.followed_action(next, game.residents)
 	_assert_true(action.begins_with("YOU place Air Recycler"), "the follow driver acts on it (action '%s')" % action)
 	_assert_equal(FollowDriver._kind_named(action), VaultBuilding.Kind.AIR_RECYCLER, "and places an Air Recycler")
-	_assert_true(_clock_seconds(next) > 0.0 and _clock_seconds(NextCountdown.strip_clock(next)) < 0.0,
-		"the followed-tip key drops the ticking clock, so the step is followed once")
+	# The driver's own followed-tip memo: the step it acted on, ticked down 1 s, is not followed again.
+	var followed := {}
+	_assert_true(_clock_seconds(next) > 0.0, "the step carries a clock (%s)" % next)
+	_assert_true(FollowDriver.claim_tip(followed, next), "the driver follows the step the first time")
+	game.step_simulation(1.0)
+	game.player_orders.refresh()
+	var ticked := game.player_orders.objective_label.text
+	_assert_true(ticked != next and " low on air · YOU place Air Recycler" in ticked, "one second later only the clock changed (%s)" % ticked)
+	_assert_false(FollowDriver.claim_tip(followed, ticked), "so it does not place the Air Recycler again on the tick")
+	_assert_equal(followed.size(), 1, "one followed tip for the whole countdown")
 	_dispose(game)
 
 
