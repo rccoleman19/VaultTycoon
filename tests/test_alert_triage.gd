@@ -159,6 +159,8 @@ func _test_next_multiple_queued_builds() -> void:
 	ari.needs.health = 5.0
 	var placed_rec := game.place_blueprint(VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(18, 12))
 	var placed_bunk := game.place_blueprint(VaultBuilding.Kind.BED, Vector2i(19, 12))
+	# Cover the queued builds and the hatch patch so the Charge tip is affordable.
+	game.food_system.salvage += 40
 	var step: Dictionary = game.player_orders._refresh_objective()
 	_assert_true(placed_rec and placed_bunk, "two different real unfinished blueprints are queued")
 	_assert_equal(step.get("in_progress", []), ["Rec Consoles", "bunks"],
@@ -377,7 +379,32 @@ func _assert_triage_sorted(game: VaultGame, alerts: Array, message: String) -> v
 func _triage_bar_text(orders: PlayerOrders) -> String:
 	# Compare clause order/count independently of the presentation's line breaks.
 	# test_alert_line_cap checks separators on the actual rendered lines.
-	return orders.alert_label.text.replace("\u00a0", " ").replace("\n", "  ·  ")
+	var plain := orders.alert_label.text.replace("\u00a0", " ")
+	if not orders.alert_list.is_empty():
+		var n := _lead_length(plain, orders.alert_list[0])
+		if n > 0:
+			plain = orders.alert_list[0] + plain.substr(n)
+	return plain.replace("\n", "  ·  ")
+
+
+# A first clause wider than the rail may break at its own " · " separators ("\n" in the
+# text). Returns the length of that rendered lead in `plain`, or -1 if `plain` doesn't start
+# with it.
+static func _lead_length(plain: String, lead: String) -> int:
+	var pieces := lead.split(" · ")
+	var pos := 0
+	for i in pieces.size():
+		if not plain.substr(pos).begins_with(pieces[i]):
+			return -1
+		pos += pieces[i].length()
+		if i < pieces.size() - 1:
+			if plain.substr(pos, 3) == " · ":
+				pos += 3
+			elif plain.substr(pos, 1) == "\n":
+				pos += 1
+			else:
+				return -1
+	return pos
 
 
 func _assert_triage_count_and_bar(game: VaultGame, visible: Array, hidden: int) -> void:
