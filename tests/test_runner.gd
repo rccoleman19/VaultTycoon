@@ -2887,3 +2887,25 @@ func _first_variant_difference(expected: Variant, actual: Variant, path: String)
 func _fail(message: String, detail: String) -> void:
 	_failure_count += 1
 	printerr("[FAIL] %s :: %s — %s" % [_current_case, message, detail])
+
+
+# Spend now queues its build in one press (feat/spend-places-build). Press it,
+# report whether exactly one blueprint of `kind` was queued with no tool left
+# armed, then cancel that blueprint the usual way so the caller's state is as
+# before the press (best effort: a loss recap ignores the cancel order).
+func _press_spend_queues(game: VaultGame, kind: int) -> bool:
+	var before: Array = []
+	for building: VaultBuilding in game.buildings:
+		if not building.complete and building.kind == kind:
+			before.append(building)
+	game.player_orders.upgrade_offer_button.pressed.emit()
+	var added: Array = []
+	for building: VaultBuilding in game.buildings:
+		if not building.complete and building.kind == kind and not before.has(building):
+			added.append(building)
+	var ok := added.size() == 1 and game.active_tool == "select"
+	for building: VaultBuilding in added:
+		game.set_tool("cancel")
+		game.issue_order(building.cell)
+	game.set_tool("select")
+	return ok

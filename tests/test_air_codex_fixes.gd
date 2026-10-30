@@ -29,8 +29,7 @@ func _test_spend_press() -> void:
 		game.step_simulation(SAMPLE_S)
 		game.player_orders.refresh()
 	_assert_true("Air Recycler" in _spend_text(game), "Spend offers the Air Recycler: %s" % _spend_text(game))
-	game.player_orders.upgrade_offer_button.pressed.emit()
-	_assert_equal(game.active_tool, "air", "pressing Spend arms the Air Recycler tool")
+	_assert_true(_press_spend_queues(game, VaultBuilding.Kind.AIR_RECYCLER), "pressing Spend queues an Air Recycler")
 	_dispose(game)
 
 
