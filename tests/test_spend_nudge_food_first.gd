@@ -68,7 +68,7 @@ func _test_nudge_names_food() -> void:
 	var game := _game(35, true)
 	var name := _starve(game, 1)
 	_assert_true(("%s starving" % name) in _next(game), "fixture: Next names %s starving: %s" % [name, _next(game)])
-	_assert_equal(_spend(game), "Spend 35: build Nutrient Station", "Spend names the Station while %s starves" % name)
+	_assert_equal(_spend(game), "Spend 10: build Nutrient Station", "Spend names the Station while %s starves" % name)
 	_assert_equal(_spend_build(game), _card_build(game), "Spend and the card name one build")
 	_assert_equal(_spend_build(game), _next_full_build(game), "Spend and Next name one build")
 	_dispose(game)

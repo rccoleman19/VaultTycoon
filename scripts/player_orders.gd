@@ -3482,13 +3482,14 @@ func _refresh_alerts(step: Dictionary) -> void:
 		alerts.append(reclaim_notice)
 	all_alerts = _order_alerts_by_urgency(alerts)
 	for alert: String in all_alerts:
-		if not _alert_stated_by_next(alert, step):
+		# Air alerts stay listed even when Next names the fix: they are the most lethal.
+		if alert.begins_with("OXYGEN ") or not _alert_stated_by_next(alert, step):
 			alert_list.append(alert)
-	# A starving resident always leads the alert line, even though Next names them too.
+	# A starving resident leads the alert line right after any air alert, even though Next names them too.
 	var starving := _starving_alert(step)
 	if not starving.is_empty():
-		all_alerts.push_front(starving)
-		alert_list.push_front(starving)
+		all_alerts.insert(_air_alert_count(all_alerts), starving)
+		alert_list.insert(_air_alert_count(alert_list), starving)
 	if all_alerts.is_empty():
 		alert_label.text = "STATUS NOMINAL"
 	elif alert_list.is_empty():
@@ -3508,6 +3509,13 @@ func _refresh_alerts(step: Dictionary) -> void:
 
 
 const STARVING_ALERT_PREFIX := "STARVING: "
+
+
+func _air_alert_count(alerts: Array[String]) -> int:
+	var count := 0
+	while count < alerts.size() and alerts[count].begins_with("OXYGEN "):
+		count += 1
+	return count
 
 
 func _starving_alert(step: Dictionary) -> String:
@@ -3626,7 +3634,38 @@ func _order_alerts_by_urgency(alerts: Array[String]) -> Array[String]:
 		while index > 0 and seconds < _alert_urgency_seconds(ordered[index - 1]):
 			index -= 1
 		ordered.insert(index, alert)
-	return ordered
+	# Lethality tiers lead: air, then starvation, then critical HP, then the rest.
+	# Each tier keeps the deadline order above.
+	var air_deadline := _air_alert_deadline(ordered)
+	var tiered: Array[String] = []
+	for tier in 4:
+		for alert: String in ordered:
+			if _alert_lethality_tier(alert, air_deadline) == tier:
+				tiered.append(alert)
+	return tiered
+
+
+# Earliest oxygen deadline among the alerts, or -INF when no oxygen alert is listed.
+func _air_alert_deadline(alerts: Array[String]) -> float:
+	var deadline := -INF
+	for alert: String in alerts:
+		if alert.begins_with("OXYGEN "):
+			var seconds := _alert_urgency_seconds(alert)
+			deadline = seconds if deadline == -INF else minf(deadline, seconds)
+	return deadline
+
+
+func _alert_lethality_tier(alert: String, air_deadline: float = -INF) -> int:
+	if alert.begins_with("OXYGEN "):
+		return 0
+	# A hatch that opens before the air runs out vents the air first: it joins the air tier.
+	if alert.begins_with("SEAL WARNING") and air_deadline != -INF and game.breach_system.get_time_to_open() < air_deadline:
+		return 0
+	if alert == "NO MEALS" or alert == "LOW MEALS" or alert.begins_with(STARVING_ALERT_PREFIX):
+		return 1
+	if alert.begins_with("CRITICAL: "):
+		return 2
+	return 3
 
 
 func _alert_stated_by_next(alert: String, step: Dictionary) -> bool:
@@ -5171,6 +5210,11 @@ func _upgrade_offer_nudge_kind() -> int:
 	return -1 if urgent_kind >= 0 and nudge != urgent_kind else nudge
 
 
+# What the Spend button costs: its click arms one build tool, so the cost of that build.
+func upgrade_offer_cost(nudge: int) -> int:
+	return int(VaultBuilding.COSTS[nudge]) if nudge >= 0 else 0
+
+
 func _refresh_upgrade_offer() -> void:
 	if upgrade_offer_button == null:
 		return
@@ -5180,7 +5224,7 @@ func _refresh_upgrade_offer() -> void:
 	if target != null:
 		upgrade_offer_button.text = upgrade_offer_text(target)
 	elif nudge >= 0:
-		upgrade_offer_button.text = "Spend %d: build %s" % [game.food_system.salvage, VaultBuilding.KIND_NAMES[nudge]]
+		upgrade_offer_button.text = "Spend %d: build %s" % [upgrade_offer_cost(nudge), VaultBuilding.KIND_NAMES[nudge]]
 	_refresh_wing_orders()
 	_refresh_also()
 

@@ -277,7 +277,7 @@ func _test_pre_seal_details() -> void:
 	_assert_true(game.breach_system.is_sealed(), "the hatch seals")
 	_assert_equal(orders.breach_label.get_index() - 1, orders.oxygen_bar.get_index() + 1, "once sealed the hatch block returns below VAULT ATMOSPHERE")
 	_assert_equal(orders.breach_focus_button.get_index(), orders.breach_bar.get_index() + 1, "in its own order")
-	_assert_equal(orders.upgrade_offer_button.text if orders.upgrade_offer_button.visible else "<hidden>", "Spend 48: build Rec Console", "sealed with no tray to fit: the idle-salvage nudge (QA-d #4)")
+	_assert_equal(orders.upgrade_offer_button.text if orders.upgrade_offer_button.visible else "<hidden>", "Spend 8: build Rec Console", "sealed with no tray to fit: the idle-salvage nudge (QA-d #4)")
 	_dispose(game)
 
 
