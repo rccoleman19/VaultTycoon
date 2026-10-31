@@ -5661,7 +5661,9 @@ func spend_bunk_count() -> int:
 			if building.kind == VaultBuilding.Kind.BED and (not building.complete or not occupied.has(building.building_id)):
 				needing -= 1
 		wanted = maxi(needing, 1)
-	var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
+	# Same budget as the food card: the hatch patch still owed (before WARNING too) and every
+	# queued blueprint's unpaid cost stay set aside.
+	var spendable: int = maxi(0, game.food_plan_spendable())
 	return mini(wanted, spendable / int(VaultBuilding.COSTS[VaultBuilding.Kind.BED]))
 
 

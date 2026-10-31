@@ -228,6 +228,9 @@ func _follow_next() -> void:
 		# The same path as Spend on the bunk step: every needed bunk in one press.
 		var placed: int = game.player_orders.place_spend_bunks()
 		_log("FOLLOW place bunks placed=%d status=%s" % [placed, game.status_message])
+		if placed == 0:
+			# Nothing placed (no floor or no budget): release the key so the same tip retries.
+			followed_tips.erase(NextCountdown.strip_clock(tip) + key_suffix)
 		return
 	if lower.begins_with("you place"):
 		var kind := _kind_named(action)
