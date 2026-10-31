@@ -2535,11 +2535,20 @@ func _air_warning_step(chain_step: Dictionary) -> Dictionary:
 		_air_chain_named = true
 		# The chain already names it: keep its wording rather than restating it.
 		return {}
+	# A food rescue that cannot land in time is no step at all: show Air, starving stays an alert.
+	var hopeless_food := bool(chain_step.get("too_late", false)) and str(chain_step.get("cause", "")) == "food"
+	if hopeless_food and _unfinished_air_recycler():
+		# The Air tap is placed (03 s8 at 145.1 s): finishing it is still the step that lands.
+		return {
+			"text": "Next: YOU leave Haul + Craft on · THEY finish the Air Recycler",
+			"help": "Keep Haul + Craft above OFF so crew supply and finish the Air Recycler blueprint.",
+			"tool": "select",
+			"cause": "air",
+			"food_resident_id": int(chain_step.get("resident_id", -1)),
+		}
 	var kind := _air_warning_kind()
 	if kind < 0:
 		return {}
-	# A food rescue that cannot land in time is no step at all: show Air, starving stays an alert.
-	var hopeless_food := bool(chain_step.get("too_late", false)) and str(chain_step.get("cause", "")) == "food"
 	if bool(chain_step.get("urgent", false)) and not hopeless_food and _next_named_build_kind(chain_step) != VaultBuilding.Kind.RECREATION_CONSOLE:
 		return {}
 	var cost := int(VaultBuilding.COSTS[kind])
@@ -2558,6 +2567,13 @@ func _air_warning_step(chain_step: Dictionary) -> Dictionary:
 		step["tool"] = "select"
 		step["action"] = "spend"
 	return step
+
+
+func _unfinished_air_recycler() -> bool:
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.AIR_RECYCLER and not building.complete and not building.is_emergency_core:
+			return true
+	return false
 
 
 func _primary_next_step() -> Dictionary:

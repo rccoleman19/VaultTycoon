@@ -55,6 +55,14 @@ func _test_air_over_hopeless_food() -> void:
 	_assert_true("Air Recycler" in next, "Next names the reachable Air step: %s" % next)
 	_assert_true(not "starving" in next, "the Air step carries no starving name: %s" % next)
 	_assert_true(_has_alert(game, "STARVING: " + cyra.resident_name), "%s's starvation moves to the alert line: %s" % [cyra.resident_name, str(game.player_orders.all_alerts)])
+	# 03 s8 at 145.1 s: the player taps the Air step; finishing it is still the step that lands.
+	var cells: Array[Vector2i] = game._annex_free_cells(1)
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.AIR_RECYCLER, cells[0]), "the Air Recycler blueprint is placed")
+	game.player_orders.refresh()
+	next = _next(game)
+	_assert_true(not HOPELESS in next, "after the Air tap Next does not fall back to the dead end: %s" % next)
+	_assert_true("finish the Air Recycler" in next, "Next asks to finish the Air Recycler: %s" % next)
+	_assert_true(_has_alert(game, "STARVING: " + cyra.resident_name), "starvation stays on the alert line: %s" % str(game.player_orders.all_alerts))
 	_dispose(game)
 
 
