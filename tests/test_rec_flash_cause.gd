@@ -12,6 +12,8 @@ func _run() -> void:
 	_run_case("placing the bunks moves Next on without a Rec flash", _test_bunks_then_next)
 	_run_case("with beds covered the idle Rec nudge still shows", _test_nudge_without_bunks)
 	_run_case("a breaking crew still gets its Rec step over the bunks", _test_breaking_rec)
+	_run_case("Spend follows Next: no Rec offer while bunks are Next", _test_spend_follows_bunks)
+	_run_case("with beds covered Spend still offers the Rec", _test_spend_rec_without_bunks)
 	print("REC FLASH CAUSE: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -104,4 +106,25 @@ func _test_breaking_rec() -> void:
 	game.residents[1].needs.mood = 5.0
 	var text := _next(game)
 	_assert_true(text.begins_with("Next: YOU place a Rec Console"), "a breaking resident's Rec step outranks the bunks (%s)" % text)
+	_dispose(game)
+
+
+func _spend_text(game: VaultGame) -> String:
+	var button: Button = game.player_orders.upgrade_offer_button
+	return button.text if button.visible else ""
+
+
+func _test_spend_follows_bunks() -> void:
+	var game := _plateau()
+	var text := _next(game)
+	var spend := _spend_text(game)
+	_assert_true(text.begins_with("Next: YOU place ") and "bunk" in text, "Next shows the needed bunks (%s)" % text)
+	_assert_false("Rec Console" in spend, "Spend does not offer the Rec Console while Next says place bunks (%s)" % spend)
+	_dispose(game)
+
+
+func _test_spend_rec_without_bunks() -> void:
+	var game := _plateau(true, true)
+	_next(game)
+	_assert_equal(_spend_text(game), "Spend 8: build Rec Console", "beds covered: Spend still offers the Rec Console")
 	_dispose(game)

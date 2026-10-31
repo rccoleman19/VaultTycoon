@@ -2754,6 +2754,11 @@ func _is_bunk_place_step(step: Dictionary) -> bool:
 	return str(step.get("tool", "")) == "bed" and not bool(step.get("urgent", false)) and str(step.get("text", "")).begins_with("Next: YOU place ") and "bunk" in str(step.get("text", ""))
 
 
+# One source of truth for Next and Spend: a needed bunk step outranks a salvage nudge.
+func _bunks_hold_salvage_nudge(step: Dictionary) -> bool:
+	return _is_bunk_place_step(step)
+
+
 func _bunk_step_states_count(step: Dictionary) -> bool:
 	var count_word := str(step.get("text", "")).trim_prefix("Next: YOU place ").get_slice(" ", 0)
 	return count_word.is_valid_int()
@@ -2861,7 +2866,7 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 	# must not overwrite them, or the nudged build flashes until the bunks are placed
 	# and the chain names its own next build (03 s4242: Rec at 81.6 s, Air at 84.2 s).
 	# Survival needs arrive as urgent steps, which this non-urgent bunk step excludes.
-	if sink >= 0 and _is_bunk_place_step(step):
+	if sink >= 0 and _bunks_hold_salvage_nudge(step):
 		return step
 	return _next_spend_build(step, sink, prefix) if sink >= 0 else step
 
@@ -5423,6 +5428,10 @@ func _upgrade_offer_nudge_kind() -> int:
 	var nudge := salvage_nudge_kind()
 	var urgent_kind := next_urgent_build_kind()
 	if _hatch_reserve_blocks(nudge):
+		return -1
+	# Spend follows Next: the same guard that keeps the bunks as Next keeps Spend
+	# from offering the nudged build (03 s4242: Spend 8 Rec beside "place bunks").
+	if nudge >= 0 and _bunks_hold_salvage_nudge(_displayed_next_step):
 		return -1
 	return -1 if urgent_kind >= 0 and nudge != urgent_kind else nudge
 
