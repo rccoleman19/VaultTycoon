@@ -2875,6 +2875,13 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		return step
 	if danger or not idle or not (_is_default_step(step) or body.begins_with("YOU leave ")):
 		return step
+	# Bunks the crew still need are the player's real next action: neither a Mk II
+	# fit nor a salvage nudge overwrites them, or Next flashes the fit or nudged build
+	# until the bunks are placed (03 s4242: Rec at 81.6 s, Air at 84.2 s; 05 s4242
+	# busy: a Mk II fit and back to the bunks 8 times from 76.5 s). Survival needs
+	# arrive as urgent steps, which this non-urgent bunk step excludes.
+	if _bunks_hold_salvage_nudge(step):
+		return step
 	# Preserve Mk II precedence on the non-danger path.
 	var target := _upgrade_offer_target()
 	if target != null and target.get_upgrade_cost() <= spendable:
@@ -2882,12 +2889,6 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		step["help"] = "Select the %s and fit Mk II in its inspector." % VaultBuilding.KIND_NAMES[target.kind]
 		step["tool"] = "select"
 		step["action"] = "spend"
-		return step
-	# Bunks the crew still need are the player's real next action: a salvage nudge
-	# must not overwrite them, or the nudged build flashes until the bunks are placed
-	# and the chain names its own next build (03 s4242: Rec at 81.6 s, Air at 84.2 s).
-	# Survival needs arrive as urgent steps, which this non-urgent bunk step excludes.
-	if sink >= 0 and _bunks_hold_salvage_nudge(step):
 		return step
 	return _next_spend_build(step, sink, prefix) if sink >= 0 else step
 
@@ -5467,6 +5468,16 @@ func upgrade_offer_cost(nudge: int) -> int:
 func _refresh_upgrade_offer() -> void:
 	if upgrade_offer_button == null:
 		return
+	# The bunk guard owns Spend too: while Next shows the bunks, Spend places them
+	# instead of offering a Mk II fit or another build (05 s4242 busy: 8 bounces).
+	if _bunks_hold_salvage_nudge(_displayed_next_step):
+		var bunks := spend_bunk_count()
+		upgrade_offer_button.visible = bunks > 0
+		if bunks > 0:
+			upgrade_offer_button.text = "Spend %d: place %s" % [bunks * int(VaultBuilding.COSTS[VaultBuilding.Kind.BED]), "1 bunk" if bunks == 1 else "%d bunks" % bunks]
+		_refresh_wing_orders()
+		_refresh_also()
+		return
 	var target := _upgrade_offer_target()
 	var nudge := _upgrade_offer_nudge_kind() if target == null else -1
 	upgrade_offer_button.visible = target != null or nudge >= 0
@@ -5584,6 +5595,9 @@ func _on_wing_order_pressed(order_id: String) -> void:
 
 
 func _on_upgrade_offer_pressed() -> void:
+	if _bunks_hold_salvage_nudge(_displayed_next_step):
+		place_spend_bunks()
+		return
 	var target := _upgrade_offer_target()
 	var nudge := _upgrade_offer_nudge_kind() if target == null else -1
 	if target != null:
@@ -5595,6 +5609,7 @@ func _on_upgrade_offer_pressed() -> void:
 # The rooms a Spend build belongs beside; it goes on the nearest free floor to them.
 const SPEND_ANCHOR_KINDS := {
 	VaultBuilding.Kind.RECREATION_CONSOLE: [VaultBuilding.Kind.BED, VaultBuilding.Kind.MEDICAL_BED],
+	VaultBuilding.Kind.BED: [VaultBuilding.Kind.BED, VaultBuilding.Kind.MEDICAL_BED, VaultBuilding.Kind.RECREATION_CONSOLE],
 	VaultBuilding.Kind.KITCHEN: [VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GROW_TRAY],
 	VaultBuilding.Kind.GROW_TRAY: [VaultBuilding.Kind.GROW_TRAY, VaultBuilding.Kind.KITCHEN],
 	VaultBuilding.Kind.GENERATOR: [VaultBuilding.Kind.GENERATOR, VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.AIR_RECYCLER],
@@ -5618,6 +5633,50 @@ func place_spend_build(kind: int) -> bool:
 	game.status_message_left = 4.0
 	refresh()
 	return false
+
+
+# How many bunks Spend places for the shown bunk step: the stated count, else the
+# tired crew still without a free or unfinished bunk, capped by spendable salvage.
+func spend_bunk_count() -> int:
+	var text := str(_displayed_next_step.get("text", ""))
+	var wanted := 1
+	if _bunk_step_states_count(_displayed_next_step):
+		wanted = int(text.trim_prefix("Next: YOU place ").get_slice(" ", 0))
+	else:
+		var needing := 0
+		var occupied: Dictionary = {}
+		for resident: VaultResident in game.residents:
+			if resident.sleeping and resident.bed_id >= 0:
+				occupied[resident.bed_id] = true
+			elif resident.medical_bed_id >= 0 and resident.state == "Rest-Medical":
+				continue
+			elif resident.alive and not resident.drafted and (resident.needs.rest <= 28.0 or (resident.sleeping and resident.bed_id < 0)):
+				needing += 1
+		for building: VaultBuilding in game.buildings:
+			if building.kind == VaultBuilding.Kind.BED and (not building.complete or not occupied.has(building.building_id)):
+				needing -= 1
+		wanted = maxi(needing, 1)
+	var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
+	return mini(wanted, spendable / int(VaultBuilding.COSTS[VaultBuilding.Kind.BED]))
+
+
+# One press of Spend on the bunk step: bunk blueprints on reachable free floor by the
+# same rules as place_spend_build, one message for the whole press.
+func place_spend_bunks() -> int:
+	var wanted := spend_bunk_count()
+	var placed := 0
+	game.set_tool("select")
+	if wanted > 0:
+		for cell: Vector2i in spend_build_cells(VaultBuilding.Kind.BED):
+			if placed >= wanted:
+				break
+			if _crew_can_reach(cell) and game.place_blueprint(VaultBuilding.Kind.BED, cell):
+				placed += 1
+	if wanted > 0:
+		game.status_message = "Bunks placed · THEY build it" if placed > 0 else "No free floor for bunks · dig more"
+		game.status_message_left = 4.0
+	refresh()
+	return placed
 
 
 # Free carved floor, nearest the build's related rooms first.

@@ -85,8 +85,8 @@ func _test_non_urgent() -> void:
 	game.player_orders.refresh()
 	var orders := game.player_orders
 	_assert_equal(orders.objective_label.text, "Next: YOU place bunks · THEY craft", "non-urgent Next names a different build")
-	# Spend follows Next: while Next says place bunks, Spend does not offer the Rec Console.
-	_assert_false(orders.upgrade_offer_button.visible, "Spend hides while Next names the needed bunks")
+	# Spend follows Next: while Next says place bunks, Spend offers the bunks, not the Rec Console.
+	_assert_false(orders.upgrade_offer_button.visible and not "bunk" in orders.upgrade_offer_button.text, "Spend offers only the bunks while Next names the needed bunks (%s)" % orders.upgrade_offer_button.text)
 	# Return to urgency in the same HUD, then back, to catch stale urgency state.
 	game.food_system.meals = 0
 	game.residents[0].needs.food = 19.0
@@ -97,7 +97,7 @@ func _test_non_urgent() -> void:
 	game.residents[0].needs.food = 100.0
 	orders.refresh()
 	_assert_equal(orders.objective_label.text, "Next: YOU place bunks · THEY craft", "feeding the crew clears urgent Next")
-	_assert_false(orders.upgrade_offer_button.visible, "Spend stays hidden when the bunks return as Next")
+	_assert_false(orders.upgrade_offer_button.visible and not "bunk" in orders.upgrade_offer_button.text, "Spend offers only the bunks when the bunks return as Next (%s)" % orders.upgrade_offer_button.text)
 	_dispose(game)
 
 
