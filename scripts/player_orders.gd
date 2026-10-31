@@ -2538,6 +2538,19 @@ func _air_warning_step(chain_step: Dictionary) -> Dictionary:
 	# A food rescue that cannot land in time is no step at all: show Air, starving stays an alert.
 	var hopeless_food := bool(chain_step.get("too_late", false)) and str(chain_step.get("cause", "")) == "food"
 	if hopeless_food and _unfinished_air_recycler():
+		# An unfunded Air blueprint cannot be finished: reclamation funds it first (Codex
+		# 6545586403). Still a hold, so no Rec/Grow nudge or Spend offer replaces it.
+		if _air_finish_unfunded() and game.can_start_reclamation():
+			_next_reclamation_kind = VaultBuilding.Kind.AIR_RECYCLER
+			return {
+				"text": "Next: YOU begin reclamation · +%d · THEY fund the Air Recycler" % VaultGame.RECLAIM_START_SALVAGE,
+				"help": "The Air Recycler blueprint is short of salvage. Reclamation: +%d salvage now, +%d every %d s, %d times" % [VaultGame.RECLAIM_START_SALVAGE, VaultGame.RECLAIM_DELIVERY, roundi(VaultGame.RECLAIM_INTERVAL), VaultGame.RECLAIM_DELIVERIES],
+				"tool": "select",
+				"action": "reclaim",
+				"cause": "air",
+				"food_resident_id": int(chain_step.get("resident_id", -1)),
+				"hold_air_finish": true,
+			}
 		# The Air tap is placed (03 s8 at 145.1 s): finishing it is still the step that lands.
 		return {
 			"text": "Next: YOU leave Haul + Craft on · THEY finish the Air Recycler",
@@ -2569,6 +2582,16 @@ func _air_warning_step(chain_step: Dictionary) -> Dictionary:
 		step["tool"] = "select"
 		step["action"] = "spend"
 	return step
+
+
+# An unfinished Air blueprint still owed more salvage than the stock can deliver.
+func _air_finish_unfunded() -> bool:
+	var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.AIR_RECYCLER and building.needs_supply() and not building.is_emergency_core:
+			if building.get_cost() - building.delivered > spendable:
+				return true
+	return false
 
 
 func _unfinished_air_recycler() -> bool:
