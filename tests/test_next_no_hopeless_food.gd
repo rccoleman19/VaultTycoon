@@ -8,12 +8,14 @@ extends "res://tests/test_air_early_warning.gd"
 # Air step and starving stays on the alert line; the "<name> starving" prefix rides only on a
 # food action. Assertions read Next and the alert list.
 
+const FollowDriver := preload("res://tools/playtest/follow_driver.gd")
 const HOPELESS := "nothing lands in time"
 
 
 func _run() -> void:
 	_run_case("hopeless food + live air warning: Next names Air, STARVING moves to the alert", _test_air_over_hopeless_food)
 	_run_case("idle crew keep the finish-Air Next and Spend queues no Rec or Grow until Air completes", _test_air_finish_holds)
+	_run_case("an unfunded Air blueprint at stock 0: Next and Follow begin reclamation, then finish-Air holds", _test_air_finish_funding)
 	_run_case("hopeless food with no other reachable step still says so", _test_hopeless_alone)
 	_run_case("a Rec Console step for a food crisis carries no starving name", _test_rec_unnamed)
 	_run_case("a food action for the same crisis keeps the starving name", _test_food_action_named)
@@ -103,6 +105,59 @@ func _test_air_finish_holds() -> void:
 	_assert_true(air.complete, "the Air Recycler completes inside the window (%d ticks)" % ticks)
 	if _failure_count == 0:
 		_assert_true(idle_ticks >= 3, "crew sat idle for several ticks before Air finished (%d of %d)" % [idle_ticks, ticks])
+	_dispose(game)
+
+
+# Codex 6545586403 on #145: with stock 0 the held finish-Air step could not happen and
+# Follow did nothing. Reclamation funds the Air first; then finish-Air returns and holds.
+func _test_air_finish_funding() -> void:
+	var game := _game(0, true)
+	_starve_first(game)
+	game.residents[0].needs.health = 100.0
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	game.oxygen_system.oxygen = 47.8
+	var cell := Vector2i(20, 11)
+	if not game.place_blueprint(VaultBuilding.Kind.AIR_RECYCLER, cell):
+		var cells: Array[Vector2i] = game._annex_free_cells(1)
+		cell = cells[0]
+		_assert_true(game.place_blueprint(VaultBuilding.Kind.AIR_RECYCLER, cell), "the Air Recycler blueprint is placed")
+	var air: VaultBuilding = game.buildings.back()
+	game.food_system.salvage = 0
+	_assert_true(game.can_start_reclamation(), "reclamation is available")
+	for i in 40:
+		game.step_simulation(0.1)
+	game.player_orders.refresh()
+	var next := _next(game)
+	_assert_true(next.begins_with("Next: YOU begin reclamation") and "fund the Air Recycler" in next, "stock 0: Next begins reclamation for the Air (%s)" % next)
+	var stock := game.food_system.salvage
+	var driver = FollowDriver.new()
+	driver.game = game
+	driver.logf = FileAccess.open("user://follow_air_fund.log", FileAccess.WRITE)
+	driver._follow_next()
+	driver.logf.close()
+	driver.free()
+	_assert_true(game.reclaim_active and game.food_system.salvage > stock, "Follow started reclamation (stock %d -> %d)" % [stock, game.food_system.salvage])
+	var ticks := 0
+	var held := 0
+	while ticks < 600 and not air.complete:
+		game.step_simulation(0.1)
+		game.player_orders.refresh()
+		if air.complete:
+			break
+		ticks += 1
+		next = _next(game)
+		if "finish the Air Recycler" in next:
+			held += 1
+		_assert_false("Rec Console" in next or "Grow" in next, "tick %d no Rec/Grow replaces finish-Air (%s)" % [ticks, next])
+		var before := _blueprint_count(game)
+		var button: Button = game.player_orders.upgrade_offer_button
+		if button.visible and not button.disabled:
+			button.pressed.emit()
+		_assert_equal(_blueprint_count(game), before, "tick %d Spend queues nothing beside the unfinished Air (%s)" % [ticks, button.text])
+		if _failure_count > 0:
+			break
+	_assert_true(held > 0 and held == ticks, "after funding Next holds finish-Air every tick (%d of %d)" % [held, ticks])
+	_assert_true(air.complete, "the Air Recycler completes (%d ticks)" % ticks)
 	_dispose(game)
 
 
