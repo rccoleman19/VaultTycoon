@@ -471,6 +471,8 @@ func _test_alerts_rank_by_urgency() -> void:
 	_assert_equal(game.breach_system.phase, BreachSystem.Phase.WARNING, "real simulation reaches the seeded seal warning")
 	_assert_true(game.day_cycle.elapsed_seconds >= game.breach_system.warning_at,
 		"warning ranking uses real elapsed simulation time")
+	# Answer the PRESSURE SURGE modal: while it is up Next holds the hatch step.
+	game.acknowledge_breach_warning(false)
 	_triage_healthy_crew(game)
 	game.food_system.meals = 24
 	game.breach_system.add_delivery(BreachSystem.PATCH_COST)

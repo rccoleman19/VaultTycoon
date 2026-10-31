@@ -272,7 +272,7 @@ func _test_outranks_needs() -> void:
 	_assert_equal(_tuple(game)[0], "Next: Ari starving · YOU place a Nutrient Station · THEY cook", "DORMANT critical food tip")
 	_set_all(game, "haul", VaultResident.PRIORITY_DISABLED)
 	_warn(game)
-	_assert_tuple(game, ["Next: Ari starving · YOU enable Haul [P] · THEY patch hatch", ENABLE_HAUL[1], ENABLE_HAUL[2]], "Haul blocker outranks the critical food tip and keeps Ari's danger prefix")
+	_assert_tuple(game, ENABLE_HAUL, "Haul blocker outranks the critical food tip; the starving name stays on food actions")
 	_set_all(game, "haul", VaultResident.DEFAULT_WORK_PRIORITY)
 	_assert_equal(_tuple(game)[0], "Next: Ari starving · YOU place a Nutrient Station · THEY cook", "covered WARNING keeps the critical food tip")
 	_dispose(game)
