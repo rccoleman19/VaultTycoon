@@ -7,7 +7,7 @@ const NAMED_NEXT := "Next: Ari starving · YOU place a Nutrient Station · THEY 
 func _run() -> void:
 	_run_case("05/4242 at Day 4 cannot spend against the food-runway build", _test_repro)
 	_run_case("an affordable urgent named build permits only the same spend nudge", _test_affordable_urgent)
-	_run_case("a non-urgent build keeps the old spend nudge unchanged", _test_non_urgent)
+	_run_case("a non-urgent bunk Next hides the Rec spend nudge", _test_non_urgent)
 	print("SPEND AGREES NEXT TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -85,9 +85,8 @@ func _test_non_urgent() -> void:
 	game.player_orders.refresh()
 	var orders := game.player_orders
 	_assert_equal(orders.objective_label.text, "Next: YOU place bunks · THEY craft", "non-urgent Next names a different build")
-	_assert_true(orders.upgrade_offer_button.visible, "the old nudge still shows when Next is not urgent")
-	_assert_equal(orders.upgrade_offer_button.text, "Spend 8: build Rec Console", "non-urgent nudge text stays exactly unchanged")
-	_assert_true(_press_spend_queues(game, VaultBuilding.Kind.RECREATION_CONSOLE), "the unchanged nudge queues its original build")
+	# Spend follows Next: while Next says place bunks, Spend does not offer the Rec Console.
+	_assert_false(orders.upgrade_offer_button.visible, "Spend hides while Next names the needed bunks")
 	# Return to urgency in the same HUD, then back, to catch stale urgency state.
 	game.food_system.meals = 0
 	game.residents[0].needs.food = 19.0
@@ -98,8 +97,7 @@ func _test_non_urgent() -> void:
 	game.residents[0].needs.food = 100.0
 	orders.refresh()
 	_assert_equal(orders.objective_label.text, "Next: YOU place bunks · THEY craft", "feeding the crew clears urgent Next")
-	_assert_true(orders.upgrade_offer_button.visible, "the old nudge returns as urgency clears")
-	_assert_equal(orders.upgrade_offer_button.text, "Spend 8: build Rec Console", "the restored nudge keeps its original wording")
+	_assert_false(orders.upgrade_offer_button.visible, "Spend stays hidden when the bunks return as Next")
 	_dispose(game)
 
 
