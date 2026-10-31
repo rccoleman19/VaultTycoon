@@ -2857,6 +2857,12 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		step["tool"] = "select"
 		step["action"] = "spend"
 		return step
+	# Bunks the crew still need are the player's real next action: a salvage nudge
+	# must not overwrite them, or the nudged build flashes until the bunks are placed
+	# and the chain names its own next build (03 s4242: Rec at 81.6 s, Air at 84.2 s).
+	# Survival needs arrive as urgent steps, which this non-urgent bunk step excludes.
+	if sink >= 0 and _is_bunk_place_step(step):
+		return step
 	return _next_spend_build(step, sink, prefix) if sink >= 0 else step
 
 
