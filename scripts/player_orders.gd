@@ -1903,7 +1903,8 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 		if _is_food_chain_step(step):
 			step.text = _unnamed_food_text(step)
 		step["food_unnamed"] = true
-	else:
+	elif cause != "food" or _is_food_chain_step(step):
+		# A mood, power or hatch step for a food crisis leaves "starving" to the alert line.
 		step.text = "Next: %s %s · %s" % [threatened.resident_name, condition, str(step.text).trim_prefix("Next: ")]
 	step["urgent"] = true
 	step["resident_id"] = threatened.resident_id
@@ -2534,10 +2535,23 @@ func _air_warning_step(chain_step: Dictionary) -> Dictionary:
 		_air_chain_named = true
 		# The chain already names it: keep its wording rather than restating it.
 		return {}
+	# A food rescue that cannot land in time is no step at all: show Air, starving stays an alert.
+	var hopeless_food := bool(chain_step.get("too_late", false)) and str(chain_step.get("cause", "")) == "food"
+	if hopeless_food and _unfinished_air_recycler():
+		# The Air tap is placed (03 s8 at 145.1 s): finishing it is still the step that lands.
+		return {
+			"text": "Next: YOU leave Haul + Craft on · THEY finish the Air Recycler",
+			"help": "Keep Haul + Craft above OFF so crew supply and finish the Air Recycler blueprint.",
+			"tool": "select",
+			"cause": "air",
+			"food_resident_id": int(chain_step.get("resident_id", -1)),
+			# Finishing Air is the step that lands; no salvage nudge may replace it.
+			"hold_air_finish": true,
+		}
 	var kind := _air_warning_kind()
 	if kind < 0:
 		return {}
-	if bool(chain_step.get("urgent", false)) and _next_named_build_kind(chain_step) != VaultBuilding.Kind.RECREATION_CONSOLE:
+	if bool(chain_step.get("urgent", false)) and not hopeless_food and _next_named_build_kind(chain_step) != VaultBuilding.Kind.RECREATION_CONSOLE:
 		return {}
 	var cost := int(VaultBuilding.COSTS[kind])
 	var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
@@ -2548,11 +2562,20 @@ func _air_warning_step(chain_step: Dictionary) -> Dictionary:
 		"tool": "generator" if kind == VaultBuilding.Kind.GENERATOR else "air",
 		"cause": "air",
 	}
+	if hopeless_food:
+		step["food_resident_id"] = int(chain_step.get("resident_id", -1))
 	if spendable >= cost:
 		step.text = "Next: YOU spend %d: build %s · %s" % [cost, VaultBuilding.KIND_NAMES[kind], them]
 		step["tool"] = "select"
 		step["action"] = "spend"
 	return step
+
+
+func _unfinished_air_recycler() -> bool:
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.AIR_RECYCLER and not building.complete and not building.is_emergency_core:
+			return true
+	return false
 
 
 func _primary_next_step() -> Dictionary:
@@ -2819,7 +2842,7 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		return step
 	# No amount of salvage replaces an immediate switch, undraft, priority or cutoff.
 	var salvage_action := placing or (funding and (body.begins_with("YOU mark ") or body.begins_with("YOU leave ")))
-	if bool(step.get("too_late", false)) or (danger and not salvage_action):
+	if bool(step.get("too_late", false)) or bool(step.get("hold_air_finish", false)) or (danger and not salvage_action):
 		return step
 	var idle := _has_idle_crew()
 	var sink := salvage_survival_sink(spendable) if idle else -1
@@ -3703,7 +3726,9 @@ func _starving_alert(step: Dictionary) -> String:
 		return ""
 	# The starvation state drives the alert, not the name in Next: a hatch, power or mood
 	# step for the same food crisis drops the name but keeps cause=food and the resident.
-	if str(step.get("cause", "")) != "food" or int(step.get("resident_id", -1)) != _starving_resident_id:
+	# An Air step that replaced a hopeless food rescue carries that resident as food_resident_id.
+	var food_id := int(step.get("resident_id", -1)) if str(step.get("cause", "")) == "food" else int(step.get("food_resident_id", -1))
+	if food_id != _starving_resident_id:
 		return ""
 	for resident: VaultResident in game.residents:
 		if resident.alive and resident.resident_id == _starving_resident_id:
@@ -5408,6 +5433,9 @@ func _food_card_offer_kind() -> int:
 
 
 func _upgrade_offer_nudge_kind() -> int:
+	# Spend agrees with a held finish-Air Next: nothing else is queued while Air is being built.
+	if bool(_displayed_next_step.get("hold_air_finish", false)):
+		return -1
 	if _air_warning_kind() >= 0:
 		# Spend offers what the displayed Next names; an urgent resident step that wins Next wins here too.
 		var air_kind := -1
