@@ -197,6 +197,10 @@ func _follow_next() -> void:
 		var building := _upgrade_target(action)
 		if building != null:
 			key_suffix = " id=%d" % building.building_id
+	var bunk_step := lower.begins_with("you place ") and "bunk" in lower
+	if bunk_step:
+		# A later bunk shortage repeats the same text; key it on the bunks already placed.
+		key_suffix = " bunks=%d" % _count_bunks()
 	if not claim_tip(followed_tips, tip, key_suffix):
 		return
 	_log("FOLLOW tip=%s" % tip)
@@ -219,6 +223,14 @@ func _follow_next() -> void:
 			if resident.alive and resident.drafted and (resident.resident_name.to_lower() in lower or "crew" in lower):
 				game.toggle_resident_draft(resident.resident_id)
 				_log("FOLLOW undraft %s success=%s" % [resident.resident_name, str(not resident.drafted)])
+		return
+	if bunk_step:
+		# The same path as Spend on the bunk step: every needed bunk in one press.
+		var placed: int = game.player_orders.place_spend_bunks()
+		_log("FOLLOW place bunks placed=%d status=%s" % [placed, game.status_message])
+		if placed == 0:
+			# Nothing placed (no floor or no budget): release the key so the same tip retries.
+			followed_tips.erase(NextCountdown.strip_clock(tip) + key_suffix)
 		return
 	if lower.begins_with("you place"):
 		var kind := _kind_named(action)
@@ -288,6 +300,9 @@ static func followed_action(tip: String, residents: Array[VaultResident], urgent
 		return tip.get_slice(" · ", 1)
 	if tip.begins_with("Next: YOU begin reclamation") or tip.begins_with("Next: YOU spend"):
 		return tip.get_slice(" · ", 0).trim_prefix("Next: ")
+	# The bunk step is the player's real next action (05 s4242 busy plateau), not a passive tip.
+	if tip.begins_with("Next: YOU place ") and "bunk" in tip.get_slice(" · ", 0):
+		return tip.get_slice(" · ", 0).trim_prefix("Next: ")
 	# An urgent step whose resident name was dropped still leads with the player's action.
 	# Passive tips stay unfollowed.
 	if urgent and tip.begins_with("Next: YOU "):
@@ -329,6 +344,14 @@ static func _kind_named(action: String) -> int:
 	if "salvage bay" in lower:
 		return VaultBuilding.Kind.STOCKPILE
 	return -1
+
+
+func _count_bunks() -> int:
+	var count := 0
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.BED:
+			count += 1
+	return count
 
 
 func _upgrade_target(action: String) -> VaultBuilding:
