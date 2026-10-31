@@ -1903,7 +1903,8 @@ func _resident_urgency_step(suppressed_builds: Dictionary = {}) -> Dictionary:
 		if _is_food_chain_step(step):
 			step.text = _unnamed_food_text(step)
 		step["food_unnamed"] = true
-	else:
+	elif cause != "food" or _is_food_chain_step(step):
+		# A mood, power or hatch step for a food crisis leaves "starving" to the alert line.
 		step.text = "Next: %s %s · %s" % [threatened.resident_name, condition, str(step.text).trim_prefix("Next: ")]
 	step["urgent"] = true
 	step["resident_id"] = threatened.resident_id
@@ -2537,7 +2538,9 @@ func _air_warning_step(chain_step: Dictionary) -> Dictionary:
 	var kind := _air_warning_kind()
 	if kind < 0:
 		return {}
-	if bool(chain_step.get("urgent", false)) and _next_named_build_kind(chain_step) != VaultBuilding.Kind.RECREATION_CONSOLE:
+	# A food rescue that cannot land in time is no step at all: show Air, starving stays an alert.
+	var hopeless_food := bool(chain_step.get("too_late", false)) and str(chain_step.get("cause", "")) == "food"
+	if bool(chain_step.get("urgent", false)) and not hopeless_food and _next_named_build_kind(chain_step) != VaultBuilding.Kind.RECREATION_CONSOLE:
 		return {}
 	var cost := int(VaultBuilding.COSTS[kind])
 	var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
@@ -2548,6 +2551,8 @@ func _air_warning_step(chain_step: Dictionary) -> Dictionary:
 		"tool": "generator" if kind == VaultBuilding.Kind.GENERATOR else "air",
 		"cause": "air",
 	}
+	if hopeless_food:
+		step["food_resident_id"] = int(chain_step.get("resident_id", -1))
 	if spendable >= cost:
 		step.text = "Next: YOU spend %d: build %s · %s" % [cost, VaultBuilding.KIND_NAMES[kind], them]
 		step["tool"] = "select"
@@ -3703,7 +3708,9 @@ func _starving_alert(step: Dictionary) -> String:
 		return ""
 	# The starvation state drives the alert, not the name in Next: a hatch, power or mood
 	# step for the same food crisis drops the name but keeps cause=food and the resident.
-	if str(step.get("cause", "")) != "food" or int(step.get("resident_id", -1)) != _starving_resident_id:
+	# An Air step that replaced a hopeless food rescue carries that resident as food_resident_id.
+	var food_id := int(step.get("resident_id", -1)) if str(step.get("cause", "")) == "food" else int(step.get("food_resident_id", -1))
+	if food_id != _starving_resident_id:
 		return ""
 	for resident: VaultResident in game.residents:
 		if resident.alive and resident.resident_id == _starving_resident_id:

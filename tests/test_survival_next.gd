@@ -185,6 +185,9 @@ func _assert_step(game: VaultGame, text: String, tool: String, help: String) -> 
 
 
 func _starving_next(text: String, name := "Ari") -> String:
+	# The starving name rides only on a food action; a Rec Console step leaves it to the alert line.
+	if "Rec Console" in text:
+		return text
 	return "Next: %s starving · %s" % [name, text.trim_prefix("Next: ")]
 
 

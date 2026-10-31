@@ -290,8 +290,8 @@ func _test_food_work_blocker() -> void:
 	var kitchen := game.get_building_at(Vector2i(21, 12))
 	_assert_true(kitchen.powered and game.food_system.can_cook(), "stress-break fixture has a powered kitchen and ready ingredients")
 	game.player_orders.refresh()
-	var expected := "Next: Ari starving · YOU place a Rec Console · THEY recover mood"
-	_assert_equal(game.player_orders.objective_label.text, expected, "ready food work blocked by breaks names Ari and the recovery action")
+	var expected := "Next: YOU place a Rec Console · THEY recover mood"
+	_assert_equal(game.player_orders.objective_label.text, expected, "ready food work blocked by breaks shows the recovery action; Ari's name stays on the alert line")
 	var step: Dictionary = game.player_orders._primary_next_step()
 	_assert_equal(str(step.get("kind", "")), "food", "stress-break recovery remains part of the food chain")
 	_assert_equal(str(step.tool), "rec", "stress-break recovery highlights the Rec tool")
