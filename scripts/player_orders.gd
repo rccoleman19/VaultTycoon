@@ -2086,8 +2086,9 @@ func _surge_modal_up() -> bool:
 
 
 # What Next shows, made steady for the player (display only; the chain is unchanged):
-# - While the PRESSURE SURGE modal is up, Next names the hatch response and keeps
-#   the first one it showed until the modal is answered (QA playtest 2 #3).
+# - While the PRESSURE SURGE modal is up, Next names what blocks the hatch response
+#   (or keeps the step it showed when the response is covered) and does not swap
+#   until the modal is answered (QA playtest 2 #3).
 # - When only the "<name> starving" prefix would drop or change name on the same
 #   action, the shown text holds for NEXT_STARVING_HOLD_S; a new prefix shows at once.
 func _steady_next_step(step: Dictionary) -> Dictionary:
@@ -2096,11 +2097,8 @@ func _steady_next_step(step: Dictionary) -> Dictionary:
 		if _next_surge_step.is_empty():
 			var hatch := _breach_blocker_step()
 			if hatch.is_empty():
-				hatch = {
-					"text": "Next: YOU press RESUME RESPONSE · THEY patch the hatch",
-					"help": "Answer the hatch warning (RESUME RESPONSE, FOCUS HATCH or Space); crew with Haul + Craft above OFF patch it.",
-					"tool": "select",
-				}
+				# A covered response has no hatch step: keep what Next already shows.
+				hatch = step if _next_shown_step.is_empty() else _next_shown_step
 			_next_surge_step = hatch.duplicate(true)
 		step = _next_surge_step.duplicate(true)
 	else:
