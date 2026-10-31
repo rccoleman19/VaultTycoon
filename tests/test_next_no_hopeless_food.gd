@@ -13,6 +13,7 @@ const HOPELESS := "nothing lands in time"
 
 func _run() -> void:
 	_run_case("hopeless food + live air warning: Next names Air, STARVING moves to the alert", _test_air_over_hopeless_food)
+	_run_case("idle crew keep the finish-Air Next and Spend queues no Rec or Grow until Air completes", _test_air_finish_holds)
 	_run_case("hopeless food with no other reachable step still says so", _test_hopeless_alone)
 	_run_case("a Rec Console step for a food crisis carries no starving name", _test_rec_unnamed)
 	_run_case("a food action for the same crisis keeps the starving name", _test_food_action_named)
@@ -64,6 +65,53 @@ func _test_air_over_hopeless_food() -> void:
 	_assert_true("finish the Air Recycler" in next, "Next asks to finish the Air Recycler: %s" % next)
 	_assert_true(_has_alert(game, "STARVING: " + cyra.resident_name), "starvation stays on the alert line: %s" % str(game.player_orders.all_alerts))
 	_dispose(game)
+
+
+# Codex 6542541441 on #145: after the Air tap, crew going idle let a salvage nudge replace
+# "finish the Air Recycler" with "build Rec Console", and Spend queued a Grow Tray. Ticks the
+# real simulation with idle crew and presses the real Spend button each tick.
+func _test_air_finish_holds() -> void:
+	var game := _game(30, true)
+	_starve_first(game)
+	game.residents[0].needs.health = 100.0
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	game.oxygen_system.oxygen = 47.8
+	var cells: Array[Vector2i] = game._annex_free_cells(1)
+	_assert_true(game.place_blueprint(VaultBuilding.Kind.AIR_RECYCLER, cells[0]), "the Air Recycler blueprint is placed")
+	var air: VaultBuilding = game.buildings.back()
+	game.player_orders.refresh()
+	var ticks := 0
+	var idle_ticks := 0
+	while ticks < 400 and not air.complete:
+		game.step_simulation(0.1)
+		game.player_orders.refresh()
+		if air.complete:
+			break
+		ticks += 1
+		var idle: bool = game.player_orders._has_idle_crew()
+		if idle:
+			idle_ticks += 1
+		var next := _next(game)
+		_assert_true("finish the Air Recycler" in next, "tick %d (idle=%s) Next keeps finishing Air: %s" % [ticks, idle, next])
+		var before := _blueprint_count(game)
+		var button: Button = game.player_orders.upgrade_offer_button
+		if button.visible and not button.disabled:
+			button.pressed.emit()
+		_assert_equal(_blueprint_count(game), before, "tick %d Spend queues nothing beside the unfinished Air (%s)" % [ticks, button.text])
+		if _failure_count > 0:
+			break
+	_assert_true(air.complete, "the Air Recycler completes inside the window (%d ticks)" % ticks)
+	if _failure_count == 0:
+		_assert_true(idle_ticks >= 3, "crew sat idle for several ticks before Air finished (%d of %d)" % [idle_ticks, ticks])
+	_dispose(game)
+
+
+func _blueprint_count(game: VaultGame) -> int:
+	var n := 0
+	for building: VaultBuilding in game.buildings:
+		if not building.complete:
+			n += 1
+	return n
 
 
 func _test_hopeless_alone() -> void:

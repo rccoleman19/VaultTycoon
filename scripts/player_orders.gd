@@ -2545,6 +2545,8 @@ func _air_warning_step(chain_step: Dictionary) -> Dictionary:
 			"tool": "select",
 			"cause": "air",
 			"food_resident_id": int(chain_step.get("resident_id", -1)),
+			# Finishing Air is the step that lands; no salvage nudge may replace it.
+			"hold_air_finish": true,
 		}
 	var kind := _air_warning_kind()
 	if kind < 0:
@@ -2840,7 +2842,7 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		return step
 	# No amount of salvage replaces an immediate switch, undraft, priority or cutoff.
 	var salvage_action := placing or (funding and (body.begins_with("YOU mark ") or body.begins_with("YOU leave ")))
-	if bool(step.get("too_late", false)) or (danger and not salvage_action):
+	if bool(step.get("too_late", false)) or bool(step.get("hold_air_finish", false)) or (danger and not salvage_action):
 		return step
 	var idle := _has_idle_crew()
 	var sink := salvage_survival_sink(spendable) if idle else -1
@@ -5431,6 +5433,9 @@ func _food_card_offer_kind() -> int:
 
 
 func _upgrade_offer_nudge_kind() -> int:
+	# Spend agrees with a held finish-Air Next: nothing else is queued while Air is being built.
+	if bool(_displayed_next_step.get("hold_air_finish", false)):
+		return -1
 	if _air_warning_kind() >= 0:
 		# Spend offers what the displayed Next names; an urgent resident step that wins Next wins here too.
 		var air_kind := -1
