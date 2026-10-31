@@ -5137,6 +5137,11 @@ func _upgrade_benefit_text(building: VaultBuilding) -> String:
 func _upgrade_offer_target() -> VaultBuilding:
 	if game.ended or not game.breach_system.is_sealed():
 		return null
+	# Low crew mood with no Rec Console: the Rec nudge outranks a Mk II fit, so Spend
+	# offers and places the Rec (place_spend_build). Air, food and bunk holds still gate
+	# that nudge in _upgrade_offer_nudge_kind.
+	if _low_mood_rec_wanted() and salvage_nudge_kind() == VaultBuilding.Kind.RECREATION_CONSOLE:
+		return null
 	# Air first (NX37): no Mk II fit before an Air Recycler is finished and powered, or the salvage
 	# the Air Recycler needs goes on trays and the crew suffocates (05/4242 GROW NOOK, t=229).
 	if not _air_ready():
@@ -5463,6 +5468,19 @@ func _upgrade_offer_nudge_kind() -> int:
 	if nudge >= 0 and _bunks_hold_salvage_nudge(_displayed_next_step):
 		return -1
 	return -1 if urgent_kind >= 0 and nudge != urgent_kind else nudge
+
+
+const LOW_MOOD_REC_THRESHOLD := 40.0
+
+
+# An undrafted crew member under LOW_MOOD_REC_THRESHOLD with no Rec Console built or queued.
+func _low_mood_rec_wanted() -> bool:
+	if _count_kind(VaultBuilding.Kind.RECREATION_CONSOLE) > 0:
+		return false
+	for resident: VaultResident in game.residents:
+		if resident.alive and not resident.drafted and resident.needs.mood < LOW_MOOD_REC_THRESHOLD:
+			return true
+	return false
 
 
 # What the Spend button costs: its click arms one build tool, so the cost of that build.
