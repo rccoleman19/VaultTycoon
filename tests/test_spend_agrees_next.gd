@@ -87,8 +87,7 @@ func _test_non_urgent() -> void:
 	_assert_equal(orders.objective_label.text, "Next: YOU place bunks · THEY craft", "non-urgent Next names a different build")
 	_assert_true(orders.upgrade_offer_button.visible, "the old nudge still shows when Next is not urgent")
 	_assert_equal(orders.upgrade_offer_button.text, "Spend 8: build Rec Console", "non-urgent nudge text stays exactly unchanged")
-	orders.upgrade_offer_button.pressed.emit()
-	_assert_equal(game.active_tool, "rec", "the unchanged nudge still selects its original build tool")
+	_assert_true(_press_spend_queues(game, VaultBuilding.Kind.RECREATION_CONSOLE), "the unchanged nudge queues its original build")
 	# Return to urgency in the same HUD, then back, to catch stale urgency state.
 	game.food_system.meals = 0
 	game.residents[0].needs.food = 19.0
@@ -110,6 +109,11 @@ func _assert_nudge_agrees(game: VaultGame, build_name: String, tool: String) -> 
 	var expected := "Spend %d: build %s" % [game.player_orders.upgrade_offer_cost(game.player_orders._upgrade_offer_nudge_kind()), build_name]
 	_assert_true(not button.visible or button.text == expected,
 		"spend nudge must agree with [%s] or hide; visible=%s text=[%s]" % [orders.objective_label.text, button.visible, button.text])
-	var previous_tool := game.active_tool
-	button.pressed.emit()
-	_assert_equal(game.active_tool, tool if button.visible else previous_tool, "the offer's click follows the same agreement guard")
+	var kind: int = VaultBuilding.KIND_NAMES.find_key(build_name)
+	if button.visible:
+		_assert_true(_press_spend_queues(game, kind), "the offer's click queues the agreed %s (%s tool)" % [build_name, tool])
+	else:
+		var previous_tool := game.active_tool
+		var count := game.buildings.size()
+		button.pressed.emit()
+		_assert_equal([game.active_tool, game.buildings.size()], [previous_tool, count], "a hidden offer's click does nothing")

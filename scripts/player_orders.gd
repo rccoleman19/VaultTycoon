@@ -5484,7 +5484,72 @@ func _on_upgrade_offer_pressed() -> void:
 	if target != null:
 		game.select_building(target.building_id)
 	elif NUDGE_TOOLS.has(nudge):
-		game.set_tool(NUDGE_TOOLS[nudge])
+		place_spend_build(nudge)
+
+
+# The rooms a Spend build belongs beside; it goes on the nearest free floor to them.
+const SPEND_ANCHOR_KINDS := {
+	VaultBuilding.Kind.RECREATION_CONSOLE: [VaultBuilding.Kind.BED, VaultBuilding.Kind.MEDICAL_BED],
+	VaultBuilding.Kind.KITCHEN: [VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GROW_TRAY],
+	VaultBuilding.Kind.GROW_TRAY: [VaultBuilding.Kind.GROW_TRAY, VaultBuilding.Kind.KITCHEN],
+	VaultBuilding.Kind.GENERATOR: [VaultBuilding.Kind.GENERATOR, VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.AIR_RECYCLER],
+	VaultBuilding.Kind.AIR_RECYCLER: [VaultBuilding.Kind.AIR_RECYCLER, VaultBuilding.Kind.GENERATOR],
+}
+
+
+# One press of Spend for a named build: a blueprint on the best free floor the crew can reach,
+# by the same rules as a manual placement (game.place_blueprint), so it can be canceled or
+# moved the usual way. With no such floor it says so and leaves the select tool on.
+func place_spend_build(kind: int) -> bool:
+	var build_name: String = VaultBuilding.KIND_NAMES[kind]
+	game.set_tool("select")
+	for cell: Vector2i in spend_build_cells(kind):
+		if _crew_can_reach(cell) and game.place_blueprint(kind, cell):
+			game.status_message = "%s placed · THEY build it" % build_name
+			game.status_message_left = 4.0
+			refresh()
+			return true
+	game.status_message = "No free floor for %s · dig more" % build_name
+	game.status_message_left = 4.0
+	refresh()
+	return false
+
+
+# Free carved floor, nearest the build's related rooms first.
+func spend_build_cells(kind: int) -> Array[Vector2i]:
+	var anchors: Array[Vector2i] = []
+	for building: VaultBuilding in game.buildings:
+		if building.kind in SPEND_ANCHOR_KINDS.get(kind, []):
+			anchors.append(building.cell)
+	if anchors.is_empty():
+		for building: VaultBuilding in game.buildings:
+			anchors.append(building.cell)
+	if anchors.is_empty():
+		anchors.append(MapGrid.CHAMBER.get_center())
+	var scored: Array = []
+	for y in MapGrid.HEIGHT:
+		for x in MapGrid.WIDTH:
+			var cell := Vector2i(x, y)
+			if cell == BreachSystem.HATCH_CELL or not game.map_grid.is_walkable(cell) or game.get_building_at(cell) != null or game.map_grid.stockpile_cells.has(cell):
+				continue
+			var best := INF
+			for anchor: Vector2i in anchors:
+				best = minf(best, Vector2(cell - anchor).length())
+			scored.append([best, y, x, cell])
+	scored.sort()
+	var cells: Array[Vector2i] = []
+	for entry: Array in scored:
+		cells.append(entry[3])
+	return cells
+
+
+func _crew_can_reach(cell: Vector2i) -> bool:
+	if game.get_alive_count() == 0:
+		return true
+	for resident: VaultResident in game.residents:
+		if resident.alive and not game.map_grid.find_path(resident.get_cell(game.map_grid), cell).is_empty():
+			return true
+	return false
 
 
 func _on_fixture_upgrade_pressed() -> void:

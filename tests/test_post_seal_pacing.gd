@@ -279,12 +279,10 @@ func _test_salvage_nudge() -> void:
 	game.food_system.salvage = 28
 	_assert_equal(_offer(game), "Spend 8: build Rec Console", "no Rec Console yet: the nudge names one")
 	_assert_false(bool(game.player_orders._displayed_next_step.get("urgent", false)), "Next is not urgent at the Rec nudge")
-	game.player_orders._on_upgrade_offer_pressed()
-	_assert_equal(game.active_tool, "rec", "and picks its tool")
+	_assert_true(_press_spend_queues(game, VaultBuilding.Kind.RECREATION_CONSOLE), "and queues it")
 	game.food_system.raw_food = 6
 	_assert_equal(_offer(game), "Spend 10: build Nutrient Station", "a raw pile of 6 asks for a second Nutrient Station first")
-	game.player_orders._on_upgrade_offer_pressed()
-	_assert_equal(game.active_tool, "kitchen", "and picks its tool")
+	_assert_true(_press_spend_queues(game, VaultBuilding.Kind.KITCHEN), "and queues it")
 	game.food_system.raw_food = 0
 	_add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12))
 	game.power_grid.recalculate(game.buildings)
@@ -296,8 +294,7 @@ func _test_salvage_nudge() -> void:
 	game.power_grid.recalculate(game.buildings)
 	_assert_equal(game.player_orders._planned_power_spare(), 0, "12 supply, 12 planned demand")
 	_assert_equal(_offer(game), "Spend 18: build Charge Node", "no room for a tray's 3 power: a Charge Node first")
-	game.player_orders._on_upgrade_offer_pressed()
-	_assert_equal(game.active_tool, "generator", "and picks its tool")
+	_assert_true(_press_spend_queues(game, VaultBuilding.Kind.GENERATOR), "and queues it")
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, Vector2i(25, 13)), "a planned Charge Node")
 	_assert_equal(_offer(game), "Spend 12: build Grow Tray", "a planned Charge Node counts: the tray again")
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.GROW_TRAY, Vector2i(23, 13)), "a planned second tray")

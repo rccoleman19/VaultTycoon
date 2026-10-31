@@ -137,8 +137,7 @@ func _test_sweep() -> void:
 				var next_build := _next_full_build(game)
 				if not next_build.is_empty():
 					_assert_equal(spend, next_build, "Spend matches Next: %s" % tag)
-				game.player_orders.upgrade_offer_button.pressed.emit()
-				_assert_equal(game.active_tool, game.player_orders.NUDGE_TOOLS[VaultBuilding.KIND_NAMES.find_key(spend)], "pressing Spend arms that build: %s" % tag)
+				_assert_true(_press_spend_queues(game, VaultBuilding.KIND_NAMES.find_key(spend)), "pressing Spend queues that build: %s" % tag)
 			_dispose(game)
 	_assert_true(shown >= 6, "Spend was visible in %d food states" % shown)
 
