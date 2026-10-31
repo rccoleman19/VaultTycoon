@@ -3690,9 +3690,12 @@ func _air_alert_count(alerts: Array[String]) -> int:
 func _starving_alert(step: Dictionary) -> String:
 	if _starving_resident_id < 0:
 		return ""
-	var text := " " + str(step.get("text", ""))
+	# The starvation state drives the alert, not the name in Next: a hatch, power or mood
+	# step for the same food crisis drops the name but keeps cause=food and the resident.
+	if str(step.get("cause", "")) != "food" or int(step.get("resident_id", -1)) != _starving_resident_id:
+		return ""
 	for resident: VaultResident in game.residents:
-		if resident.alive and resident.resident_id == _starving_resident_id and (" %s starving" % resident.resident_name) in text:
+		if resident.alive and resident.resident_id == _starving_resident_id:
 			return STARVING_ALERT_PREFIX + resident.resident_name
 	return ""
 
