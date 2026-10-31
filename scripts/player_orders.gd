@@ -25,6 +25,12 @@ var _next_hold_since := -1.0
 var _next_hold_step: Dictionary = {}
 var _next_reclamation_kind := -1
 var _displayed_next_step: Dictionary = {}
+# Display-only steadiness for Next (QA playtest 2 #2, #3): the shown step, when it
+# was first shown (sim s), and the step held while the PRESSURE SURGE modal is up.
+const NEXT_STARVING_HOLD_S := 4.0
+var _next_shown_step: Dictionary = {}
+var _next_shown_since := -1.0
+var _next_surge_step: Dictionary = {}
 
 # Guidance reads retain the starvation name until fed or a nearer deadline.
 var _starving_resident_id := -1
@@ -1991,7 +1997,10 @@ func _name_food_recovery(step: Dictionary, urgent_step: Dictionary) -> Dictionar
 				resident = candidate
 	if resident == null:
 		return step
-	step.text = "Next: %s starving · %s" % [resident.resident_name, str(step.text).trim_prefix("Next: ")]
+	# Only a food action carries the name; a mood, power or hatch step leaves
+	# starving to the alert line (QA playtest 2 #2) but keeps its urgency.
+	if _is_food_chain_step(step):
+		step.text = "Next: %s starving · %s" % [resident.resident_name, str(step.text).trim_prefix("Next: ")]
 	step["urgent"] = true
 	step["resident_id"] = resident.resident_id
 	step["cause"] = "food"
@@ -2056,6 +2065,58 @@ func _fund_blueprint_step(kind: int, food_work_blocker := false) -> Dictionary:
 	var kind_name: String = VaultBuilding.KIND_NAMES[kind]
 	return _fund_salvage_step(kind_name, shortfall,
 		"The %s blueprint is %d salvage short. Each dug rock tile yields %d salvage once hauled." % [kind_name, shortfall, DIG_SALVAGE_YIELD])
+
+
+static var _STARVING_PREFIX := RegEx.create_from_string("^Next: \\S+ starving · ")
+
+
+# "Next: Bo starving · YOU cook" -> "Next: YOU cook"; the action without its name.
+static func next_action_text(text: String) -> String:
+	return _STARVING_PREFIX.sub(text, "Next: ")
+
+
+static func next_starving_name(text: String) -> String:
+	var m := _STARVING_PREFIX.search(text)
+	return "" if m == null else m.get_string().trim_prefix("Next: ").trim_suffix(" starving · ")
+
+
+func _surge_modal_up() -> bool:
+	var breach := game.breach_system
+	return breach.phase == BreachSystem.Phase.WARNING and not breach.warning_acknowledged
+
+
+# What Next shows, made steady for the player (display only; the chain is unchanged):
+# - While the PRESSURE SURGE modal is up, Next names what blocks the hatch response
+#   (or keeps the step it showed when the response is covered) and does not swap
+#   until the modal is answered (QA playtest 2 #3).
+# - When only the "<name> starving" prefix would drop or change name on the same
+#   action, the shown text holds for NEXT_STARVING_HOLD_S; a new prefix shows at once.
+func _steady_next_step(step: Dictionary) -> Dictionary:
+	var now := _survival_tip_sim_time()
+	if _surge_modal_up():
+		if _next_surge_step.is_empty():
+			var hatch := _breach_blocker_step()
+			if hatch.is_empty():
+				# A covered response has no hatch step: keep what Next already shows.
+				hatch = step if _next_shown_step.is_empty() else _next_shown_step
+			_next_surge_step = hatch.duplicate(true)
+		step = _next_surge_step.duplicate(true)
+	else:
+		_next_surge_step = {}
+	var text := str(step.get("text", ""))
+	var shown := str(_next_shown_step.get("text", ""))
+	if not shown.is_empty() and text != shown and next_action_text(text) == next_action_text(shown):
+		var shown_name := next_starving_name(shown)
+		var new_name := next_starving_name(text)
+		var age := now - _next_shown_since
+		if not shown_name.is_empty() and new_name != shown_name and age >= 0.0 and age < NEXT_STARVING_HOLD_S:
+			var held := step.duplicate(true)
+			held.text = shown
+			return held
+	if text != shown:
+		_next_shown_since = now
+	_next_shown_step = step.duplicate(true)
+	return step
 
 
 func _breach_blocker_step() -> Dictionary:
@@ -3180,7 +3241,7 @@ func _refresh_objective() -> Dictionary:
 		objective_label.add_theme_color_override("font_color", Color("ef6860"))
 		_expand_details_on_urgency()
 		return {}
-	var step: Dictionary = _primary_next_step()
+	var step: Dictionary = _steady_next_step(_primary_next_step())
 	_remember_survival_tip(step)
 	objective_label.text = _with_air_countdown(str(step.get("text", "NEXT // Survive")))
 	objective_label.add_theme_color_override("font_color", Color("efc56b"))
@@ -3629,9 +3690,12 @@ func _air_alert_count(alerts: Array[String]) -> int:
 func _starving_alert(step: Dictionary) -> String:
 	if _starving_resident_id < 0:
 		return ""
-	var text := " " + str(step.get("text", ""))
+	# The starvation state drives the alert, not the name in Next: a hatch, power or mood
+	# step for the same food crisis drops the name but keeps cause=food and the resident.
+	if str(step.get("cause", "")) != "food" or int(step.get("resident_id", -1)) != _starving_resident_id:
+		return ""
 	for resident: VaultResident in game.residents:
-		if resident.alive and resident.resident_id == _starving_resident_id and (" %s starving" % resident.resident_name) in text:
+		if resident.alive and resident.resident_id == _starving_resident_id:
 			return STARVING_ALERT_PREFIX + resident.resident_name
 	return ""
 
@@ -4368,6 +4432,9 @@ func clear_survival_tips() -> void:
 	_next_hold_step.clear()
 	_next_reclamation_kind = -1
 	_displayed_next_step = {}
+	_next_shown_step = {}
+	_next_shown_since = -1.0
+	_next_surge_step = {}
 	_starving_resident_id = -1
 	_food_forecast_latched = false
 	_next_bunk_text = ""

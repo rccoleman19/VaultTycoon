@@ -89,6 +89,8 @@ run_godot_check unnamed-rec-lead --script res://tests/test_unnamed_rec_lead.gd
 run_godot_check medbed-bunk-card --script res://tests/test_medbed_bunk_card.gd
 run_godot_check alert-line-cap --script res://tests/test_alert_line_cap.gd
 run_godot_check spend-places-build --script res://tests/test_spend_places_build.gd
+run_godot_check next-steady --script res://tests/test_next_steady.gd
+run_godot_check starving-unnamed-follow --script res://tests/test_starving_unnamed_follow.gd
 run_godot_check wing-best --script res://tests/test_wing_best.gd
 run_godot_check wing-best-behavior --script res://tests/test_wing_best_behavior.gd
 run_godot_check death-recap --script res://tests/test_death_recap.gd

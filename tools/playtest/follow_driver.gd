@@ -187,7 +187,8 @@ func _follow_next() -> void:
 	if game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged:
 		return
 	var tip := game.player_orders.objective_label.text
-	var action := followed_action(tip, game.residents)
+	var urgent := bool(game.player_orders._displayed_next_step.get("urgent", false))
+	var action := followed_action(tip, game.residents, urgent)
 	if action.is_empty():
 		return
 	var lower := action.to_lower()
@@ -282,10 +283,14 @@ static func claim_tip(followed: Dictionary, tip: String, key_suffix := "") -> bo
 
 # The action this driver takes for a Next tip ("" when it only observes): the YOU clause
 # after a resident-danger prefix, or a reclamation/spend tip.
-static func followed_action(tip: String, residents: Array[VaultResident]) -> String:
+static func followed_action(tip: String, residents: Array[VaultResident], urgent := false) -> String:
 	if has_resident_danger_prefix(tip, residents):
 		return tip.get_slice(" · ", 1)
 	if tip.begins_with("Next: YOU begin reclamation") or tip.begins_with("Next: YOU spend"):
+		return tip.get_slice(" · ", 0).trim_prefix("Next: ")
+	# An urgent step whose resident name was dropped still leads with the player's action.
+	# Passive tips stay unfollowed.
+	if urgent and tip.begins_with("Next: YOU "):
 		return tip.get_slice(" · ", 0).trim_prefix("Next: ")
 	return ""
 
