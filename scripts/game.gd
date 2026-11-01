@@ -2799,6 +2799,67 @@ func apply_comfort() -> bool:
 const COMFORT_STATUS := "Comfort queued: Rec Console, Med Bed and their power and light."
 
 
+# Food plan (QA-d #8 Lever 1): one tap queues the food chain an idle vault never builds:
+# a Charge Node only when planned power cannot carry the missing pieces, then a Nutrient
+# Station, then a Grow Tray. Gated while the live hatch still needs its patch salvage.
+const FOOD_PLAN_KINDS := [VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GROW_TRAY]
+const FOOD_PLAN_STATUS := "Food plan queued: Nutrient Station, Grow Tray and their power."
+
+
+func food_plan_pending() -> bool:
+	if ended:
+		return false
+	for kind: int in FOOD_PLAN_KINDS:
+		if _count_buildings(kind) == 0:
+			return true
+	return false
+
+
+func food_plan_kinds() -> Array[int]:
+	var kinds: Array[int] = []
+	var demand := 0
+	for kind: int in FOOD_PLAN_KINDS:
+		if _count_buildings(kind) == 0:
+			kinds.append(kind)
+			demand += int(VaultBuilding.POWER_DEMAND.get(kind, 0))
+	if not kinds.is_empty() and _planned_power_spare() < demand:
+		kinds.push_front(VaultBuilding.Kind.GENERATOR)
+	return kinds
+
+
+func food_plan_cost() -> int:
+	var cost := 0
+	for kind in food_plan_kinds():
+		cost += int(VaultBuilding.COSTS[kind])
+	return cost
+
+
+# Salvage the unsealed hatch still needs for its patch (0 once sealed or fully supplied).
+func food_plan_patch_owed() -> int:
+	return maxi(0, BreachSystem.PATCH_COST - breach_system.patch_delivered - job_system.get_breach_supply_in_transit())
+
+
+func food_plan_gate_open() -> bool:
+	var owed := food_plan_patch_owed()
+	return owed == 0 or food_system.salvage >= owed + food_plan_cost()
+
+
+func apply_food_plan() -> bool:
+	if not food_plan_pending() or not food_plan_gate_open():
+		return false
+	var kinds := food_plan_kinds()
+	var cells := _annex_free_cells(kinds.size())
+	if cells.size() < kinds.size():
+		status_message = "No free floor for the food plan; place a Nutrient Station and Grow Tray by hand."
+		status_message_left = 4.0
+		return false
+	for index in kinds.size():
+		place_blueprint(kinds[index], cells[index])
+	status_message = FOOD_PLAN_STATUS
+	status_message_left = 5.0
+	return true
+
+
 # Feast (north star slice 5): surplus meals become morale. At each keep-running day rollover, with
 # meals at the Annex reserve + max(30, 2 per crew) or more and nobody hungry, every living resident
 # eats 2 meals' worth of feast for +12 mood. Self-limiting: 5 crew spend 10 meals a day, more than two
