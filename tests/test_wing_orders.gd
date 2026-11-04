@@ -327,7 +327,10 @@ func _test_playthrough() -> void:
 			game.acknowledge_breach_warning(true)
 		if game.breach_system.is_sealed():
 			orders.refresh()
-			if grow_at < 0.0 and orders.upgrade_offer_button.visible:
+			if grow_at < 0.0 and orders.upgrade_offer_button.visible and "Rec Console" in orders.upgrade_offer_button.text:
+				# Low crew mood with no Rec Console: Spend offers the Rec first (rec-offer-low-mood).
+				orders.upgrade_offer_button.pressed.emit()
+			elif grow_at < 0.0 and orders.upgrade_offer_button.visible:
 				orders.upgrade_offer_button.pressed.emit()
 				orders.refresh()
 				if not orders.fixture_upgrade_button.disabled:

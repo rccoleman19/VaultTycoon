@@ -288,6 +288,11 @@ func _managed_wing(buy: bool) -> Dictionary:
 		if buy and bought_at < 0.0 and game.breach_system.is_sealed():
 			game.food_system.salvage = maxi(game.food_system.salvage, VaultBuilding.GROW_MK2_COST)
 			game.player_orders.refresh()
+			# Low crew mood with no Rec Console: Spend offers the Rec first (rec-offer-low-mood).
+			if "Rec Console" in game.player_orders.upgrade_offer_button.text:
+				game.player_orders.upgrade_offer_button.pressed.emit()
+				game.food_system.salvage = maxi(game.food_system.salvage, VaultBuilding.GROW_MK2_COST)
+				game.player_orders.refresh()
 			game.player_orders.upgrade_offer_button.pressed.emit()
 			game.player_orders.refresh()
 			game.player_orders.fixture_upgrade_button.pressed.emit()
