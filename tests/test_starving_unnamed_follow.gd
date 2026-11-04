@@ -84,5 +84,6 @@ func _test_follow() -> void:
 
 
 func _test_passive() -> void:
-	_assert_equal(FollowDriver.followed_action("Next: YOU place bunks · THEY craft", []), "", "a passive tip is not followed")
+	# The bunk step is a real player action now (feat/bunk-guard-spend), not a passive tip.
+	_assert_equal(FollowDriver.followed_action("Next: YOU place bunks · THEY craft", []), "YOU place bunks", "the bunk step is followed")
 	_assert_equal(FollowDriver.followed_action("Next: YOU leave Haul + Craft on · THEY finish the bunks", []), "", "a passive leave-on tip is not followed")

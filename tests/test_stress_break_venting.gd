@@ -52,7 +52,7 @@ func _run() -> void:
 	_run_case("echo funded undelivered Charge keeps its finish chain and allows idle spend", _test_echo_funded)
 	_run_case("powered Rec returns the default chain and allows idle spend", _test_echo_powered)
 	_run_case("medical crisis outranks echo", _test_echo_injured)
-	_run_case("bunk care outranks echo in the chain and allows idle spend", _test_echo_bunks)
+	_run_case("bunk care outranks echo and holds idle Mk II spend", _test_echo_bunks)
 	_run_case("echo refresh preserves active build tool", _test_echo_refresh)
 	print("STRESS BREAK VENTING TESTS: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(0 if _failure_count == 0 else 1)
@@ -508,7 +508,8 @@ func _test_echo_bunks() -> void:
 	for resident: VaultResident in game.residents:
 		resident.needs.rest = 25.0
 	_assert_chain_step(game, "Next: YOU place bunks · THEY craft", "bed", "Place bunks so tired undrafted crew have a bed.")
-	_assert_step(game, SPEND_GROW, "select", SPEND_GROW_HELP, "spend")
+	# Bunk guard: while bunks are needed, Next stays on bunks instead of Mk II.
+	_assert_step(game, "Next: YOU place bunks · THEY craft", "bed", "Place bunks so tired undrafted crew have a bed.")
 	game.free()
 
 
