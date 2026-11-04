@@ -129,6 +129,8 @@ func _test_air_finish_funding() -> void:
 	game.player_orders.refresh()
 	var next := _next(game)
 	_assert_true(next.begins_with("Next: YOU begin reclamation") and "fund the Air Recycler" in next, "stock 0: Next begins reclamation for the Air (%s)" % next)
+	var shown: Dictionary = game.player_orders._displayed_next_step
+	_assert_true(str(shown.get("action", "")) == "reclaim" and bool(shown.get("hold_air_finish", false)), "the reclaim step for the unfunded Air carries the finish-Air hold (%s)" % shown)
 	var stock := game.food_system.salvage
 	var driver = FollowDriver.new()
 	driver.game = game
