@@ -81,6 +81,7 @@ run_godot_check alert-triage --script res://tests/test_alert_triage.gd
 run_godot_check alert-priority --script res://tests/test_alert_priority.gd
 run_godot_check hatch-reserve --script res://tests/test_hatch_reserve.gd
 run_godot_check air-deadline --script res://tests/test_air_deadline.gd
+run_godot_check next-no-hopeless-food --script res://tests/test_next_no_hopeless_food.gd
 run_godot_check late-shift-goals --script res://tests/test_late_shift_goals.gd
 run_godot_check day4-supply-cache --script res://tests/test_day4_supply_cache.gd
 run_godot_check next-flicker --script res://tests/test_next_flicker.gd
