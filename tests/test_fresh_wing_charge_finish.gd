@@ -1,5 +1,6 @@
 extends "res://tests/test_runner.gd"
 
+const HATCH_WATCH := ["Next: YOU watch hatch · THEY auto-patch", "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft.", "select"]
 const TICK_CAP := 799
 const CHARGE := ["Next: YOU place a Charge Node · THEY supply/build", "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.", "generator"]
 const FINISH_CHARGE := ["Next: YOU leave Haul + Craft on · THEY finish the Charge Node", "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.", "select"]
@@ -9,6 +10,7 @@ const DIG_NEXT := [
 	["Next: YOU keep marking digs [E] · THEY dig/haul alone", "Keep designating connected rock. They dig then haul rubble without draft. PRIORITIES [P] only to specialize.", "dig"],
 ]
 const PLACE_CRISIS := ["Next: YOU place bunks · THEY craft", "Place bunks so tired undrafted crew have a bed.", "bed"]
+const PLACE_ONE := ["Next: YOU place 1 bunk · THEY craft from Craft", "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.", "bed"]
 const PLACE_TWO := ["Next: YOU place 2 bunks · THEY craft from Craft", "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.", "bed"]
 const FINISH := ["Next: YOU leave Haul + Craft on · THEY finish the bunks", "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints.", "select"]
 # Disclosed deterministic empty chamber floor, matching the sibling walks.
@@ -144,6 +146,10 @@ func _walk() -> void:
 
 
 func _act(game: VaultGame, tuple: Array) -> bool:
+	if tuple == HATCH_WATCH:
+		if not game.breach_system.is_response_active():
+			return _stop(game, "hatch watch tip outside an active response")
+		return true # Auto response covered; wait.
 	if tuple == FINISH_CHARGE:
 		if _charge == null or _charge.complete or not game.buildings.has(_charge):
 			return _stop(game, "Charge finish without retained unfinished blueprint")
@@ -176,12 +182,12 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			game.job_system.queue_dig(cell)
 			return true
 		return true # All twelve already marked; time only for unfinished work.
-	if tuple == PLACE_CRISIS or tuple == PLACE_TWO:
+	if tuple == PLACE_CRISIS or tuple == PLACE_TWO or tuple == PLACE_ONE:
 		# Place all missing bunks now, including during a tired mid-dig tip.
 		# Never serialize place-2 behind one unfinished blueprint.
-		if _bunks.size() >= 2:
+		if _bunks.size() >= 2 or (tuple == PLACE_ONE and _bunks.size() != 0):
 			return _stop(game, "Next requests a third/repeated bunk")
-		while _bunks.size() < 2:
+		while _bunks.size() < (1 if tuple == PLACE_ONE else 2):
 			var cell: Vector2i = BUNK_CELLS[_bunks.size()]
 			if game.get_building_at(cell) != null or not game.place_blueprint(VaultBuilding.Kind.BED, cell):
 				return _stop(game, "real bunk placement rejected at %s: %s" % [cell, game.status_message])
@@ -276,8 +282,11 @@ func _check_charge_checkpoint(game: VaultGame) -> void:
 		_assert_equal(game.map_grid.get_tile(cell), MapGrid.Tile.FLOOR, "target genuinely excavated: %s" % cell)
 	_assert_equal(game.map_grid.get_floor_cells().size(), 132, "exact twelve-floor expansion")
 	_assert_equal(_bunks.size(), 2, "exactly two placed bunks")
-	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 2, "two complete bunks")
+	# Hard max 1 opening bunk (Director 2026-11-05): the second may still be crafting.
+	_assert_true(game.get_completed_building_count(VaultBuilding.Kind.BED) >= 1, "opening bunk complete")
 	for bunk in _bunks:
+		if bunk != _bunks[0] and not bunk.complete:
+			continue
 		_assert_true(bunk.complete and bunk.delivered == 8 and bunk.construction_left <= 0.0 and _crafted.has(bunk.building_id), "bunk genuinely supplied and crafted")
 	_assert_true(_rubble_deliveries > 0, "observed real rubble stock delivery")
 	_assert_equal(game.food_system.salvage + _uncredited_rubble(game), 68, "48 + twelve dig yields - two paid bunks")
@@ -299,7 +308,7 @@ func _check_grow_success(game: VaultGame) -> void:
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true), 1, "one completed non-Core Charge")
 	_assert_equal(game.power_grid.supply, 9, "grid supply corroborates 2 to 9")
 	_assert_equal(game.buildings.size(), 6, "only starters, two bunks, one Charge; no Grow")
-	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 2, "two bunks remain complete")
+	_assert_true(game.get_completed_building_count(VaultBuilding.Kind.BED) >= 1, "opening bunk remains complete")
 	_assert_equal(game.food_system.salvage + _uncredited_rubble(game) + game.breach_system.patch_delivered + game.job_system.get_breach_supply_in_transit(), 50, "68 minus 18 Charge, including any hatch salvage")
 	_assert_equal(_open_count, 0, "no OPEN event")
 	_assert_equal(_warning_count, 1 if _warning_resumed else 0, "at most one real warning Resume; never manufacture warning")

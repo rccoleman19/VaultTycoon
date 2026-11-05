@@ -180,7 +180,7 @@ func _test_objective() -> void:
 	while MapGrid.generate_layout(big_seed)["pockets"].size() < 12:
 		big_seed += 1
 	var big := _seeded(big_seed)
-	_assert_true(String(big.player_orders._primary_next_step().get("text", "")).contains("mark rock"), "a wing with 12+ pocket cells still asks for the first dig")
+	_assert_true(String(big.player_orders._primary_next_step().get("text", "")).contains("place") and "bunk" in String(big.player_orders._primary_next_step().get("text", "")), "a wing with free floor still asks for the opening bunk before dig")
 	_dispose(big)
 
 

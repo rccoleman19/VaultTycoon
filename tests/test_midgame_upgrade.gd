@@ -260,7 +260,25 @@ func _test_refund_and_new_wing() -> void:
 	for building: VaultBuilding in game.buildings:
 		_assert_equal(building.upgrade_tier, 1, "a new wing starts every fixture at Mk I")
 	game.player_orders.refresh()
-	_assert_false(game.player_orders.upgrade_offer_button.visible, "and hides the offer")
+	# A fresh wing's opening Next is the bunk step, which Spend shares (#146); no Mk II fit shows.
+	var offer := game.player_orders.upgrade_offer_button
+	_assert_false(offer.visible and "Mk II" in offer.text, "and hides the upgrade offer (%s)" % offer.text)
+	# With bunks satisfied, a sealed tray still surfaces Mk II (coverage after opening bunks).
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
+	var tray2 := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
+	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(24, 12))
+	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(26, 12))
+	game.power_grid.recalculate(game.buildings)
+	game.food_system.salvage = 60
+	# Seal the way midgame fixtures do.
+	game.day_cycle.deserialize({"elapsed_seconds": 70.0, "current_day": 2, "completed": false})
+	game.breach_system.advance(0.0, 70.0)
+	game.breach_system.patch_delivered = BreachSystem.PATCH_COST
+	game.breach_system.apply_patch_work(100.0)
+	game.job_system.rebuild_from_state()
+	game.player_orders.refresh()
+	_assert_true(game.player_orders.upgrade_offer_button.visible and "Mk II" in game.player_orders.upgrade_offer_button.text, "after bunks + seal, Mk II offer returns (%s)" % game.player_orders.upgrade_offer_button.text)
 	_dispose(game)
 
 

@@ -155,7 +155,7 @@ func _test_bed_shortage_alert() -> void:
 	_assert_equal(game.residents.size(), 4, "fresh shift has four residents")
 	_assert_equal(game.active_tool, "select", "fresh shift keeps Select active")
 	_assert_equal(game.map_grid.dig_marks.size(), 0, "fresh shift has no dig marks")
-	_assert_equal(game.player_orders.objective_label.text, "Next: YOU mark rock [E] · THEY dig on Dig defaults", "fresh shift keeps the initial dig objective")
+	_assert_equal(game.player_orders.objective_label.text, "Next: YOU place 1 bunk · THEY craft from Craft", "fresh shift opens with the counted bunk opportunity")
 	_assert_false("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "fresh shift needs no bunks yet")
 	for resident: VaultResident in game.residents:
 		resident.needs.rest = 60.0

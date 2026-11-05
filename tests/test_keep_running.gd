@@ -26,6 +26,9 @@ func _run() -> void:
 func _won() -> VaultGame:
 	var game := _spawn_game()
 	game.begin_shift()
+	# Opening bunks satisfied so keep-running idle Next can name Rec spend / comfort.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	game.day_cycle.deserialize({"elapsed_seconds": 70.0, "current_day": 2, "completed": false})
 	game.breach_system.advance(0.0, 70.0)
 	game.breach_system.patch_delivered = BreachSystem.PATCH_COST

@@ -35,6 +35,7 @@ var _next_surge_step: Dictionary = {}
 # Guidance reads retain the starvation name until fed or a nearer deadline.
 var _starving_resident_id := -1
 var _food_forecast_latched := false
+const OPENING_BUNKS := 1
 var _next_bunk_text := ""
 var _next_bunk_help := ""
 var _food_forecast_since := 0.0
@@ -2800,9 +2801,13 @@ func _is_bunk_place_step(step: Dictionary) -> bool:
 	return str(step.get("tool", "")) == "bed" and not bool(step.get("urgent", false)) and str(step.get("text", "")).begins_with("Next: YOU place ") and "bunk" in str(step.get("text", ""))
 
 
+func _is_finish_bunks_step(step: Dictionary) -> bool:
+	return "finish the bunks" in str(step.get("text", "")) and not bool(step.get("urgent", false))
+
+
 # One source of truth for Next and Spend: a needed bunk step outranks a salvage nudge.
 func _bunks_hold_salvage_nudge(step: Dictionary) -> bool:
-	return _is_bunk_place_step(step)
+	return _is_bunk_place_step(step) or _is_finish_bunks_step(step)
 
 
 func _bunk_step_states_count(step: Dictionary) -> bool:
@@ -2907,9 +2912,14 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 	# arrive as urgent steps, which this non-urgent bunk step excludes.
 	if _bunks_hold_salvage_nudge(step):
 		return step
-	# Preserve Mk II precedence on the non-danger path.
+	# While opening bunks are still unmet, dig (no free bunk cell / floor+12) outranks every
+	# salvage rewrite — Spend must not name Rec/Mk II before the player can place the bunk.
+	# Once opening bunks are complete, dig may still become a spend-build (keep-running Rec).
+	if str(step.get("tool", "")) == "dig" and game.get_completed_building_count(VaultBuilding.Kind.BED) < OPENING_BUNKS:
+		return step
+	# Preserve Mk II precedence on the non-danger path — dig still outranks Mk II after opening.
 	var target := _upgrade_offer_target()
-	if target != null and target.get_upgrade_cost() <= spendable:
+	if target != null and target.get_upgrade_cost() <= spendable and str(step.get("tool", "")) != "dig":
 		step.text = "Next: YOU spend %d: fit %s Mk II" % [target.get_upgrade_cost(), ALSO_NAMES[target.kind]] + _next_in_progress_suffix(step.get("in_progress", []))
 		step["help"] = "Select the %s and fit Mk II in its inspector." % VaultBuilding.KIND_NAMES[target.kind]
 		step["tool"] = "select"
@@ -3106,10 +3116,28 @@ func _primary_next_step_chain(suppressed_builds: Dictionary) -> Dictionary:
 		return _watch_hatch_step()
 	if bool(urgent_step.get("recovering", false)):
 		return urgent_step
+	# Opening bunks come before the +12 expansion gate: the starter chamber already has
+	# reachable floor and 48 salvage, so the player places what fits and what pays, then digs.
+	var completed_bunks := game.get_completed_building_count(VaultBuilding.Kind.BED)
+	var bunks_blocked_by_floor := false
+	# Hard max of ONE opening bunk (Director 2026-11-05): two starve Dig/funding and
+	# push the fresh-wing Grow past 60 s. Later bunks come from the tired-crew path.
+	var bunks_wanted := completed_bunks < OPENING_BUNKS and not suppressed_builds.has(VaultBuilding.Kind.BED)
+	if bunks_wanted and unfinished_bunks < (OPENING_BUNKS - completed_bunks):
+		var affordable: int = maxi(0, game.food_plan_spendable()) / int(VaultBuilding.COSTS[VaultBuilding.Kind.BED])
+		if affordable > 0:
+			if _reachable_bunk_cell_count(1) <= 0:
+				bunks_blocked_by_floor = true
+			else:
+				return {
+					"text": "Next: YOU place 1 bunk · THEY craft from Craft",
+					"help": "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.",
+					"tool": "bed",
+				}
 	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
 	var floor_count := game.map_grid.get_floor_cells().size() - game.map_grid.layout_pocket_count
 	var dig_marks := game.map_grid.dig_marks.size()
-	if floor_count < initial_floor + 12:
+	if floor_count < initial_floor + 12 or bunks_blocked_by_floor:
 		if dig_marks <= 0:
 			return {
 				"text": "Next: YOU mark rock [E] · THEY dig on Dig defaults",
@@ -3121,19 +3149,12 @@ func _primary_next_step_chain(suppressed_builds: Dictionary) -> Dictionary:
 			"help": "Keep designating connected rock. They dig then haul rubble without draft. PRIORITIES [P] only to specialize.",
 			"tool": "dig",
 		}
-	var completed_bunks := game.get_completed_building_count(VaultBuilding.Kind.BED)
-	if completed_bunks < 2 and not suppressed_builds.has(VaultBuilding.Kind.BED):
-		var deficit := 2 - completed_bunks - unfinished_bunks
-		if unfinished_bunks >= (2 - completed_bunks):
-			return {
-				"text": "Next: YOU leave Haul + Craft on · THEY finish the bunks",
-				"tool": "select",
-				"help": "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints.",
-			}
+	# Queued opening bunks: Dig ran first (above); now they finish.
+	if bunks_wanted and unfinished_bunks >= (OPENING_BUNKS - completed_bunks):
 		return {
-			"text": "Next: YOU place 1 bunk · THEY craft from Craft" if deficit == 1 else "Next: YOU place 2 bunks · THEY craft from Craft",
-			"help": "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.",
-			"tool": "bed",
+			"text": "Next: YOU leave Haul + Craft on · THEY finish the bunks",
+			"tool": "select",
+			"help": "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints.",
 		}
 	if game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) < 1 and not suppressed_builds.has(VaultBuilding.Kind.GENERATOR):
 		if _unfinished_charge_count() > 0:
@@ -5753,6 +5774,17 @@ func spend_build_cells(kind: int) -> Array[Vector2i]:
 	for entry: Array in scored:
 		cells.append(entry[3])
 	return cells
+
+
+# Reachable legal bunk cells by the placer's own rules (place_spend_bunks), up to limit.
+func _reachable_bunk_cell_count(limit: int) -> int:
+	var found := 0
+	for cell: Vector2i in spend_build_cells(VaultBuilding.Kind.BED):
+		if found >= limit:
+			break
+		if _crew_can_reach(cell):
+			found += 1
+	return found
 
 
 func _crew_can_reach(cell: Vector2i) -> bool:

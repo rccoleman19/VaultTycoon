@@ -7,6 +7,7 @@ const DIG_NEXT := [
 	["Next: YOU keep marking digs [E] · THEY dig/haul alone", "Keep designating connected rock. They dig then haul rubble without draft. PRIORITIES [P] only to specialize.", "dig"],
 ]
 const PLACE_CRISIS := ["Next: YOU place bunks · THEY craft", "Place bunks so tired undrafted crew have a bed.", "bed"]
+const PLACE_ONE := ["Next: YOU place 1 bunk · THEY craft from Craft", "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.", "bed"]
 const PLACE_TWO := ["Next: YOU place 2 bunks · THEY craft from Craft", "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.", "bed"]
 const FINISH := ["Next: YOU leave Haul + Craft on · THEY finish the bunks", "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints.", "select"]
 # Disclosed deterministic empty chamber floor, matching the sibling walks.
@@ -119,12 +120,12 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			game.job_system.queue_dig(cell)
 			return true
 		return true # All twelve already marked; time only for unfinished work.
-	if tuple == PLACE_CRISIS or tuple == PLACE_TWO:
+	if tuple == PLACE_CRISIS or tuple == PLACE_TWO or tuple == PLACE_ONE:
 		# Place all missing bunks now, including during a tired mid-dig tip.
 		# Never serialize place-2 behind one unfinished blueprint.
-		if _bunks.size() >= 2:
+		if _bunks.size() >= 2 or (tuple == PLACE_ONE and _bunks.size() != 0):
 			return _stop(game, "Next requests a third/repeated bunk")
-		while _bunks.size() < 2:
+		while _bunks.size() < (1 if tuple == PLACE_ONE else 2):
 			var cell: Vector2i = BUNK_CELLS[_bunks.size()]
 			if game.get_building_at(cell) != null or not game.place_blueprint(VaultBuilding.Kind.BED, cell):
 				return _stop(game, "real bunk placement rejected at %s: %s" % [cell, game.status_message])
@@ -194,8 +195,11 @@ func _check_success(game: VaultGame) -> void:
 		_assert_equal(game.map_grid.get_tile(cell), MapGrid.Tile.FLOOR, "target genuinely excavated: %s" % cell)
 	_assert_equal(game.map_grid.get_floor_cells().size(), 132, "exact twelve-floor expansion")
 	_assert_equal(_bunks.size(), 2, "exactly two placed bunks")
-	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 2, "two complete bunks")
+	# Hard max 1 opening bunk (Director 2026-11-05): the second may still be crafting.
+	_assert_true(game.get_completed_building_count(VaultBuilding.Kind.BED) >= 1, "opening bunk complete")
 	for bunk in _bunks:
+		if bunk != _bunks[0] and not bunk.complete:
+			continue
 		_assert_true(bunk.complete and bunk.delivered == 8 and bunk.construction_left <= 0.0 and _crafted.has(bunk.building_id), "bunk genuinely supplied and crafted")
 	_assert_true(_rubble_deliveries > 0, "observed real rubble stock delivery")
 	_assert_equal(game.food_system.salvage + _uncredited_rubble(game), 68, "48 + twelve dig yields - two paid bunks")

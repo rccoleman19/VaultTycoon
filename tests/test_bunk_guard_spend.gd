@@ -70,8 +70,12 @@ func _test_no_floor() -> void:
 			if game.map_grid.is_walkable(cell) and game.get_building_at(cell) == null:
 				game.map_grid.stockpile_cells[cell] = true
 	game.player_orders.refresh()
+	# No reachable bunk cell: Next honestly leaves the bunk step for mark-rock.
+	var tip := _next(game)
+	_assert_true(tip.begins_with("Next: YOU mark rock") or tip.begins_with("Next: YOU keep marking"), "no free floor returns dig (%s)" % tip)
 	var before := _bunks_in(game)
-	game.player_orders.upgrade_offer_button.pressed.emit()
+	# Direct placer still reports the dig-more status (Spend may no longer be bunks).
+	game.player_orders.place_spend_bunks()
 	_assert_equal(_bunks_in(game), before, "no bunk goes down without free floor")
 	_assert_equal(game.status_message, "No free floor for bunks · dig more", "the status says why")
 	_dispose(game)

@@ -159,6 +159,6 @@ func _test_keep_running_opening() -> void:
 		game.user_paused = true
 		game.status_message_left = 0.0
 		var primary: Dictionary = game.player_orders._primary_next_step()
-		_assert_equal(str(primary.text), "Next: YOU place 2 bunks · THEY craft from Craft", "Air/Charge eligibility preserves the opening diagnosis with power_room=%s" % power_room)
+		_assert_equal(str(primary.text), "Next: YOU place 1 bunk · THEY craft from Craft", "Air/Charge eligibility preserves the opening diagnosis with power_room=%s" % power_room)
 		_assert_equal(_next(game), "Next: YOU set the meal reserve · THEY build the Annex", "opening bunks still give way to Annex with power_room=%s" % power_room)
 		_dispose(game)

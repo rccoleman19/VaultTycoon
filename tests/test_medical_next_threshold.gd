@@ -3,7 +3,7 @@ extends SceneTree
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 const SEEK_HP := 95.0
 const JUST_ABOVE := 95.0001
-const DIG := ["Next: YOU mark rock [E] · THEY dig on Dig defaults", "dig", "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional."]
+const DIG := ["Next: YOU place 1 bunk · THEY craft from Craft", "bed", "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them."]  # opening bunk is the honest DORMANT tip (OPENING_BUNKS=1)
 const PLACE := ["Next: YOU place a Med Bed · THEY treat", "medical", "Place a Med Bed so the injured can be treated."]
 const ENABLE := ["Next: YOU enable a Med Bed · THEY treat", "select", "Select a completed Med Bed and click ENABLE so the injured can be treated."]
 const FINISH := ["Next: YOU leave Haul + Craft on · THEY finish the Med Bed", "select", "Keep Haul + Craft above OFF so crew supply and finish the Med Bed blueprint."]
@@ -142,7 +142,9 @@ func _test_fallthrough() -> void:
 	var game := _spawn_game()
 	game.residents[0].needs.rest = 28.0
 	game.residents[0].needs.health = JUST_ABOVE
-	_assert_step(game, BUNKS)
+	# Opening bunk (DIG/PLACE_ONE) is the honest tip until one bunk exists; tired
+	# "place bunks" only appears after the opening bunk is satisfied.
+	_assert_step(game, DIG)
 	game.residents[0].needs.health = SEEK_HP
 	_assert_step(game, PLACE)
 	game.free()
