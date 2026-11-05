@@ -60,6 +60,9 @@ func _new_game() -> VaultGame:
 # A completed tray, Charge and Air, sealed the way a crew does (patched during WARNING).
 func _sealed_game() -> VaultGame:
 	var game := _new_game()
+	# Opening bunks satisfied so Spend/Also can offer Grow Mk II.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
 	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(24, 12))
 	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(26, 12))
@@ -231,6 +234,11 @@ func _test_details_scroll_to_top() -> void:
 func _test_pre_seal_details() -> void:
 	var game := _new_game()
 	var orders := game.player_orders
+	# Opening bunks satisfied so Spend is not the bunk hold (which would steal ~31 px
+	# from the DETAILS scroll and push the hatch readout off-screen). Matches base
+	# pre-seal layout where Next was dig/mark-rock, not place bunks.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	orders.refresh()
 	await _set_details(game, false)
 	var collapsed_height := orders.right_scroll.size.y
@@ -272,6 +280,9 @@ func _test_pre_seal_details() -> void:
 	_assert_equal(orders.details_box.get_child(orders.breach_label.get_index() - 1).get_index(), 0, "during the warning the hatch block leads DETAILS")
 	game.breach_system.patch_delivered = BreachSystem.PATCH_COST
 	game.breach_system.apply_patch_work(100.0)
+	# Opening bunks satisfied so Spend names Rec, not the place-1 bunk hold.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	orders.refresh()
 	await _layout()
 	_assert_true(game.breach_system.is_sealed(), "the hatch seals")

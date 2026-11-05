@@ -77,9 +77,10 @@ func _test_build_highlights_and_player_choice() -> void:
 func _test_help_deferral() -> void:
 	var game := _healthy_game()
 	var orders := game.player_orders
-	_refresh_and_assert(game, "dig", "")
+	# Opening tip is bed; keep help open first so the first handled bed is after help closes.
 	orders.open_help()
 	_assert_true(not game.tutorial_open and orders.is_help_open(), "ordinary help is open without tutorial")
+	_refresh_and_assert(game, "bed", "")
 	game.residents[0].needs.rest = 28.0
 	for iteration in 2:
 		_refresh_and_assert(game, "bed", "")
@@ -92,10 +93,13 @@ func _test_help_deferral() -> void:
 	for iteration in 3:
 		_refresh_and_assert(game, "bed", "")
 	# A different suggestion seen only behind help must not replace handled bed.
+	# Opening bunk remains the tip until a completed bunk exists; seed one for dig.
 	orders.open_help()
 	game.residents[0].needs.rest = 100.0
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
 	_refresh_and_assert(game, "dig", "")
 	game.residents[0].needs.rest = 28.0
+	game.residents[1].needs.rest = 28.0  # one free bunk: two tired → place bunks
 	orders.show_briefing(false)
 	_refresh_and_assert(game, "bed", "")
 	_dispose(game)
@@ -149,6 +153,8 @@ func _test_returning_bed(middle_tool: String) -> void:
 	_refresh_and_assert(game, "bed", "build")
 	orders._on_architect_tab_pressed("dig")
 	game.residents[0].needs.rest = 100.0
+	if middle_tool == "dig":
+		_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
 	if middle_tool == "select":
 		var kitchen := _add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 12))
 		kitchen.manually_disabled = true
@@ -159,12 +165,18 @@ func _test_returning_bed(middle_tool: String) -> void:
 	game.residents[0].needs.food = 100.0
 	game.food_system.meals = 16
 	game.residents[0].needs.rest = 28.0
+	if middle_tool == "dig":
+		game.residents[1].needs.rest = 28.0  # opening bunk already placed; need a shortage
 	_refresh_and_assert(game, "bed", "build")
 	_dispose(game)
 
 
 func _test_non_build_suggestions() -> void:
 	var game := _healthy_game()
+	# Opening tip is the bunk step (build tab). Seed a bunk to reach dig.
+	_refresh_and_assert(game, "bed", "build")
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	game.player_orders._set_architect_tab("")
 	_refresh_and_assert(game, "dig", "")
 	game.player_orders._set_architect_tab("build")
 	_refresh_and_assert(game, "dig", "build")
@@ -183,16 +195,15 @@ func _test_non_build_suggestions() -> void:
 
 func _test_same_tool_different_sentence() -> void:
 	var game := _healthy_game()
-	game.residents[0].needs.rest = 28.0
+	# Opening place-1 bunk, then dig (clears bunk latch), then tired shortage: same bed tool, new sentence.
 	_refresh_and_assert(game, "bed", "build")
 	var first_text: String = game.player_orders._primary_next_step()["text"]
 	game.player_orders._set_architect_tab("")
-	game.residents[0].needs.rest = 100.0
-	# Expand by twelve floors to reach the planned two-bunk step.
-	for x in range(17, 29):
-		var cell := Vector2i(x, 10)
-		_assert_true(game.map_grid.queue_dig(cell), "queue connected expansion dig")
-		_assert_true(game.map_grid.apply_dig_work(cell, 8.0), "complete expansion dig")
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_refresh_and_assert(game, "dig", "")  # non-bunk tip clears the place-1 latch
+	game.residents[0].needs.rest = 28.0
+	game.residents[1].needs.rest = 28.0
 	_assert_true(game.player_orders._primary_next_step()["text"] != first_text, "real Next sentence changes while still suggesting bed")
-	_refresh_and_assert(game, "bed", "")
+	# Bed suggestion opens BUILD (opening bunk / tired bunk share the bed tool).
+	_refresh_and_assert(game, "bed", "build")
 	_dispose(game)

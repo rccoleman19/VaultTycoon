@@ -30,6 +30,9 @@ func _seal(game: VaultGame) -> void:
 func _base_game(salvage := 60) -> VaultGame:
 	var game := _spawn_game()
 	game.begin_shift()
+	# Opening bunks satisfied so Also/Next can name reclamation and Mk II.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
 	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(24, 12))
 	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(26, 12))
