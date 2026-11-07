@@ -598,6 +598,10 @@ func get_powered_building_count(kind: int) -> int:
 	return count
 
 
+func is_air_ready() -> bool:
+	return get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) > 0
+
+
 func refresh_lighting(force := false) -> bool:
 	return lighting_system.refresh(buildings, force)
 
@@ -684,6 +688,7 @@ func can_upgrade_building(building_id: int) -> bool:
 		and is_upgrade_unlocked(building.kind)
 		and not ended
 		and breach_system.is_sealed()
+		and is_air_ready()
 		and food_system.salvage >= building.get_upgrade_cost()
 	)
 
