@@ -308,7 +308,7 @@ func _build_interface() -> void:
 	# DETAILS readouts sit at the top of the roster/inspector scroll (added below), so opening them
 	# never pushes the inspector off a 1280x720 screen once the post-seal offer and orders show.
 	details_box = VBoxContainer.new()
-	details_box.add_theme_constant_override("separation", 4)
+	details_box.add_theme_constant_override("separation", 2)
 	details_box.visible = false
 	alert_more_header = Label.new()
 	alert_more_header.text = "ALERTS"
@@ -375,7 +375,10 @@ func _build_interface() -> void:
 	details_box.add_child(breach_header)
 	breach_label = Label.new()
 	breach_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	breach_label.custom_minimum_size.y = 64
+	# Floor is a two-line readout, same as mood and oxygen; longer hatch copy still grows.
+	# A 64 px floor left empty space that pushed a short opening hatch line off 1280x720
+	# once the place-1-bunk Spend row was visible.
+	breach_label.custom_minimum_size.y = 38
 	details_box.add_child(breach_label)
 	breach_bar = ProgressBar.new()
 	breach_bar.min_value = 0.0
@@ -2805,9 +2808,15 @@ func _is_finish_bunks_step(step: Dictionary) -> bool:
 	return "finish the bunks" in str(step.get("text", "")) and not bool(step.get("urgent", false))
 
 
-# One source of truth for Next and Spend: a needed bunk step outranks a salvage nudge.
+# A needed bunk step, including finish-the-bunks, outranks a salvage / Rec / Mk II rewrite on Next.
 func _bunks_hold_salvage_nudge(step: Dictionary) -> bool:
 	return _is_bunk_place_step(step) or _is_finish_bunks_step(step)
+
+
+# Spend places bunks only while Next is a genuine place-bunk step. Finish-the-bunks keeps
+# the Next hold above, but is not a purchase of another bunk.
+func _spend_places_bunks_step(step: Dictionary) -> bool:
+	return _is_bunk_place_step(step)
 
 
 func _bunk_step_states_count(step: Dictionary) -> bool:
@@ -5535,13 +5544,18 @@ func upgrade_offer_cost(nudge: int) -> int:
 func _refresh_upgrade_offer() -> void:
 	if upgrade_offer_button == null:
 		return
-	# The bunk guard owns Spend too: while Next shows the bunks, Spend places them
-	# instead of offering a Mk II fit or another build (05 s4242 busy: 8 bounces).
-	if _bunks_hold_salvage_nudge(_displayed_next_step):
+	# Spend places bunks only on a genuine place-bunk step. Finish-the-bunks stays
+	# Next (the salvage hold) and hides Spend, so a click cannot queue another bunk.
+	if _spend_places_bunks_step(_displayed_next_step):
 		var bunks := spend_bunk_count()
 		upgrade_offer_button.visible = bunks > 0
 		if bunks > 0:
 			upgrade_offer_button.text = "Spend %d: place %s" % [bunks * int(VaultBuilding.COSTS[VaultBuilding.Kind.BED]), "1 bunk" if bunks == 1 else "%d bunks" % bunks]
+		_refresh_wing_orders()
+		_refresh_also()
+		return
+	if _is_finish_bunks_step(_displayed_next_step):
+		upgrade_offer_button.visible = false
 		_refresh_wing_orders()
 		_refresh_also()
 		return
@@ -5662,8 +5676,10 @@ func _on_wing_order_pressed(order_id: String) -> void:
 
 
 func _on_upgrade_offer_pressed() -> void:
-	if _bunks_hold_salvage_nudge(_displayed_next_step):
+	if _spend_places_bunks_step(_displayed_next_step):
 		place_spend_bunks()
+		return
+	if _is_finish_bunks_step(_displayed_next_step):
 		return
 	var target := _upgrade_offer_target()
 	var nudge := _upgrade_offer_nudge_kind() if target == null else -1
@@ -5711,6 +5727,7 @@ func spend_bunk_count() -> int:
 		wanted = int(text.trim_prefix("Next: YOU place ").get_slice(" ", 0))
 	else:
 		var needing := 0
+		var coverage := 0
 		var occupied: Dictionary = {}
 		for resident: VaultResident in game.residents:
 			if resident.sleeping and resident.bed_id >= 0:
@@ -5721,8 +5738,14 @@ func spend_bunk_count() -> int:
 				needing += 1
 		for building: VaultBuilding in game.buildings:
 			if building.kind == VaultBuilding.Kind.BED and (not building.complete or not occupied.has(building.building_id)):
+				coverage += 1
 				needing -= 1
-		wanted = maxi(needing, 1)
+		# Finish-the-bunks, and any need already covered by unfinished or free bunks,
+		# must not floor to 1. A stated-less place step with no coverage still offers one.
+		if _is_finish_bunks_step(_displayed_next_step) or (coverage > 0 and needing <= 0):
+			wanted = maxi(needing, 0)
+		else:
+			wanted = maxi(needing, 1)
 	# Same budget as the food card: the hatch patch still owed (before WARNING too) and every
 	# queued blueprint's unpaid cost stay set aside.
 	var spendable: int = maxi(0, game.food_plan_spendable())

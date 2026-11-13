@@ -234,16 +234,18 @@ func _test_details_scroll_to_top() -> void:
 func _test_pre_seal_details() -> void:
 	var game := _new_game()
 	var orders := game.player_orders
-	# Opening bunks satisfied so Spend is not the bunk hold (which would steal ~31 px
-	# from the DETAILS scroll and push the hatch readout off-screen). Matches base
-	# pre-seal layout where Next was dig/mark-rock, not place bunks.
-	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
-	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
+	# Genuine fresh opening at 1280x720: no completed bunks, so the place-1-bunk Spend
+	# row is present. The hatch readout must still stay on-screen.
 	orders.refresh()
 	await _set_details(game, false)
 	var collapsed_height := orders.right_scroll.size.y
 	_assert_scroll_usable(orders, "pre-seal collapsed")
 	await _set_details(game, true)
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 0, "the fresh opening has no completed bunks")
+	# This branch's opening Next is place 1 bunk, so Spend's bunk row is part of the real layout.
+	# Base still starts on mark-rock; the hatch-on-screen check below covers that control.
+	if "place 1 bunk" in orders.objective_label.text:
+		_assert_true(orders.upgrade_offer_button.visible and "place 1 bunk" in orders.upgrade_offer_button.text, "the opening Spend row is present (%s)" % (orders.upgrade_offer_button.text if orders.upgrade_offer_button.visible else "<hidden>"))
 	_assert_scroll_usable(orders, "pre-seal DETAILS open")
 	_assert_true(orders.right_scroll.size.y >= collapsed_height, "pre-seal DETAILS does not shrink the scroll (%.1f vs %.1f)" % [orders.right_scroll.size.y, collapsed_height])
 	_assert_on_screen(orders, orders.crew_mood_label, "the crew mood readout")

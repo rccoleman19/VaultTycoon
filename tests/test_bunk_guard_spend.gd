@@ -1,8 +1,9 @@
 extends "res://tests/test_rec_flash_cause.gd"
 # 05 s4242 busy, 76.5-280 s: Next shows "place bunks" but Spend offers Mk II fits and
 # builds, the busy player taps them and Next bounces back to the bunks 8 times. The
-# bunk guard (_bunks_hold_salvage_nudge) owns Spend too: Spend places the bunks, and
-# the follow driver acts on the bunk step.
+# bunk guard keeps place-bunk and finish-the-bunks as Next. Spend places bunks only
+# on a genuine place-bunk step; finish-the-bunks hides Spend so a click cannot queue
+# another bunk. The follow driver acts on the bunk step.
 
 const FollowDriver := preload("res://tools/playtest/follow_driver.gd")
 
@@ -17,6 +18,8 @@ func _run() -> void:
 	_run_case("stock 20 with an unpaid Lumen: committed + patch never exceeds stock", _test_budget_unpaid_lumen)
 	_run_case("exact budgets 12 and 20 still place their bunks", _test_budget_exact)
 	_run_case("a failed driver placement retries the same tip once floor frees", _test_follow_retry)
+	_run_case("two unfinished bunks: finish Next hides Spend and a press places none", _test_finish_hides_spend)
+	_run_case("finish-the-bunks still holds Next, and spend_bunk_count is 0 when already covered", _test_finish_holds_next_count_zero)
 	print("BUNK GUARD SPEND: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -190,3 +193,85 @@ func _test_follow_retry() -> void:
 	driver.free()
 	_assert_true(_bunks_in(game) > before, "after floor frees, the same tip places a bunk (%d -> %d)" % [before, _bunks_in(game)])
 	_dispose(game)
+
+
+func _excavate_twelve(game: VaultGame) -> void:
+	for x in range(17, 29):
+		var cell := Vector2i(x, 10)
+		game.map_grid.queue_dig(cell)
+		game.map_grid.apply_dig_work(cell, 8.0)
+	game.map_grid.dig_marks.clear()
+	game.job_system.jobs = game.job_system.jobs.filter(func(job: Dictionary) -> bool:
+		return int(job.type) not in [JobSystem.JobType.DIG, JobSystem.JobType.HAUL_RUBBLE])
+
+
+func _queue_unfinished_bunks(game: VaultGame, count: int) -> int:
+	var placed := 0
+	for cell: Vector2i in game.player_orders.spend_build_cells(VaultBuilding.Kind.BED):
+		if placed >= count:
+			break
+		if game.place_blueprint(VaultBuilding.Kind.BED, cell):
+			placed += 1
+	return placed
+
+
+func _fed_and_rested(game: VaultGame) -> void:
+	game.food_system.meals = 100
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.mood = 100.0
+		resident.drafted = false
+		resident.sleeping = false
+		resident.bed_id = -1
+
+
+func _finish_preseal(queued: int) -> VaultGame:
+	var game := _spawn_game()
+	game.new_game(false, 1234, 3)
+	game.begin_shift()
+	game.user_paused = true
+	_fed_and_rested(game)
+	_excavate_twelve(game)
+	_assert_equal(_queue_unfinished_bunks(game, queued), queued, "queued %d unfinished bunks" % queued)
+	game.player_orders.refresh()
+	return game
+
+
+func _test_finish_hides_spend() -> void:
+	var game := _finish_preseal(2)
+	var text := _next(game)
+	_assert_true("finish the bunks" in text, "Next says finish the bunks (%s)" % text)
+	_assert_false(_is_bunks_visible(game), "Spend stays hidden while the bunks are already queued (%s)" % _spend_text(game))
+	_assert_equal(game.player_orders.spend_bunk_count(), 0, "unfinished bunks already cover the need")
+	var before := _bunks_in(game)
+	game.player_orders._on_upgrade_offer_pressed()
+	_assert_equal(_bunks_in(game), before, "a Spend press does not place another bunk")
+	_dispose(game)
+
+
+func _is_bunks_visible(game: VaultGame) -> bool:
+	return _spend_text(game) != ""
+
+
+func _test_finish_holds_next_count_zero() -> void:
+	var game := _plateau()
+	_assert_equal(_queue_unfinished_bunks(game, 2), 2, "two unfinished bunks cover the opening need")
+	# Enough leftover salvage that a floored spend_bunk_count would offer another bunk.
+	game.food_system.salvage = 40
+	var text := _next(game)
+	_assert_true("finish the bunks" in text, "Next stays finish the bunks instead of a Rec or Mk II rewrite (%s)" % text)
+	_assert_false("Rec Console" in text or "Mk II" in text or text.begins_with("Next: YOU spend "), "salvage does not rewrite finish-the-bunks (%s)" % text)
+	_assert_equal(_spend_text(game), "", "Spend stays hidden on the finish step (%s)" % _spend_text(game))
+	_assert_equal(game.player_orders.spend_bunk_count(), 0, "spend_bunk_count is 0 when unfinished bunks already cover the need")
+	var step: Dictionary = game.player_orders._displayed_next_step
+	if game.player_orders.has_method("_is_finish_bunks_step"):
+		_assert_true(game.player_orders._is_finish_bunks_step(step), "the displayed step is finish-the-bunks")
+		_assert_true(game.player_orders._bunks_hold_salvage_nudge(step), "finish still holds a salvage rewrite on Next")
+	if game.player_orders.has_method("_spend_places_bunks_step"):
+		_assert_false(game.player_orders._spend_places_bunks_step(step), "finish is not a Spend place-bunk step")
+	var before := _bunks_in(game)
+	game.player_orders._on_upgrade_offer_pressed()
+	_assert_equal(_bunks_in(game), before, "pressing Spend on finish does not queue another bunk")
+	_dispose(game)
+
