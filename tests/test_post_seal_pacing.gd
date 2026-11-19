@@ -299,6 +299,8 @@ func _test_salvage_nudge() -> void:
 	_assert_equal(_offer(game), "Spend 18: build Charge Node", "no room for a tray's 3 power: a Charge Node first")
 	_assert_true(_press_spend_queues(game, VaultBuilding.Kind.GENERATOR), "and queues it")
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, Vector2i(25, 13)), "a planned Charge Node")
+	# The planned Charge owes 18; Spend only offers what free stock covers (Codex #148 issuecomment-7019217243).
+	game.food_system.salvage = 30
 	_assert_equal(_offer(game), "Spend 12: build Grow Tray", "a planned Charge Node counts: the tray again")
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.GROW_TRAY, Vector2i(23, 13)), "a planned second tray")
 	_assert_equal(_offer(game), "<hidden>", "two trays, a Rec Console, no pile: nothing to nudge")

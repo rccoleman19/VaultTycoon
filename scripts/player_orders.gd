@@ -5551,7 +5551,8 @@ func _upgrade_offer_nudge_kind() -> int:
 			air_kind = VaultBuilding.Kind.AIR_RECYCLER
 		if air_kind != VaultBuilding.Kind.AIR_RECYCLER and air_kind != VaultBuilding.Kind.GENERATOR:
 			return -1
-		var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
+		# Stock owed to queued blueprints is not free (Codex #148 issuecomment-7019217243).
+		var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve() - game.queued_build_commitment()
 		return air_kind if spendable >= int(VaultBuilding.COSTS[air_kind]) else -1
 	if _food_nudge_active():
 		if game.ended or not game.breach_system.is_sealed():
@@ -5566,6 +5567,9 @@ func _upgrade_offer_nudge_kind() -> int:
 	# Spend follows Next: the same guard that keeps the bunks as Next keeps Spend
 	# from offering the nudged build (03 s4242: Spend 8 Rec beside "place bunks").
 	if nudge >= 0 and _bunks_hold_salvage_nudge(_displayed_next_step):
+		return -1
+	# salvage_nudge_kind budgets raw stock; Spend only offers what free (uncommitted) stock covers.
+	if nudge >= 0 and game.food_plan_spendable() < upgrade_offer_cost(nudge):
 		return -1
 	return -1 if urgent_kind >= 0 and nudge != urgent_kind else nudge
 

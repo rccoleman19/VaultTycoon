@@ -13,6 +13,7 @@ func _run() -> void:
 	_run_case("Commit-aware, Mk II: a fit and the fallback sink respect queued commitments", _test_commit_mk2)
 	_run_case("Commit-aware, Mk II purchase: inspector, Spend and Also cannot spend a queued build's stock", _test_commit_mk2_purchase)
 	_run_case("Held spend afford: Spend hides and cannot place once the named build is unaffordable", _test_held_spend_afford)
+	_run_case("Fallback nudge spendable: Air and salvage nudges count only free stock", _test_fallback_nudge_spendable)
 	_run_case("Threshold crossing: place lasts at most one hold window after it becomes affordable", _test_threshold)
 	_run_case("All five NUDGE kinds rewrite the first clause and keep the THEY suffix", _test_all_five_kinds)
 	_run_case("Food card: a non-urgent spend food build stays aligned with Next and Spend", _test_food_card)
@@ -377,6 +378,53 @@ func _test_held_spend_afford() -> void:
 	_assert_equal(_count_kind(ok, VaultBuilding.Kind.AIR_RECYCLER), start + 1, "14: a Spend press still queues one Air Recycler")
 	_dispose(ok)
 
+
+# Codex #148 issuecomment-7019217243: the fallback Spend nudge (Air warning and
+# salvage_nudge_kind) must not offer or queue a build on stock owed to a queued blueprint.
+func _test_fallback_nudge_spendable() -> void:
+	var air := _air_game(true, 14)
+	air.user_paused = true
+	_show(air)
+	_queue_unpaid(air, VaultBuilding.Kind.LAMP, 0)
+	var air_text := _show(air)
+	_assert_equal(air.food_system.salvage, 14, "air raw 14")
+	_assert_equal(air.food_plan_spendable(), 9, "air free 9 after the 5-salvage Lumen")
+	_assert_false(air_text.begins_with("Next: YOU spend "), "air 9 free: Next is not a named spend (%s)" % air_text)
+	_assert_equal(_spend_text(air), "", "air 9 free: Spend hides the Air nudge")
+	var airs := _count_kind(air, VaultBuilding.Kind.AIR_RECYCLER)
+	air.player_orders._on_upgrade_offer_pressed()
+	_assert_equal(_count_kind(air, VaultBuilding.Kind.AIR_RECYCLER), airs, "air 9 free: a Spend press queues no Air Recycler")
+	_dispose(air)
+	var air_ok := _air_game(true, 19)
+	air_ok.user_paused = true
+	_show(air_ok)
+	_queue_unpaid(air_ok, VaultBuilding.Kind.LAMP, 0)
+	_show(air_ok)
+	_assert_equal(air_ok.food_plan_spendable(), 14, "air free 14 covers Air after the Lumen")
+	_assert_equal(_spend_text(air_ok), "Spend 14: build Air Recycler", "air 14 free: Spend offers Air (%s)" % _spend_text(air_ok))
+	var airs_ok := _count_kind(air_ok, VaultBuilding.Kind.AIR_RECYCLER)
+	_press(air_ok)
+	_assert_equal(_count_kind(air_ok, VaultBuilding.Kind.AIR_RECYCLER), airs_ok + 1, "air 14 free: a press queues one Air Recycler")
+	_dispose(air_ok)
+	var rec := _seal_base(true, true, false)
+	rec.food_system.salvage = 10
+	rec.user_paused = true
+	_show(rec)
+	_queue_unpaid(rec, VaultBuilding.Kind.LAMP, 0)
+	var rec_text := _show(rec)
+	_assert_equal(rec.player_orders.salvage_nudge_kind(), VaultBuilding.Kind.RECREATION_CONSOLE, "pre: raw 10 still nudges a Rec")
+	_assert_equal(rec.food_plan_spendable(), 5, "rec free 5 after the Lumen")
+	_assert_false(rec_text.begins_with("Next: YOU spend "), "rec: Next is not a named spend (%s)" % rec_text)
+	_assert_equal(_spend_text(rec), "", "rec 5 free: Spend hides the Rec nudge")
+	var recs := _count_kind(rec, VaultBuilding.Kind.RECREATION_CONSOLE)
+	rec.player_orders._on_upgrade_offer_pressed()
+	_assert_equal(_count_kind(rec, VaultBuilding.Kind.RECREATION_CONSOLE), recs, "rec 5 free: a Spend press queues no Rec")
+	rec.food_system.salvage = 13
+	_show(rec)
+	_assert_equal(_spend_text(rec), "Spend 8: build Rec Console", "rec 8 free: Spend offers the Rec (%s)" % _spend_text(rec))
+	_press(rec)
+	_assert_equal(_count_kind(rec, VaultBuilding.Kind.RECREATION_CONSOLE), recs + 1, "rec 8 free: a press queues one Rec")
+	_dispose(rec)
 
 func _test_threshold() -> void:
 	var game := _air_game(false, 13)
