@@ -79,7 +79,10 @@ func _first_build(text: String) -> String:
 
 
 func _next_build(text: String) -> String:
-	for pair in [["place a Nutrient Station", "Station"], ["place a Grow Tray", "Tray"], ["place a Charge Node", "Charge"]]:
+	for pair in [
+		["place a Nutrient Station", "Station"], ["place a Grow Tray", "Tray"], ["place a Charge Node", "Charge"],
+		["spend 10: build Nutrient Station", "Station"], ["spend 12: build Grow Tray", "Tray"], ["spend 18: build Charge Node", "Charge"],
+	]:
 		if pair[0] in text:
 			return pair[1]
 	return ""

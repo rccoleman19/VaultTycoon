@@ -258,6 +258,9 @@ func _follow_next() -> void:
 				return
 		_log("FOLLOW disable failed: no enabled powered fixture named by %s" % action)
 		return
+	if lower.begins_with("you keep marking"):
+		_mark_rock(action)
+		return
 	if lower.begins_with("you leave") or lower.begins_with("you keep"):
 		_enable_named_work(action)
 		return
@@ -302,6 +305,9 @@ static func followed_action(tip: String, residents: Array[VaultResident], urgent
 		return tip.get_slice(" · ", 0).trim_prefix("Next: ")
 	# The bunk step is the player's real next action (05 s4242 busy plateau), not a passive tip.
 	if tip.begins_with("Next: YOU place ") and "bunk" in tip.get_slice(" · ", 0):
+		return tip.get_slice(" · ", 0).trim_prefix("Next: ")
+	# The opening dig steps are the player's real action: Dig defaults cannot dig unmarked rock.
+	if tip.begins_with("Next: YOU mark rock") or tip.begins_with("Next: YOU keep marking digs"):
 		return tip.get_slice(" · ", 0).trim_prefix("Next: ")
 	# An urgent step whose resident name was dropped still leads with the player's action.
 	# Passive tips stay unfollowed.

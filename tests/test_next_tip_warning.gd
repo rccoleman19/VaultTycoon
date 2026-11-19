@@ -15,6 +15,7 @@ const PATCH_SHORT_COVERED := ["Next: YOU leave Dig + Haul on · THEY fund the ha
 const PATCH_SHORT_COVERED_NO_DIG := ["Next: YOU leave Haul on · THEY fund the hatch patch", "The hatch patch is 2 salvage short. Each dug rock tile yields 3 salvage once hauled.", "select"]
 const ENABLE_DIG := ["Next: YOU enable Dig [P] · THEY fund the hatch patch", "The hatch patch is 2 salvage short. Open PRIORITIES [P] and set Dig above OFF for an undrafted resident so crew dig salvage.", "select"]
 const PLACE_BUNKS := ["Next: YOU place bunks · THEY craft", "Place bunks so tired undrafted crew have a bed.", "bed"]
+const PLACE_ONE := ["Next: YOU place 1 bunk · THEY craft from Craft", "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.", "bed"]
 const PATCH_SHORT_4 := ["Next: YOU mark 2 rock [E] · THEY fund the hatch patch", "The hatch patch is 4 salvage short. Each dug rock tile yields 3 salvage once hauled.", "dig"]
 const PATCH_SHORT_TRANSIT := ["Next: YOU mark 1 rock [E] · THEY fund the hatch patch", "The hatch patch is 1 salvage short. Each dug rock tile yields 3 salvage once hauled.", "dig"]
 const WATCH := ["Next: YOU watch hatch · THEY auto-patch", "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft.", "select"]
@@ -113,7 +114,7 @@ func _assert_tuple(game: VaultGame, expected: Array, message: String) -> void:
 
 func _test_covered() -> void:
 	var game := _healthy()
-	_assert_tuple(game, DIG, "DORMANT ordinary tip")
+	_assert_tuple(game, PLACE_ONE, "DORMANT ordinary tip")
 	_warn(game)
 	_assert_tuple(game, WATCH, "covered WARNING points at the hatch")
 	_open(game)
@@ -297,7 +298,7 @@ func _test_dormant_and_sealed() -> void:
 	var game := _healthy()
 	_set_all(game, "haul", VaultResident.PRIORITY_DISABLED)
 	_set_all(game, "craft", VaultResident.PRIORITY_DISABLED)
-	_assert_tuple(game, DIG, "DORMANT with Haul + Craft OFF keeps the ordinary tip")
+	_assert_tuple(game, PLACE_ONE, "DORMANT with Haul + Craft OFF keeps the ordinary tip")
 	_dispose(game)
 	game = _healthy()
 	_warn(game)
@@ -479,7 +480,7 @@ func _status(game: VaultGame) -> String:
 
 func _test_no_path_haul() -> void:
 	var game := _load_pocket([0, 1, 2, 3], [], 48)
-	_assert_tuple(game, DIG, "DORMANT: a cut-off crew keeps the ordinary tip")
+	_assert_tuple(game, PLACE_ONE, "DORMANT: a cut-off crew keeps the ordinary tip")
 	game.day_cycle.elapsed_seconds = BreachSystem.WARNING_AT_SECONDS - TICK
 	game.step_simulation(TICK)
 	_assert_equal(game.breach_system.phase, BreachSystem.Phase.WARNING, "real hatch WARNING")

@@ -762,6 +762,8 @@ func toggle_building_enabled(building_id: int) -> bool:
 
 # Mid-game salvage sink (QA 2026-10-18c #3, slice 1). Unlocked by a sealed hatch; one explicit
 # purchase, paid in full from stored salvage, installs instantly and keeps the growth fraction.
+# Paid from spendable salvage: stock still owed to queued blueprints is not free (Codex #148
+# issuecomment-7014948183), so a fit cannot starve a placed Charge Node or Air Recycler.
 func can_upgrade_building(building_id: int) -> bool:
 	var building := get_building_by_id(building_id)
 	return (
@@ -771,7 +773,7 @@ func can_upgrade_building(building_id: int) -> bool:
 		and not ended
 		and breach_system.is_sealed()
 		and is_air_ready()
-		and food_system.salvage >= building.get_upgrade_cost()
+		and food_plan_spendable() >= building.get_upgrade_cost()
 	)
 
 

@@ -35,6 +35,7 @@ var _next_surge_step: Dictionary = {}
 # Guidance reads retain the starvation name until fed or a nearer deadline.
 var _starving_resident_id := -1
 var _food_forecast_latched := false
+const OPENING_BUNKS := 1
 var _next_bunk_text := ""
 var _next_bunk_help := ""
 var _food_forecast_since := 0.0
@@ -307,7 +308,7 @@ func _build_interface() -> void:
 	# DETAILS readouts sit at the top of the roster/inspector scroll (added below), so opening them
 	# never pushes the inspector off a 1280x720 screen once the post-seal offer and orders show.
 	details_box = VBoxContainer.new()
-	details_box.add_theme_constant_override("separation", 4)
+	details_box.add_theme_constant_override("separation", 2)
 	details_box.visible = false
 	alert_more_header = Label.new()
 	alert_more_header.text = "ALERTS"
@@ -374,7 +375,10 @@ func _build_interface() -> void:
 	details_box.add_child(breach_header)
 	breach_label = Label.new()
 	breach_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	breach_label.custom_minimum_size.y = 64
+	# Floor is a two-line readout, same as mood and oxygen; longer hatch copy still grows.
+	# A 64 px floor left empty space that pushed a short opening hatch line off 1280x720
+	# once the place-1-bunk Spend row was visible.
+	breach_label.custom_minimum_size.y = 38
 	details_box.add_child(breach_label)
 	breach_bar = ProgressBar.new()
 	breach_bar.min_value = 0.0
@@ -2773,6 +2777,12 @@ func _salvage_next_step(step: Dictionary) -> Dictionary:
 	if str(_next_hold_step.get("action", "")) == "reclaim":
 		var held_kind := _next_named_build_kind(_next_hold_step)
 		held_valid = held_valid and game.can_start_reclamation() and not _next_kind_affordable(held_kind)
+	# A held "YOU spend N: build X" is invalid once X no longer fits the
+	# spendable balance, so Next re-chooses instead of lingering for the hold.
+	if str(_next_hold_step.get("action", "")) == "spend":
+		var held_kind := _spend_named_build_kind(_next_hold_step)
+		if held_kind >= 0 and not _spend_named_affordable(held_kind):
+			held_valid = false
 	if signature == _next_hold_signature and held_valid and now >= _next_hold_since and now - _next_hold_since < NEXT_HOLD_S - 0.000001:
 		# Keep current diagnosis/deadline metadata while holding presentation only.
 		for field: String in ["text", "tool", "help", "action"]:
@@ -2800,8 +2810,18 @@ func _is_bunk_place_step(step: Dictionary) -> bool:
 	return str(step.get("tool", "")) == "bed" and not bool(step.get("urgent", false)) and str(step.get("text", "")).begins_with("Next: YOU place ") and "bunk" in str(step.get("text", ""))
 
 
-# One source of truth for Next and Spend: a needed bunk step outranks a salvage nudge.
+func _is_finish_bunks_step(step: Dictionary) -> bool:
+	return "finish the bunks" in str(step.get("text", "")) and not bool(step.get("urgent", false))
+
+
+# A needed bunk step, including finish-the-bunks, outranks a salvage / Rec / Mk II rewrite on Next.
 func _bunks_hold_salvage_nudge(step: Dictionary) -> bool:
+	return _is_bunk_place_step(step) or _is_finish_bunks_step(step)
+
+
+# Spend places bunks only while Next is a genuine place-bunk step. Finish-the-bunks keeps
+# the Next hold above, but is not a purchase of another bunk.
+func _spend_places_bunks_step(step: Dictionary) -> bool:
 	return _is_bunk_place_step(step)
 
 
@@ -2846,6 +2866,33 @@ func _next_step_prefix(step: Dictionary) -> String:
 	return text.get_slice(" · ", 0) + " · "
 
 
+# Post-seal only: a non-urgent Next that already names an affordable NUDGE build
+# reads as a spend. Affordable means food_plan_spendable() (stock minus unpaid
+# queued blueprints). The THEY clause and any suffix stay verbatim.
+func _affordable_place_as_spend(step: Dictionary) -> Dictionary:
+	if not game.breach_system.is_sealed() or game.ended or game.keep_running:
+		return {}
+	if bool(step.get("urgent", false)) or bool(step.get("too_late", false)) or bool(step.get("hold_air_finish", false)):
+		return {}
+	var text := str(step.get("text", ""))
+	var prefix := _next_step_prefix(step)
+	var body := text.trim_prefix(prefix)
+	if not body.begins_with("YOU place "):
+		return {}
+	var kind := _next_named_build_kind(step)
+	if not NUDGE_TOOLS.has(kind):
+		return {}
+	var cost := int(VaultBuilding.COSTS[kind])
+	if cost > game.food_plan_spendable():
+		return {}
+	var first := body.get_slice(" · ", 0)
+	var rest := body.substr(first.length())
+	step.text = prefix + "YOU spend %d: build %s" % [cost, VaultBuilding.KIND_NAMES[kind]] + rest
+	step["tool"] = "select"
+	step["action"] = "spend"
+	return step
+
+
 func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 	var text := str(step.get("text", ""))
 	var danger := bool(step.get("urgent", false))
@@ -2855,6 +2902,7 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 	var placing := body.begins_with("YOU place ")
 	var kind := _next_named_build_kind(step)
 	var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
+	var postseal_spendable: int = game.food_plan_spendable() if game.breach_system.is_sealed() else spendable
 	var affordable := _next_kind_affordable(kind)
 	if funding and affordable:
 		step.text = text.replace(" · THEY fund the ", " · THEY build the ")
@@ -2863,6 +2911,9 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		# A previously decorated input must not keep the reclamation appendix.
 		step["help"] = str(step.get("help", "")).get_slice("\nReclamation:", 0)
 		return step
+	var named_spend := _affordable_place_as_spend(step)
+	if not named_spend.is_empty():
+		return named_spend
 	# No amount of salvage replaces an immediate switch, undraft, priority or cutoff.
 	var salvage_action := placing or (funding and (body.begins_with("YOU mark ") or body.begins_with("YOU leave ")))
 	if bool(step.get("too_late", false)) or bool(step.get("hold_air_finish", false)) or (danger and not salvage_action):
@@ -2907,15 +2958,21 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 	# arrive as urgent steps, which this non-urgent bunk step excludes.
 	if _bunks_hold_salvage_nudge(step):
 		return step
-	# Preserve Mk II precedence on the non-danger path.
+	# While opening bunks are still unmet, dig (no free bunk cell / floor+12) outranks every
+	# salvage rewrite — Spend must not name Rec/Mk II before the player can place the bunk.
+	# Once opening bunks are complete, dig may still become a spend-build (keep-running Rec).
+	if str(step.get("tool", "")) == "dig" and game.get_completed_building_count(VaultBuilding.Kind.BED) < OPENING_BUNKS:
+		return step
+	# Preserve Mk II precedence on the non-danger path — dig still outranks Mk II after opening.
 	var target := _upgrade_offer_target()
-	if target != null and target.get_upgrade_cost() <= spendable:
+	if target != null and target.get_upgrade_cost() <= postseal_spendable and str(step.get("tool", "")) != "dig":
 		step.text = "Next: YOU spend %d: fit %s Mk II" % [target.get_upgrade_cost(), ALSO_NAMES[target.kind]] + _next_in_progress_suffix(step.get("in_progress", []))
 		step["help"] = "Select the %s and fit Mk II in its inspector." % VaultBuilding.KIND_NAMES[target.kind]
 		step["tool"] = "select"
 		step["action"] = "spend"
 		return step
-	return _next_spend_build(step, sink, prefix) if sink >= 0 else step
+	var plan_sink := salvage_survival_sink(postseal_spendable) if idle else -1
+	return _next_spend_build(step, plan_sink, prefix) if plan_sink >= 0 else step
 
 
 # A single Mk I tray can feed a small crew before Air unlocks the next fits.
@@ -3106,10 +3163,28 @@ func _primary_next_step_chain(suppressed_builds: Dictionary) -> Dictionary:
 		return _watch_hatch_step()
 	if bool(urgent_step.get("recovering", false)):
 		return urgent_step
+	# Opening bunks come before the +12 expansion gate: the starter chamber already has
+	# reachable floor and 48 salvage, so the player places what fits and what pays, then digs.
+	var completed_bunks := game.get_completed_building_count(VaultBuilding.Kind.BED)
+	var bunks_blocked_by_floor := false
+	# Hard max of ONE opening bunk (Director 2026-11-05): two starve Dig/funding and
+	# push the fresh-wing Grow past 60 s. Later bunks come from the tired-crew path.
+	var bunks_wanted := completed_bunks < OPENING_BUNKS and not suppressed_builds.has(VaultBuilding.Kind.BED)
+	if bunks_wanted and unfinished_bunks < (OPENING_BUNKS - completed_bunks):
+		var affordable: int = maxi(0, game.food_plan_spendable()) / int(VaultBuilding.COSTS[VaultBuilding.Kind.BED])
+		if affordable > 0:
+			if _reachable_bunk_cell_count(1) <= 0:
+				bunks_blocked_by_floor = true
+			else:
+				return {
+					"text": "Next: YOU place 1 bunk · THEY craft from Craft",
+					"help": "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.",
+					"tool": "bed",
+				}
 	var initial_floor := MapGrid.CHAMBER.size.x * MapGrid.CHAMBER.size.y
 	var floor_count := game.map_grid.get_floor_cells().size() - game.map_grid.layout_pocket_count
 	var dig_marks := game.map_grid.dig_marks.size()
-	if floor_count < initial_floor + 12:
+	if floor_count < initial_floor + 12 or bunks_blocked_by_floor:
 		if dig_marks <= 0:
 			return {
 				"text": "Next: YOU mark rock [E] · THEY dig on Dig defaults",
@@ -3121,19 +3196,12 @@ func _primary_next_step_chain(suppressed_builds: Dictionary) -> Dictionary:
 			"help": "Keep designating connected rock. They dig then haul rubble without draft. PRIORITIES [P] only to specialize.",
 			"tool": "dig",
 		}
-	var completed_bunks := game.get_completed_building_count(VaultBuilding.Kind.BED)
-	if completed_bunks < 2 and not suppressed_builds.has(VaultBuilding.Kind.BED):
-		var deficit := 2 - completed_bunks - unfinished_bunks
-		if unfinished_bunks >= (2 - completed_bunks):
-			return {
-				"text": "Next: YOU leave Haul + Craft on · THEY finish the bunks",
-				"tool": "select",
-				"help": "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints.",
-			}
+	# Queued opening bunks: Dig ran first (above); now they finish.
+	if bunks_wanted and unfinished_bunks >= (OPENING_BUNKS - completed_bunks):
 		return {
-			"text": "Next: YOU place 1 bunk · THEY craft from Craft" if deficit == 1 else "Next: YOU place 2 bunks · THEY craft from Craft",
-			"help": "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.",
-			"tool": "bed",
+			"text": "Next: YOU leave Haul + Craft on · THEY finish the bunks",
+			"tool": "select",
+			"help": "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints.",
 		}
 	if game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true) < 1 and not suppressed_builds.has(VaultBuilding.Kind.GENERATOR):
 		if _unfinished_charge_count() > 0:
@@ -5142,6 +5210,8 @@ func _show_fixture_upgrade(building: VaultBuilding) -> void:
 		else "Needs a powered Air Recycler"
 		if not game.is_air_ready()
 		else "Needs %d salvage (have %d)." % [cost, game.food_system.salvage]
+		if game.food_system.salvage < cost
+		else "Needs %d salvage free · %d held for queued builds (have %d)." % [cost, game.queued_build_commitment(), game.food_system.salvage]
 	)
 
 
@@ -5178,6 +5248,13 @@ func _upgrade_offer_target() -> VaultBuilding:
 		if target != null:
 			return target
 	return null
+
+
+# Spend's fallback fit is withheld while an unpaid blueprint holds the stock the fit would
+# spend: Spend hides (it neither opens an inspector whose FIT the guard refuses nor falls
+# through to another build on the same committed stock); Next names funding that blueprint.
+func _spend_fit_withheld(target: VaultBuilding) -> bool:
+	return target != null and game.queued_build_commitment() > 0 and target.get_upgrade_cost() > game.food_plan_spendable()
 
 
 func _air_ready() -> bool:
@@ -5474,7 +5551,8 @@ func _upgrade_offer_nudge_kind() -> int:
 			air_kind = VaultBuilding.Kind.AIR_RECYCLER
 		if air_kind != VaultBuilding.Kind.AIR_RECYCLER and air_kind != VaultBuilding.Kind.GENERATOR:
 			return -1
-		var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
+		# Stock owed to queued blueprints is not free (Codex #148 issuecomment-7019217243).
+		var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve() - game.queued_build_commitment()
 		return air_kind if spendable >= int(VaultBuilding.COSTS[air_kind]) else -1
 	if _food_nudge_active():
 		if game.ended or not game.breach_system.is_sealed():
@@ -5489,6 +5567,9 @@ func _upgrade_offer_nudge_kind() -> int:
 	# Spend follows Next: the same guard that keeps the bunks as Next keeps Spend
 	# from offering the nudged build (03 s4242: Spend 8 Rec beside "place bunks").
 	if nudge >= 0 and _bunks_hold_salvage_nudge(_displayed_next_step):
+		return -1
+	# salvage_nudge_kind budgets raw stock; Spend only offers what free (uncommitted) stock covers.
+	if nudge >= 0 and game.food_plan_spendable() < upgrade_offer_cost(nudge):
 		return -1
 	return -1 if urgent_kind >= 0 and nudge != urgent_kind else nudge
 
@@ -5511,12 +5592,42 @@ func upgrade_offer_cost(nudge: int) -> int:
 	return int(VaultBuilding.COSTS[nudge]) if nudge >= 0 else 0
 
 
+# The fixture a "YOU spend N: build <Fixture>" Next names, or -1.
+# Mk II fits are not builds; bunks are handled by the place-bunks guards.
+func _spend_named_build_kind(step: Dictionary) -> int:
+	if str(step.get("action", "")) != "spend":
+		return -1
+	var text := str(step.get("text", ""))
+	if "fit " in text and "Mk II" in text:
+		return -1
+	var needle := ": build "
+	var at := text.find(needle)
+	if at < 0 or not "YOU spend " in text:
+		return -1
+	var name := text.substr(at + needle.length()).get_slice(" · ", 0).strip_edges()
+	for kind: int in NUDGE_TOOLS:
+		if str(VaultBuilding.KIND_NAMES[kind]) == name:
+			return kind
+	return -1
+
+
+func _displayed_spend_build_kind() -> int:
+	return _spend_named_build_kind(_displayed_next_step)
+
+
+# Named-build Spend is only offered while the kind still fits the commitment-aware
+# balance. Manual placement of an unfunded blueprint stays allowed; only the
+# one-click Spend promise is guarded (Codex #148 issuecomment-7015041480).
+func _spend_named_affordable(kind: int) -> bool:
+	return kind >= 0 and game.food_plan_spendable() >= int(VaultBuilding.COSTS.get(kind, 0))
+
+
 func _refresh_upgrade_offer() -> void:
 	if upgrade_offer_button == null:
 		return
-	# The bunk guard owns Spend too: while Next shows the bunks, Spend places them
-	# instead of offering a Mk II fit or another build (05 s4242 busy: 8 bounces).
-	if _bunks_hold_salvage_nudge(_displayed_next_step):
+	# Spend places bunks only on a genuine place-bunk step. Finish-the-bunks stays
+	# Next (the salvage hold) and hides Spend, so a click cannot queue another bunk.
+	if _spend_places_bunks_step(_displayed_next_step):
 		var bunks := spend_bunk_count()
 		upgrade_offer_button.visible = bunks > 0
 		if bunks > 0:
@@ -5524,7 +5635,30 @@ func _refresh_upgrade_offer() -> void:
 		_refresh_wing_orders()
 		_refresh_also()
 		return
+	if _is_finish_bunks_step(_displayed_next_step):
+		upgrade_offer_button.visible = false
+		_refresh_wing_orders()
+		_refresh_also()
+		return
+	if bool(_displayed_next_step.get("hold_air_finish", false)):
+		upgrade_offer_button.visible = false
+		_refresh_wing_orders()
+		_refresh_also()
+		return
+	var named := _displayed_spend_build_kind()
+	if named >= 0:
+		upgrade_offer_button.visible = _spend_named_affordable(named)
+		if upgrade_offer_button.visible:
+			upgrade_offer_button.text = "Spend %d: build %s" % [int(VaultBuilding.COSTS[named]), VaultBuilding.KIND_NAMES[named]]
+		_refresh_wing_orders()
+		_refresh_also()
+		return
 	var target := _upgrade_offer_target()
+	if _spend_fit_withheld(target):
+		upgrade_offer_button.visible = false
+		_refresh_wing_orders()
+		_refresh_also()
+		return
 	var nudge := _upgrade_offer_nudge_kind() if target == null else -1
 	upgrade_offer_button.visible = target != null or nudge >= 0
 	if target != null:
@@ -5552,7 +5686,7 @@ func also_text() -> String:
 			return ""
 		return "Also: begin reclamation · +%d salvage" % VaultGame.RECLAIM_START_SALVAGE
 	var target := _upgrade_offer_target()
-	if target != null and game.food_system.salvage >= target.get_upgrade_cost():
+	if target != null and game.food_plan_spendable() >= target.get_upgrade_cost():
 		return "Also: fit %s Mk II · %d" % [ALSO_NAMES.get(target.kind, "a"), target.get_upgrade_cost()]
 	return ""
 
@@ -5641,10 +5775,26 @@ func _on_wing_order_pressed(order_id: String) -> void:
 
 
 func _on_upgrade_offer_pressed() -> void:
-	if _bunks_hold_salvage_nudge(_displayed_next_step):
+	if _spend_places_bunks_step(_displayed_next_step):
 		place_spend_bunks()
 		return
+	if _is_finish_bunks_step(_displayed_next_step):
+		return
+	if bool(_displayed_next_step.get("hold_air_finish", false)):
+		return
+	var named := _displayed_spend_build_kind()
+	if named >= 0:
+		if not _spend_named_affordable(named):
+			var cost := int(VaultBuilding.COSTS[named])
+			game.status_message = "Needs %d salvage free (have %d)." % [cost, maxi(0, game.food_plan_spendable())]
+			game.status_message_left = 4.0
+			refresh()
+			return
+		place_spend_build(named)
+		return
 	var target := _upgrade_offer_target()
+	if _spend_fit_withheld(target):
+		return
 	var nudge := _upgrade_offer_nudge_kind() if target == null else -1
 	if target != null:
 		game.select_building(target.building_id)
@@ -5690,6 +5840,7 @@ func spend_bunk_count() -> int:
 		wanted = int(text.trim_prefix("Next: YOU place ").get_slice(" ", 0))
 	else:
 		var needing := 0
+		var coverage := 0
 		var occupied: Dictionary = {}
 		for resident: VaultResident in game.residents:
 			if resident.sleeping and resident.bed_id >= 0:
@@ -5700,8 +5851,14 @@ func spend_bunk_count() -> int:
 				needing += 1
 		for building: VaultBuilding in game.buildings:
 			if building.kind == VaultBuilding.Kind.BED and (not building.complete or not occupied.has(building.building_id)):
+				coverage += 1
 				needing -= 1
-		wanted = maxi(needing, 1)
+		# Finish-the-bunks, and any need already covered by unfinished or free bunks,
+		# must not floor to 1. A stated-less place step with no coverage still offers one.
+		if _is_finish_bunks_step(_displayed_next_step) or (coverage > 0 and needing <= 0):
+			wanted = maxi(needing, 0)
+		else:
+			wanted = maxi(needing, 1)
 	# Same budget as the food card: the hatch patch still owed (before WARNING too) and every
 	# queued blueprint's unpaid cost stay set aside.
 	var spendable: int = maxi(0, game.food_plan_spendable())
@@ -5753,6 +5910,17 @@ func spend_build_cells(kind: int) -> Array[Vector2i]:
 	for entry: Array in scored:
 		cells.append(entry[3])
 	return cells
+
+
+# Reachable legal bunk cells by the placer's own rules (place_spend_bunks), up to limit.
+func _reachable_bunk_cell_count(limit: int) -> int:
+	var found := 0
+	for cell: Vector2i in spend_build_cells(VaultBuilding.Kind.BED):
+		if found >= limit:
+			break
+		if _crew_can_reach(cell):
+			found += 1
+	return found
 
 
 func _crew_can_reach(cell: Vector2i) -> bool:
@@ -6177,7 +6345,10 @@ func _food_plan_lead_kind() -> int:
 		return -1
 	var text := str(step.get("text", ""))
 	for kind: int in FOOD_PLAN_STEP_NAMES:
-		if ("YOU place a %s" % FOOD_PLAN_STEP_NAMES[kind]) in text:
+		var name: String = FOOD_PLAN_STEP_NAMES[kind]
+		if ("YOU place a %s" % name) in text:
+			return kind
+		if ("YOU spend %d: build %s" % [int(VaultBuilding.COSTS[kind]), name]) in text:
 			return kind
 	return -1
 

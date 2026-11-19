@@ -60,6 +60,9 @@ func _new_game() -> VaultGame:
 # A completed tray, Charge and Air, sealed the way a crew does (patched during WARNING).
 func _sealed_game() -> VaultGame:
 	var game := _new_game()
+	# Opening bunks satisfied so Spend/Also can offer Grow Mk II.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
 	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(24, 12))
 	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(26, 12))
@@ -231,11 +234,18 @@ func _test_details_scroll_to_top() -> void:
 func _test_pre_seal_details() -> void:
 	var game := _new_game()
 	var orders := game.player_orders
+	# Genuine fresh opening at 1280x720: no completed bunks, so the place-1-bunk Spend
+	# row is present. The hatch readout must still stay on-screen.
 	orders.refresh()
 	await _set_details(game, false)
 	var collapsed_height := orders.right_scroll.size.y
 	_assert_scroll_usable(orders, "pre-seal collapsed")
 	await _set_details(game, true)
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 0, "the fresh opening has no completed bunks")
+	# This branch's opening Next is place 1 bunk, so Spend's bunk row is part of the real layout.
+	# Base still starts on mark-rock; the hatch-on-screen check below covers that control.
+	if "place 1 bunk" in orders.objective_label.text:
+		_assert_true(orders.upgrade_offer_button.visible and "place 1 bunk" in orders.upgrade_offer_button.text, "the opening Spend row is present (%s)" % (orders.upgrade_offer_button.text if orders.upgrade_offer_button.visible else "<hidden>"))
 	_assert_scroll_usable(orders, "pre-seal DETAILS open")
 	_assert_true(orders.right_scroll.size.y >= collapsed_height, "pre-seal DETAILS does not shrink the scroll (%.1f vs %.1f)" % [orders.right_scroll.size.y, collapsed_height])
 	_assert_on_screen(orders, orders.crew_mood_label, "the crew mood readout")
@@ -272,6 +282,9 @@ func _test_pre_seal_details() -> void:
 	_assert_equal(orders.details_box.get_child(orders.breach_label.get_index() - 1).get_index(), 0, "during the warning the hatch block leads DETAILS")
 	game.breach_system.patch_delivered = BreachSystem.PATCH_COST
 	game.breach_system.apply_patch_work(100.0)
+	# Opening bunks satisfied so Spend names Rec, not the place-1 bunk hold.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	orders.refresh()
 	await _layout()
 	_assert_true(game.breach_system.is_sealed(), "the hatch seals")

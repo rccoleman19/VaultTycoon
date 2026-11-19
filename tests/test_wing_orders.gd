@@ -268,6 +268,9 @@ func _row_width(orders: PlayerOrders) -> float:
 
 func _test_ui_rows() -> void:
 	var game := _base_game(10)
+	# Bunks covered: with none, the opening bunk step (shared by Spend) owns the offer.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	var orders := game.player_orders
 	_seal(game)
 	orders.refresh()

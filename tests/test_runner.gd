@@ -155,7 +155,7 @@ func _test_bed_shortage_alert() -> void:
 	_assert_equal(game.residents.size(), 4, "fresh shift has four residents")
 	_assert_equal(game.active_tool, "select", "fresh shift keeps Select active")
 	_assert_equal(game.map_grid.dig_marks.size(), 0, "fresh shift has no dig marks")
-	_assert_equal(game.player_orders.objective_label.text, "Next: YOU mark rock [E] · THEY dig on Dig defaults", "fresh shift keeps the initial dig objective")
+	_assert_equal(game.player_orders.objective_label.text, "Next: YOU place 1 bunk · THEY craft from Craft", "fresh shift opens with the counted bunk opportunity")
 	_assert_false("BED SHORTAGE" in "  ·  ".join(game.player_orders.all_alerts), "fresh shift needs no bunks yet")
 	for resident: VaultResident in game.residents:
 		resident.needs.rest = 60.0
@@ -2805,6 +2805,55 @@ func _action_has_physical_key(action: StringName, physical_keycode: Key) -> bool
 		if event is InputEventKey and event.physical_keycode == physical_keycode:
 			return true
 	return false
+
+
+func _is_place_or_spend(tuple: Array, place: Array) -> bool:
+	# Post-seal affordable place tips may be rewritten as "YOU spend N: build X".
+	if tuple == place:
+		return true
+	if tuple.size() != 3 or place.size() != 3:
+		return false
+	if tuple[1] != place[1] or str(tuple[2]) != "select":
+		return false
+	var place_text := str(place[0])
+	var prefix := "Next: YOU place "
+	if not place_text.begins_with(prefix):
+		return false
+	var rest := place_text.substr(prefix.length())
+	if rest.begins_with("a "):
+		rest = rest.substr(2)
+	var sep := " · "
+	var idx := rest.find(sep)
+	if idx < 0:
+		return false
+	var kind := rest.substr(0, idx)
+	var they := rest.substr(idx)
+	var got := str(tuple[0])
+	if not got.begins_with("Next: YOU spend "):
+		return false
+	return got.contains(": build " + kind + they) and got.ends_with(they)
+
+
+func _same_guidance(tuple: Array, expected: Array) -> bool:
+	return tuple == expected or _is_place_or_spend(tuple, expected)
+
+
+func _is_place_or_spend_text(text: String, place_text: String) -> bool:
+	if text == place_text:
+		return true
+	var prefix := "Next: YOU place "
+	if not place_text.begins_with(prefix):
+		return false
+	var rest := place_text.substr(prefix.length())
+	if rest.begins_with("a "):
+		rest = rest.substr(2)
+	var sep := " · "
+	var idx := rest.find(sep)
+	if idx < 0:
+		return false
+	var kind := rest.substr(0, idx)
+	var they := rest.substr(idx)
+	return text.begins_with("Next: YOU spend ") and text.contains(": build " + kind + they) and text.ends_with(they)
 
 
 func _assert_true(condition: bool, message: String) -> void:

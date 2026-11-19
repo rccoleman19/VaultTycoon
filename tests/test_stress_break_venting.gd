@@ -4,6 +4,7 @@ const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 const TICK := VaultGame.SIMULATION_TICK
 const EPSILON := 0.000001
 const CHARGE_FOR_REC := "Next: YOU place a Charge Node · THEY power the Rec Console"
+const SPEND_CHARGE_FOR_REC := "Next: YOU spend 18: build Charge Node · THEY power the Rec Console"
 const CHARGE_FOR_REC_HELP := "The grid lacks available power for the Rec Console. Place a Charge Node to add 7 power."
 const DAY_SEVEN := "Next: YOU designate needs · THEY hold Day 7"
 const DAY_SEVEN_HELP := "Keep designating dig/build/stockpile. Defaults keep food, power, and air running."
@@ -424,7 +425,7 @@ func _echo_game(mood: float) -> VaultGame:
 
 func _test_echo_threshold() -> void:
 	var game := _echo_game(35.0)
-	_assert_step(game, CHARGE_FOR_REC, "generator", CHARGE_FOR_REC_HELP)
+	_assert_step(game, SPEND_CHARGE_FOR_REC, "select", CHARGE_FOR_REC_HELP, "spend")
 	game.free()
 
 
@@ -437,7 +438,7 @@ func _test_echo_above() -> void:
 
 func _test_echo_high() -> void:
 	var game := _echo_game(9.0)
-	_assert_step(game, CHARGE_FOR_REC, "generator", CHARGE_FOR_REC_HELP)
+	_assert_step(game, SPEND_CHARGE_FOR_REC, "select", CHARGE_FOR_REC_HELP, "spend")
 	game.free()
 
 
@@ -454,7 +455,7 @@ func _test_echo_drafted() -> void:
 	var game := _echo_game(100.0)
 	game.residents[0].needs.mood = 20.0
 	game.residents[0].drafted = true
-	_assert_step(game, CHARGE_FOR_REC, "generator", CHARGE_FOR_REC_HELP)
+	_assert_step(game, SPEND_CHARGE_FOR_REC, "select", CHARGE_FOR_REC_HELP, "spend")
 	game.free()
 
 
@@ -482,6 +483,10 @@ func _test_echo_funded() -> void:
 	game.food_system.salvage = charge.get_cost()
 	_assert_true(not charge.complete and charge.delivered == 0, "funded Charge remains completely undelivered")
 	_assert_chain_step(game, FINISH_CHARGE, "select", FINISH_CHARGE_HELP)
+	# Salvage still owed to the Charge blueprint cannot buy a Grow Tray Mk II.
+	_assert_step(game, FINISH_CHARGE, "select", FINISH_CHARGE_HELP)
+	game.food_system.salvage = charge.get_cost() + 18
+	game.day_cycle.elapsed_seconds += 2.1
 	_assert_step(game, SPEND_GROW, "select", SPEND_GROW_HELP, "spend")
 	game.free()
 
@@ -518,8 +523,8 @@ func _test_echo_refresh() -> void:
 	game.set_tool("bed")
 	game.player_orders.refresh()
 	_assert_equal(game.active_tool, "bed", "refresh preserves selected build tool")
-	_assert_equal(game.player_orders.objective_label.text, CHARGE_FOR_REC, "refresh displays Charge-for-Rec echo")
-	_assert_step(game, CHARGE_FOR_REC, "generator", CHARGE_FOR_REC_HELP)
+	_assert_equal(game.player_orders.objective_label.text, SPEND_CHARGE_FOR_REC, "refresh displays Charge-for-Rec echo")
+	_assert_step(game, SPEND_CHARGE_FOR_REC, "select", CHARGE_FOR_REC_HELP, "spend")
 	game.free()
 
 

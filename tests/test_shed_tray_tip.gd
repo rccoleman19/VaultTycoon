@@ -91,9 +91,11 @@ func _text(game: VaultGame) -> String:
 
 
 func _assert_shown(game: VaultGame, expected: String, message: String) -> void:
-	_assert_equal(_text(game), expected, message + " selects the exact Next text")
+	var got := _text(game)
+	_assert_true(_is_place_or_spend_text(got, expected), message + " selects the exact Next text — expected %s, got %s" % [expected, got])
 	game.player_orders.refresh()
-	_assert_equal(game.player_orders.objective_label.text, expected, message + " reaches the displayed Next label")
+	got = game.player_orders.objective_label.text
+	_assert_true(_is_place_or_spend_text(got, expected), message + " reaches the displayed Next label — expected %s, got %s" % [expected, got])
 
 
 func _assert_shed(game: VaultGame, message: String) -> void:

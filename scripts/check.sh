@@ -83,6 +83,7 @@ run_godot_check hatch-reserve --script res://tests/test_hatch_reserve.gd
 run_godot_check air-deadline --script res://tests/test_air_deadline.gd
 run_godot_check next-no-hopeless-food --script res://tests/test_next_no_hopeless_food.gd
 run_godot_check bunk-guard-spend --script res://tests/test_bunk_guard_spend.gd
+run_godot_check opening-bunks --script res://tests/test_opening_bunks.gd
 run_godot_check rec-offer-low-mood --script res://tests/test_rec_offer_low_mood.gd
 run_godot_check late-shift-goals --script res://tests/test_late_shift_goals.gd
 run_godot_check day4-supply-cache --script res://tests/test_day4_supply_cache.gd
@@ -92,6 +93,7 @@ run_godot_check unnamed-rec-lead --script res://tests/test_unnamed_rec_lead.gd
 run_godot_check medbed-bunk-card --script res://tests/test_medbed_bunk_card.gd
 run_godot_check alert-line-cap --script res://tests/test_alert_line_cap.gd
 run_godot_check spend-places-build --script res://tests/test_spend_places_build.gd
+run_godot_check postseal-spend-named-build --script res://tests/test_postseal_spend_named_build.gd
 run_godot_check next-steady --script res://tests/test_next_steady.gd
 run_godot_check rec-flash-cause --script res://tests/test_rec_flash_cause.gd
 run_godot_check starving-unnamed-follow --script res://tests/test_starving_unnamed_follow.gd

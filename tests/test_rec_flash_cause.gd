@@ -105,7 +105,7 @@ func _test_breaking_rec() -> void:
 	var game := _plateau()
 	game.residents[1].needs.mood = 5.0
 	var text := _next(game)
-	_assert_true(text.begins_with("Next: YOU place a Rec Console"), "a breaking resident's Rec step outranks the bunks (%s)" % text)
+	_assert_true(text.begins_with("Next: YOU place a Rec Console") or text.begins_with("Next: YOU spend 8: build Rec Console"), "a breaking resident's Rec step outranks the bunks (%s)" % text)
 	_dispose(game)
 
 

@@ -58,7 +58,7 @@ func _test_next_warning() -> void:
 		_assert_true("MEALS 7 (+0) · %s DAYS" % ("1.8" if frugal else "1.7") in game.player_orders.resource_label.text,
 			"visible DAYS and Next use the same rate at the warning boundary")
 		_assert_equal(game.player_orders.objective_label.text,
-			"Next: YOU mark rock [E] · THEY dig on Dig defaults" if frugal else
+			"Next: YOU place 1 bunk · THEY craft from Craft" if frugal else
 			"Next: food runway short · YOU leave Haul + Craft on · THEY finish the Nutrient Station",
 			"visible Next warning changes at seven meals when FRUGAL changes consumption")
 		_assert_approximately(game.player_orders._food_runway_seconds(),

@@ -499,13 +499,13 @@ func _test_fallback_real_recovery() -> void:
 		if funded_at < 0.0 and game.player_orders._salvage_shortfall(VaultBuilding.Kind.GENERATOR) == 0:
 			funded_at = elapsed
 			var funded_step: Dictionary = game.player_orders._primary_next_step()
-			_assert_true(str(funded_step.text) in [FALLBACK_DAY_SEVEN_NEXT, FALLBACK_SPEND_GROW_NEXT], "funded Charge yields to the calm default or an affordable idle Mk II fit")
+			_assert_true(str(funded_step.text) in [FINISH_CHARGE_NEXT, FALLBACK_DAY_SEVEN_NEXT, FALLBACK_SPEND_GROW_NEXT], "funded Charge finishes, or yields to the calm default or an affordable idle Mk II fit once stock covers it")
 			_assert_true(str(funded_step.get("action", "")) != "reclaim", "funded Charge stops asking for reclamation")
 		if charge.complete:
 			complete_at = elapsed
 	_assert_true(charge.complete, "fallback ordinary Dig Haul Supply Craft completes within declared bound")
 	_assert_true(ordinary_work, "fallback recovery stays undrafted and unforced every tick")
-	var allowed_tips := ["Next: YOU begin reclamation · +18 · THEY fund the Charge Node", FALLBACK_DAY_SEVEN_NEXT, FALLBACK_SPEND_GROW_NEXT]
+	var allowed_tips := ["Next: YOU begin reclamation · +18 · THEY fund the Charge Node", FINISH_CHARGE_NEXT, FALLBACK_DAY_SEVEN_NEXT, FALLBACK_SPEND_GROW_NEXT]
 	for seen: String in tips_seen:
 		_assert_true(seen in allowed_tips, "fallback recovery advice is reclamation until funded, then calm or an affordable fit: %s" % seen)
 	_assert_true(marks_done_at > 0.0 and funded_at >= marks_done_at and complete_at >= funded_at, "fallback recovery observes marks then funded then complete")

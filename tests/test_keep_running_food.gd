@@ -13,7 +13,7 @@ const PLACE_TRAY_CALM := "Next: YOU place Grow Tray · THEY haul output"
 const ANNEX_NEXT := "Next: YOU set the meal reserve · THEY build the Annex"
 const STABLE_NEXT := "Next: YOU enjoy a stable vault · THEY run all of it"
 const COMFORT_NEXT := "Next: YOU tap comfort · THEY build Rec + Med"
-const OPENING_DIG_NEXT := "Next: YOU mark rock [E] · THEY dig on Dig defaults"
+const OPENING_DIG_NEXT := "Next: YOU place 1 bunk · THEY craft from Craft"  # opening bunk is the honest first step
 
 
 func _run() -> void:
@@ -29,7 +29,7 @@ func _run() -> void:
 	_run_case("the food step survives a save and load", _test_save_load)
 	_run_case("once fed, the Next goes back to the Annex", _test_recovery)
 	_run_case("a food emergency beats a latched Med Bed suggestion", _test_beats_latch)
-	_run_case("opening steps (mark rock, first bunks) still give way to the keep-running Next", _test_opening_gives_way)
+	_run_case("opening steps (place bunk, first bunks) still give way to the keep-running Next", _test_opening_gives_way)
 	print("")
 	if _failure_count == 0:
 		print("KEEP RUNNING FOOD TESTS PASSED: %d cases, %d assertions" % [_case_count, _assertion_count])
@@ -443,26 +443,30 @@ func _test_beats_latch() -> void:
 func _test_opening_gives_way() -> void:
 	for open: bool in [false, true]:
 		var game := _vault(open)
+		# Won keep-running vaults already have bunks; strip them so the opening bunk tip is live.
+		for bed: VaultBuilding in game.buildings.duplicate():
+			if bed.kind == VaultBuilding.Kind.BED:
+				game.deconstruct_building(bed.building_id)
 		# The clock-jump fixture now reveals Day 4 correctly. Cancel its expedition
 		# so this case still exercises the opening instruction with no pending digs.
 		game.set_tool("cancel")
 		_assert_true(game.issue_order(game.map_grid.supply_cache_cell), "cancel the cache before the empty-dig fixture")
 		game.set_tool("select")
 		var primary: Dictionary = game.player_orders._primary_next_step()
-		_assert_equal(str(primary.text), OPENING_DIG_NEXT, "affordable Air keeps the underlying opening dig instruction (%s)" % _label(open))
+		_assert_equal(str(primary.text), OPENING_DIG_NEXT, "affordable Air keeps the underlying opening bunk instruction (%s)" % _label(open))
 		_assert_equal(_next(game), STABLE_NEXT if open else ANNEX_NEXT, "affordable Air preserves the keep-running default (%s)" % _label(open))
 		_assert_true(game.start_reclamation(), "player starts reclamation before checking opening-step precedence (%s)" % _label(open))
 		primary = game.player_orders._primary_next_step()
-		_assert_true(str(primary.text).begins_with("Next: YOU mark rock"), "the fixture's diagnosis is the opening dig (%s): %s" % [_label(open), primary.text])
+		_assert_true(str(primary.text).begins_with("Next: YOU place") and "bunk" in str(primary.text), "the fixture's diagnosis is the opening bunk (%s): %s" % [_label(open), primary.text])
 		_assert_equal(str(primary.get("kind", "")), "", "the opening dig is not food chain")
-		_assert_equal(_next(game), str(game.player_orders.keep_running_default_step().text), "mark rock gives way (%s)" % _label(open))
+		_assert_equal(_next(game), str(game.player_orders.keep_running_default_step().text), "opening bunk gives way (%s)" % _label(open))
 		_carve(game, 12)
 		for bed: VaultBuilding in game.buildings.duplicate():
 			if bed.kind == VaultBuilding.Kind.BED:
 				game.deconstruct_building(bed.building_id)
 		game.status_message_left = 0.0
 		primary = game.player_orders._primary_next_step()
-		_assert_equal(str(primary.text), "Next: YOU place 2 bunks · THEY craft from Craft", "the fixture's diagnosis is the first bunks (%s)" % _label(open))
+		_assert_equal(str(primary.text), "Next: YOU place 1 bunk · THEY craft from Craft", "the fixture's diagnosis is the first bunks (%s)" % _label(open))
 		_assert_equal(str(primary.get("kind", "")), "", "first bunks are not food chain")
 		_assert_equal(_next(game), str(game.player_orders.keep_running_default_step().text), "first bunks give way (%s)" % _label(open))
 		_dispose(game)

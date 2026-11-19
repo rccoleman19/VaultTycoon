@@ -129,8 +129,8 @@ func _test_next_nothing_queued_unchanged() -> void:
 	game.new_game(false, 4242, 5)
 	game.begin_shift()
 	var step: Dictionary = game.player_orders._refresh_objective()
-	_assert_equal(game.player_orders.objective_label.text, "Next: YOU mark rock [E] · THEY dig on Dig defaults",
-		"the fresh-wing tip retains the exact original text")
+	_assert_equal(game.player_orders.objective_label.text, "Next: YOU place 1 bunk · THEY craft from Craft",
+		"the fresh-wing tip retains the exact opening bunk text")
 	_assert_true("in progress" not in str(step.text) and not step.has("in_progress"),
 		"a fresh wing does not receive queued-build text or metadata")
 	_dispose(game)
@@ -163,11 +163,13 @@ func _test_next_multiple_queued_builds() -> void:
 	game.food_system.salvage += 40
 	var step: Dictionary = game.player_orders._refresh_objective()
 	_assert_true(placed_rec and placed_bunk, "two different real unfinished blueprints are queued")
-	_assert_equal(step.get("in_progress", []), ["Rec Consoles", "bunks"],
-		"suppression records each selected queued kind once, in chain order")
+	# Finish-after-dig returns a select "finish the bunks" tip (not tool=bed), so the
+	# bunk blueprint is not suppressed into in_progress; Rec still is.
+	_assert_equal(step.get("in_progress", []), ["Rec Consoles"],
+		"suppression records the queued Rec kind; finish-bunks stays the live tip")
 	_assert_equal(game.player_orders.objective_label.text,
-		PLACE_CHARGE + " · Rec Consoles in progress · bunks in progress",
-		"Rec urgency and the remaining bunk link both fall through to Charge")
+		"Next: YOU leave Haul + Craft on · THEY finish the bunks · Rec Consoles in progress",
+		"Rec urgency falls through; opening finish-bunks remains the live tip")
 	_dispose(game)
 
 
@@ -192,10 +194,11 @@ func _test_next_queued_only_fallback() -> void:
 	var step: Dictionary = game.player_orders._refresh_objective()
 	_assert_true(delivered == BreachSystem.PATCH_COST and sealed and placed,
 		"the hatch is really sealed and the only unmet build link has a real bunk blueprint")
-	_assert_equal(game.player_orders.objective_label.text, "Next: YOU spend 18: fit Grow Tray Mk II · bunks in progress",
-		"an idle covered chain offers the affordable fit and retains queued construction")
-	_assert_equal(step.get("in_progress", []), ["bunks"], "the fallback retains structured queued-kind names")
-	_assert_equal(str(step.get("tool", "")), "select", "queued-only fallback keeps Select available")
+	# Finish-after-dig: the unfinished opening bunk is the live tip and holds Mk II.
+	_assert_equal(game.player_orders.objective_label.text, "Next: YOU leave Haul + Craft on · THEY finish the bunks",
+		"an idle covered chain keeps finish-bunks over the Mk II fit")
+	_assert_equal(step.get("in_progress", []), [], "finish-bunks is live, not a suppressed queued suffix")
+	_assert_equal(str(step.get("tool", "")), "select", "finish-bunks keeps Select available")
 	_dispose(game)
 
 
@@ -262,7 +265,7 @@ func _test_next_queued_extra_air() -> void:
 	_assert_true(placed and str(step.get("tool", "")) == "bed" and step.get("in_progress", []) == ["Air Recyclers"],
 		"the queued extra recycler falls through to the normal bunk link")
 	_assert_equal(game.player_orders.objective_label.text,
-		"Next: YOU place 2 bunks · THEY craft from Craft · Air Recyclers in progress",
+		"Next: YOU place 1 bunk · THEY craft from Craft · Air Recyclers in progress",
 		"the replacement tip keeps the next normal link and queued Air context")
 	_dispose(game)
 
@@ -702,7 +705,12 @@ func _test_alerts_no_duplicate_with_next() -> void:
 
 	game = _triage_game()
 	orders = game.player_orders
+	# Opening bunk is the honest tip with zero beds; tired "place bunks" needs a shortage after one exists.
+	# Satisfy opening + clear the place-1 latch via dig before the tired shortage tip.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	orders.refresh()
 	game.residents[0].needs.rest = 25.0
+	game.residents[1].needs.rest = 25.0
 	orders.refresh()
 	_assert_equal(orders.objective_label.text, "Next: YOU place bunks · THEY craft", "a tired resident selects the real bunk shortage action")
 	_assert_next_alert_omitted(game, "BED SHORTAGE · crew rotate", "bunk placement")
