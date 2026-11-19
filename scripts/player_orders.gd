@@ -2860,6 +2860,33 @@ func _next_step_prefix(step: Dictionary) -> String:
 	return text.get_slice(" · ", 0) + " · "
 
 
+# Post-seal only: a non-urgent Next that already names an affordable NUDGE build
+# reads as a spend. Affordable means food_plan_spendable() (stock minus unpaid
+# queued blueprints). The THEY clause and any suffix stay verbatim.
+func _affordable_place_as_spend(step: Dictionary) -> Dictionary:
+	if not game.breach_system.is_sealed() or game.ended or game.keep_running:
+		return {}
+	if bool(step.get("urgent", false)) or bool(step.get("too_late", false)) or bool(step.get("hold_air_finish", false)):
+		return {}
+	var text := str(step.get("text", ""))
+	var prefix := _next_step_prefix(step)
+	var body := text.trim_prefix(prefix)
+	if not body.begins_with("YOU place "):
+		return {}
+	var kind := _next_named_build_kind(step)
+	if not NUDGE_TOOLS.has(kind):
+		return {}
+	var cost := int(VaultBuilding.COSTS[kind])
+	if cost > game.food_plan_spendable():
+		return {}
+	var first := body.get_slice(" · ", 0)
+	var rest := body.substr(first.length())
+	step.text = prefix + "YOU spend %d: build %s" % [cost, VaultBuilding.KIND_NAMES[kind]] + rest
+	step["tool"] = "select"
+	step["action"] = "spend"
+	return step
+
+
 func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 	var text := str(step.get("text", ""))
 	var danger := bool(step.get("urgent", false))
@@ -2869,6 +2896,7 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 	var placing := body.begins_with("YOU place ")
 	var kind := _next_named_build_kind(step)
 	var spendable: int = game.food_system.salvage - game.job_system.get_breach_salvage_reserve()
+	var postseal_spendable: int = game.food_plan_spendable() if game.breach_system.is_sealed() else spendable
 	var affordable := _next_kind_affordable(kind)
 	if funding and affordable:
 		step.text = text.replace(" · THEY fund the ", " · THEY build the ")
@@ -2877,6 +2905,9 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		# A previously decorated input must not keep the reclamation appendix.
 		step["help"] = str(step.get("help", "")).get_slice("\nReclamation:", 0)
 		return step
+	var named_spend := _affordable_place_as_spend(step)
+	if not named_spend.is_empty():
+		return named_spend
 	# No amount of salvage replaces an immediate switch, undraft, priority or cutoff.
 	var salvage_action := placing or (funding and (body.begins_with("YOU mark ") or body.begins_with("YOU leave ")))
 	if bool(step.get("too_late", false)) or bool(step.get("hold_air_finish", false)) or (danger and not salvage_action):
@@ -2928,13 +2959,14 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		return step
 	# Preserve Mk II precedence on the non-danger path — dig still outranks Mk II after opening.
 	var target := _upgrade_offer_target()
-	if target != null and target.get_upgrade_cost() <= spendable and str(step.get("tool", "")) != "dig":
+	if target != null and target.get_upgrade_cost() <= postseal_spendable and str(step.get("tool", "")) != "dig":
 		step.text = "Next: YOU spend %d: fit %s Mk II" % [target.get_upgrade_cost(), ALSO_NAMES[target.kind]] + _next_in_progress_suffix(step.get("in_progress", []))
 		step["help"] = "Select the %s and fit Mk II in its inspector." % VaultBuilding.KIND_NAMES[target.kind]
 		step["tool"] = "select"
 		step["action"] = "spend"
 		return step
-	return _next_spend_build(step, sink, prefix) if sink >= 0 else step
+	var plan_sink := salvage_survival_sink(postseal_spendable) if idle else -1
+	return _next_spend_build(step, plan_sink, prefix) if plan_sink >= 0 else step
 
 
 # A single Mk I tray can feed a small crew before Air unlocks the next fits.
@@ -5541,6 +5573,26 @@ func upgrade_offer_cost(nudge: int) -> int:
 	return int(VaultBuilding.COSTS[nudge]) if nudge >= 0 else 0
 
 
+# The fixture a displayed "YOU spend N: build <Fixture>" Next names, or -1.
+# Mk II fits are not builds; bunks are handled by the place-bunks guards.
+func _displayed_spend_build_kind() -> int:
+	var step := _displayed_next_step
+	if str(step.get("action", "")) != "spend":
+		return -1
+	var text := str(step.get("text", ""))
+	if "fit " in text and "Mk II" in text:
+		return -1
+	var needle := ": build "
+	var at := text.find(needle)
+	if at < 0 or not "YOU spend " in text:
+		return -1
+	var name := text.substr(at + needle.length()).get_slice(" · ", 0).strip_edges()
+	for kind: int in NUDGE_TOOLS:
+		if str(VaultBuilding.KIND_NAMES[kind]) == name:
+			return kind
+	return -1
+
+
 func _refresh_upgrade_offer() -> void:
 	if upgrade_offer_button == null:
 		return
@@ -5556,6 +5608,18 @@ func _refresh_upgrade_offer() -> void:
 		return
 	if _is_finish_bunks_step(_displayed_next_step):
 		upgrade_offer_button.visible = false
+		_refresh_wing_orders()
+		_refresh_also()
+		return
+	if bool(_displayed_next_step.get("hold_air_finish", false)):
+		upgrade_offer_button.visible = false
+		_refresh_wing_orders()
+		_refresh_also()
+		return
+	var named := _displayed_spend_build_kind()
+	if named >= 0:
+		upgrade_offer_button.visible = true
+		upgrade_offer_button.text = "Spend %d: build %s" % [int(VaultBuilding.COSTS[named]), VaultBuilding.KIND_NAMES[named]]
 		_refresh_wing_orders()
 		_refresh_also()
 		return
@@ -5680,6 +5744,12 @@ func _on_upgrade_offer_pressed() -> void:
 		place_spend_bunks()
 		return
 	if _is_finish_bunks_step(_displayed_next_step):
+		return
+	if bool(_displayed_next_step.get("hold_air_finish", false)):
+		return
+	var named := _displayed_spend_build_kind()
+	if named >= 0:
+		place_spend_build(named)
 		return
 	var target := _upgrade_offer_target()
 	var nudge := _upgrade_offer_nudge_kind() if target == null else -1
@@ -6232,7 +6302,10 @@ func _food_plan_lead_kind() -> int:
 		return -1
 	var text := str(step.get("text", ""))
 	for kind: int in FOOD_PLAN_STEP_NAMES:
-		if ("YOU place a %s" % FOOD_PLAN_STEP_NAMES[kind]) in text:
+		var name: String = FOOD_PLAN_STEP_NAMES[kind]
+		if ("YOU place a %s" % name) in text:
+			return kind
+		if ("YOU spend %d: build %s" % [int(VaultBuilding.COSTS[kind]), name]) in text:
 			return kind
 	return -1
 

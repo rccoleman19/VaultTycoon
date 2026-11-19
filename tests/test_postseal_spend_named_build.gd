@@ -1,0 +1,462 @@
+extends "res://tests/test_rec_flash_cause.gd"
+
+# After the seal, a non-urgent Next that names an affordable NUDGE build reads as a
+# spend, Spend offers that same build ahead of a Mk II fit, and affordability
+# subtracts unpaid queued blueprints (food_plan_spendable).
+
+
+func _run() -> void:
+	_run_case("Air: affordable place reads as spend, with and without the early warning", _test_air)
+	_run_case("Rec: Next and Spend name the Rec, not the competing Charge Mk II", _test_rec)
+	_run_case("Shed Rec: Next and Spend name a Charge Node, not the competing Grow Tray Mk II", _test_shed_rec)
+	_run_case("Commit-aware, build: unpaid blueprints keep Air as place until stock covers both", _test_commit_build)
+	_run_case("Commit-aware, Mk II: a fit and the fallback sink respect queued commitments", _test_commit_mk2)
+	_run_case("Threshold crossing: place lasts at most one hold window after it becomes affordable", _test_threshold)
+	_run_case("All five NUDGE kinds rewrite the first clause and keep the THEY suffix", _test_all_five_kinds)
+	_run_case("Food card: a non-urgent spend food build stays aligned with Next and Spend", _test_food_card)
+	_run_case("Negatives: urgent, pre-seal, unaffordable, keep-running, bunks, Med Bed, hold-Air", _test_negatives)
+	print("POSTSEAL SPEND NAMED BUILD: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
+	quit(1 if _failure_count else 0)
+
+
+func _show(game: VaultGame) -> String:
+	game.player_orders.refresh()
+	return game.player_orders.objective_label.text
+
+
+func _press(game: VaultGame) -> void:
+	var button: Button = game.player_orders.upgrade_offer_button
+	if button != null and button.visible and not button.disabled:
+		button.pressed.emit()
+
+
+func _count_kind(game: VaultGame, kind: int) -> int:
+	var count := 0
+	for building: VaultBuilding in game.buildings:
+		if building.kind == kind:
+			count += 1
+	return count
+
+
+func _target_kind(game: VaultGame) -> int:
+	var target = game.player_orders._upgrade_offer_target()
+	return -1 if target == null else int(target.kind)
+
+
+func _food_button(game: VaultGame) -> Button:
+	return game.player_orders.find_child("FoodPlanButton", true, false)
+
+
+func _idle(game: VaultGame) -> void:
+	game.player_orders.refresh()
+	game.day_cycle.elapsed_seconds += 3.0
+	game.player_orders.refresh()
+
+
+func _expire_hold(game: VaultGame) -> void:
+	game.day_cycle.elapsed_seconds += PlayerOrders.NEXT_HOLD_S + 0.1
+	game.player_orders.refresh()
+
+
+func _seal_base(bunks := true, air := false, rec := false) -> VaultGame:
+	var game := _plateau(bunks, air)
+	if rec:
+		_add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(27, 12))
+		game.power_grid.recalculate(game.buildings)
+	game.reclaim_active = true
+	game.oxygen_system.oxygen = 100.0
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	return game
+
+
+func _add_lumens(game: VaultGame, count: int) -> void:
+	for i in count:
+		_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(16 + (i % 8), 11 - int(i / 8)))
+	game.power_grid.recalculate(game.buildings)
+
+
+func _warn_o2(game: VaultGame) -> void:
+	game.oxygen_system.refresh_rates(game.residents, game.buildings, false)
+	var rate := game.oxygen_system.net_rate
+	if rate >= 0.0:
+		rate = -0.5
+		game.oxygen_system.net_rate = rate
+	game.oxygen_system.oxygen = OxygenSystem.LOW_OXYGEN_THRESHOLD + 40.0 * (-rate)
+	game.player_orders._air_warning_latched = false
+
+
+func _air_game(warn: bool, salvage: int) -> VaultGame:
+	var game := _seal_base(true, false, false)
+	game.food_system.salvage = salvage
+	if warn:
+		_warn_o2(game)
+	else:
+		game.oxygen_system.oxygen = 100.0
+	return game
+
+
+func _queue_unpaid(game: VaultGame, kind: int, transit: int) -> VaultBuilding:
+	var placed: VaultBuilding = null
+	for cell: Vector2i in game.player_orders.spend_build_cells(kind):
+		if game.get_building_at(cell) == null and game.place_blueprint(kind, cell):
+			placed = game.get_building_at(cell)
+			break
+	_assert_true(placed != null, "queued an unpaid %s" % VaultBuilding.KIND_NAMES[kind])
+	if placed == null:
+		return null
+	var job: Dictionary = game.job_system._find_matching_job(JobSystem.JobType.SUPPLY_BUILD, placed.cell, placed.building_id)
+	if job.is_empty():
+		game.job_system._add_job(JobSystem.JobType.SUPPLY_BUILD, placed.cell, placed.building_id, placed.get_cost())
+		job = game.job_system._find_matching_job(JobSystem.JobType.SUPPLY_BUILD, placed.cell, placed.building_id)
+	if not job.is_empty():
+		job["in_transit"] = transit
+	return placed
+
+
+func _rec_game(salvage: int) -> VaultGame:
+	var game := _seal_base(true, true, false)
+	# 7 lumens: planned spare is 0 so the Rec nudge yields, and Charge Mk II competes.
+	_add_lumens(game, 7)
+	game.wing_orders_claimed.append(VaultGame.ORDER_FIT_GROW_MK2)
+	game.residents[1].needs.mood = 9.0
+	game.food_system.salvage = salvage
+	return game
+
+
+func _shed_game(salvage: int) -> VaultGame:
+	var game := _seal_base(true, true, true)
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_BASE
+	# 7 lumens sheds only Rec (demand 17 / supply 16); tray and Air stay powered.
+	_add_lumens(game, 7)
+	game.residents[1].needs.mood = 35.0
+	game.food_system.salvage = salvage
+	return game
+
+
+func _station_game(salvage: int) -> VaultGame:
+	var game := _seal_base(true, true, true)
+	var drop: Array[VaultBuilding] = []
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.KITCHEN:
+			drop.append(building)
+	for building: VaultBuilding in drop:
+		game.buildings.erase(building)
+		if building.get_parent() != null:
+			building.get_parent().remove_child(building)
+		building.free()
+	game.power_grid.recalculate(game.buildings)
+	game.food_system.salvage = salvage
+	game.food_system.meals = 100
+	return game
+
+
+func _tray_game(salvage: int) -> VaultGame:
+	var game := _seal_base(true, true, true)
+	var drop: Array[VaultBuilding] = []
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			drop.append(building)
+	for building: VaultBuilding in drop:
+		game.buildings.erase(building)
+		if building.get_parent() != null:
+			building.get_parent().remove_child(building)
+		building.free()
+	game.power_grid.recalculate(game.buildings)
+	game.food_system.salvage = salvage
+	game.food_system.meals = 100
+	return game
+
+
+func _test_air() -> void:
+	for warn: bool in [false, true]:
+		var game := _air_game(warn, 20)
+		_assert_true(game.breach_system.is_sealed() and game.reclaim_active, "pre: sealed with reclamation active")
+		_assert_equal(_count_kind(game, VaultBuilding.Kind.AIR_RECYCLER), 0, "pre: no Air Recycler or blueprint")
+		_assert_true(game.food_plan_spendable() >= 14, "pre: spendable covers Air (%d)" % game.food_plan_spendable())
+		var text := _show(game)
+		var step: Dictionary = game.player_orders._displayed_next_step
+		var want := "Next: YOU spend 14: build Air Recycler · THEY craft it"
+		if warn:
+			_assert_true(game.player_orders.air_early_warning(), "pre: early warning is live")
+			_assert_equal(text, game.player_orders._with_air_countdown(want), "warning Next keeps its clock (%s)" % text)
+		else:
+			_assert_false(game.player_orders.air_early_warning(), "pre: no air warning yet")
+			_assert_equal(text, want, "Next names the Air spend (%s)" % text)
+		_assert_equal(str(step.get("action", "")), "spend", "the Air step is a spend")
+		_assert_equal(_spend_text(game), "Spend 14: build Air Recycler", "Spend offers the Air Recycler (%s)" % _spend_text(game))
+		var before := _count_kind(game, VaultBuilding.Kind.AIR_RECYCLER)
+		_press(game)
+		_assert_equal(_count_kind(game, VaultBuilding.Kind.AIR_RECYCLER), before + 1, "one press queues exactly one Air Recycler")
+		_dispose(game)
+
+
+func _test_rec() -> void:
+	var game := _rec_game(20)
+	_show(game)
+	_assert_equal(_target_kind(game), VaultBuilding.Kind.GENERATOR, "pre: a fittable Charge Node is the competing Mk II")
+	_assert_equal(_low_mood_not_hiding(game), true, "pre: low-mood Rec suppression is not what hides the Charge Mk II")
+	var text := game.player_orders.objective_label.text
+	var step: Dictionary = game.player_orders._displayed_next_step
+	_assert_equal(text, "Next: YOU spend 8: build Rec Console · THEY recover mood", "Next names the Rec spend (%s)" % text)
+	_assert_equal(str(step.get("action", "")), "spend", "the Rec step is a spend")
+	_assert_equal(_spend_text(game), "Spend 8: build Rec Console", "Spend offers the Rec, not Charge Mk II (%s)" % _spend_text(game))
+	var also := game.player_orders.also_text()
+	_assert_true(also.is_empty() or "fit Charge Mk II" in also, "Also may still name the Charge Mk II (%s)" % also)
+	var before := _count_kind(game, VaultBuilding.Kind.RECREATION_CONSOLE)
+	var selected := game.selected_building_id
+	_press(game)
+	_assert_equal(_count_kind(game, VaultBuilding.Kind.RECREATION_CONSOLE), before + 1, "one press queues one Rec Console")
+	_assert_equal(game.selected_building_id, selected, "the press selects no fixture")
+	_dispose(game)
+
+
+func _low_mood_not_hiding(game: VaultGame) -> bool:
+	# The competing target exists because planned power makes salvage_nudge_kind a Charge Node,
+	# not because _low_mood_rec_wanted is false.
+	return game.player_orders._low_mood_rec_wanted() and game.player_orders.salvage_nudge_kind() != VaultBuilding.Kind.RECREATION_CONSOLE
+
+
+func _test_shed_rec() -> void:
+	var game := _shed_game(20)
+	_show(game)
+	_assert_equal(game.get_powered_building_count(VaultBuilding.Kind.RECREATION_CONSOLE), 0, "pre: Rec is complete but unpowered")
+	_assert_equal(_target_kind(game), VaultBuilding.Kind.GROW_TRAY, "pre: a fittable Grow Tray is the competing Mk II")
+	var text := game.player_orders.objective_label.text
+	var step: Dictionary = game.player_orders._displayed_next_step
+	_assert_equal(text, "Next: YOU spend 18: build Charge Node · THEY power the Rec Console", "Next names the Charge spend (%s)" % text)
+	_assert_equal(str(step.get("action", "")), "spend", "the Charge step is a spend")
+	_assert_equal(_spend_text(game), "Spend 18: build Charge Node", "Spend agrees with the Charge Node (%s)" % _spend_text(game))
+	var before := _count_kind(game, VaultBuilding.Kind.GENERATOR)
+	_press(game)
+	_assert_equal(_count_kind(game, VaultBuilding.Kind.GENERATOR), before + 1, "one press queues one Charge Node")
+	_dispose(game)
+
+
+func _test_commit_build() -> void:
+	var short := _air_game(false, 20)
+	_queue_unpaid(short, VaultBuilding.Kind.GROW_TRAY, 2)
+	_assert_equal(short.food_system.salvage, 20, "pre: stock covers Air only before commitments")
+	_assert_true(short.food_plan_spendable() < 14, "pre: spendable is short of Air after the tray commitment (%d)" % short.food_plan_spendable())
+	_assert_true(short.queued_build_commitment() != 12 - 0, "pre: in-transit means spendable is not salvage minus unfunded")
+	var short_text := _show(short)
+	_assert_false(short_text.begins_with("Next: YOU spend "), "short stock keeps the non-spend Air wording (%s)" % short_text)
+	_assert_true("YOU place Air Recycler" in short_text, "short stock keeps the Air place wording (%s)" % short_text)
+	_dispose(short)
+	var enough := _air_game(false, 20)
+	_queue_unpaid(enough, VaultBuilding.Kind.GROW_TRAY, 6)
+	_assert_true(enough.food_plan_spendable() >= 14, "pre: in-transit leaves enough for Air (%d)" % enough.food_plan_spendable())
+	_assert_true(enough.food_system.salvage - 12 < 14, "pre: salvage minus unfunded would still be short")
+	var enough_text := _show(enough)
+	_assert_equal(enough_text, "Next: YOU spend 14: build Air Recycler · THEY craft it", "stock that covers both uses the spend wording (%s)" % enough_text)
+	_dispose(enough)
+
+
+func _test_commit_mk2() -> void:
+	var game := _seal_base(true, true, true)
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_BASE
+	# Spare stays below a second tray's demand even after the unpaid Charge counts as +7.
+	_add_lumens(game, 16)
+	_queue_unpaid(game, VaultBuilding.Kind.GENERATOR, 0)
+	game.food_system.salvage = 30
+	_idle(game)
+	_assert_equal(game.queued_build_commitment(), 18, "pre: the Charge Node still owes 18")
+	_assert_equal(game.food_plan_spendable(), 12, "pre: spendable is 12 after the Charge commitment")
+	_assert_equal(_target_kind(game), VaultBuilding.Kind.GROW_TRAY, "pre: a Grow Tray can take the Mk II fit")
+	_assert_equal(game.player_orders.salvage_survival_sink(30), VaultBuilding.Kind.GENERATOR, "pre: the old budget would fall through to an 18-salvage Charge")
+	_assert_equal(game.player_orders.salvage_survival_sink(12), -1, "pre: the commit-aware budget has no 18+ sink")
+	var text := game.player_orders.objective_label.text
+	_assert_false("YOU spend 18: fit" in text, "Next does not offer the Mk II fit on committed stock (%s)" % text)
+	_assert_false(text.begins_with("Next: YOU spend 18:") or text.begins_with("Next: YOU spend 19:"), "Next does not fall through to an 18+ spend build (%s)" % text)
+	game.food_system.salvage = 36
+	_expire_hold(game)
+	_assert_true(game.food_plan_spendable() >= 18, "36 salvage covers the fit after the Charge commitment")
+	_assert_true("YOU spend 18: fit Grow Tray Mk II" in game.player_orders.objective_label.text, "with 36 salvage the Grow Tray fit returns (%s)" % game.player_orders.objective_label.text)
+	_dispose(game)
+
+
+func _test_threshold() -> void:
+	var game := _air_game(false, 13)
+	var first := _show(game)
+	_assert_true("YOU place Air Recycler" in first, "13 salvage starts on the place wording (%s)" % first)
+	game.food_system.salvage = 14
+	var saw_place := 0.0
+	var switches := 0
+	var last := first
+	var now := game.day_cycle.elapsed_seconds
+	while game.day_cycle.elapsed_seconds - now <= PlayerOrders.NEXT_HOLD_S + 0.6:
+		game.day_cycle.elapsed_seconds += 0.1
+		var text := _show(game)
+		if text != last:
+			switches += 1
+			last = text
+		if "YOU place Air Recycler" in text:
+			saw_place += 0.1
+	_assert_true(switches <= 1, "affordability crosses at most once (%d switches, last %s)" % [switches, last])
+	_assert_true(saw_place <= PlayerOrders.NEXT_HOLD_S + 0.1 + 0.000001, "place does not outlast one hold window after it is affordable (%.1f s, last %s)" % [saw_place, last])
+	_assert_true("YOU spend 14: build Air Recycler" in last, "the line settles on the spend wording (%s)" % last)
+	game.food_system.salvage = 13
+	var down_place := 0.0
+	var down_switches := 0
+	var down_last := last
+	var down_now := game.day_cycle.elapsed_seconds
+	while game.day_cycle.elapsed_seconds - down_now <= PlayerOrders.NEXT_HOLD_S + 0.6:
+		game.day_cycle.elapsed_seconds += 0.1
+		var text := _show(game)
+		if text != down_last:
+			down_switches += 1
+			down_last = text
+		if "YOU place Air Recycler" in text:
+			down_place += 0.1
+	_assert_true(down_switches <= 1, "dropping below the cost switches at most once (%d)" % down_switches)
+	_assert_true("YOU place Air Recycler" in down_last, "the line returns to place when it is no longer affordable (%s)" % down_last)
+	_dispose(game)
+
+
+func _test_all_five_kinds() -> void:
+	var rows: Array = [
+		[_station_game(20), "Next: YOU spend 10: build Nutrient Station · THEY cook/haul"],
+		[_rec_game(20), "Next: YOU spend 8: build Rec Console · THEY recover mood"],
+		[_tray_game(20), "Next: YOU spend 12: build Grow Tray · THEY haul output"],
+		[_shed_game(20), "Next: YOU spend 18: build Charge Node · THEY power the Rec Console"],
+		[_air_game(false, 20), "Next: YOU spend 14: build Air Recycler · THEY craft it"],
+	]
+	for row: Array in rows:
+		var game: VaultGame = row[0]
+		var want: String = row[1]
+		var text := _show(game)
+		_assert_equal(text, want, "rewrite text (%s)" % text)
+		_assert_false(" a " in text.get_slice(" · ", 0) or " an " in text.get_slice(" · ", 0), "the first clause drops a/an (%s)" % text)
+		_assert_equal(str(game.player_orders._displayed_next_step.get("action", "")), "spend", "each kind is a spend (%s)" % text)
+		_dispose(game)
+
+
+func _food_both_missing(salvage: int) -> VaultGame:
+	var game := _tray_game(salvage)
+	var drop: Array[VaultBuilding] = []
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.KITCHEN:
+			drop.append(building)
+	for building: VaultBuilding in drop:
+		game.buildings.erase(building)
+		if building.get_parent() != null:
+			building.get_parent().remove_child(building)
+		building.free()
+	game.power_grid.recalculate(game.buildings)
+	game.food_system.salvage = salvage
+	return game
+
+
+func _test_food_card() -> void:
+	# No Station and no tray: Next names the tray spend, while the card's default
+	# offer would be the Station. lead_kind must make the card follow Next.
+	var game := _food_both_missing(20)
+	var text := _show(game)
+	_assert_equal(text, "Next: YOU spend 12: build Grow Tray · THEY haul output", "Next names the tray spend (%s)" % text)
+	var button := _food_button(game)
+	_assert_true(button != null and "Grow Tray" in button.text, "the food card follows Next's tray (%s)" % (button.text if button else "none"))
+	_assert_false(button != null and "Nutrient Station" in button.text, "the card does not keep its default Station offer (%s)" % (button.text if button else "none"))
+	_assert_equal(_spend_text(game), "Spend 12: build Grow Tray", "Spend names the same tray (%s)" % _spend_text(game))
+	# Urgent food-recovery wording is unchanged: a named starving place step is not rewritten.
+	var urgent := _station_game(20)
+	urgent.food_system.meals = 0
+	urgent.residents[1].needs.food = 0.0
+	urgent.residents[1].needs.health = 20.0
+	var urgent_text := _show(urgent)
+	_assert_true(urgent_text.begins_with("Next: Bo starving · YOU place a Nutrient Station"), "urgent food recovery keeps its place wording (%s)" % urgent_text)
+	_assert_true(bool(urgent.player_orders._displayed_next_step.get("urgent", false)), "the starving step stays urgent")
+	_dispose(game)
+	_dispose(urgent)
+
+
+func _test_negatives() -> void:
+	var unafford := _air_game(false, 5)
+	var unafford_text := _show(unafford)
+	_assert_true("YOU place Air Recycler" in unafford_text and not unafford_text.begins_with("Next: YOU spend "), "unaffordable Air stays a place or fund step (%s)" % unafford_text)
+	_dispose(unafford)
+
+	var pre := _spawn_game()
+	pre.new_game(false, 4242, 5)
+	pre.begin_shift()
+	pre.user_paused = true
+	pre.food_system.salvage = 20
+	var pre_text := _show(pre)
+	_assert_false(pre.breach_system.is_sealed(), "pre: hatch is not sealed")
+	_assert_false(pre_text.begins_with("Next: YOU spend "), "pre-seal Next is unchanged by the spend rewrite (%s)" % pre_text)
+	_dispose(pre)
+
+	var urgent_air := _air_game(true, 20)
+	urgent_air.oxygen_system.oxygen = 20.0
+	urgent_air.oxygen_system.refresh_rates(urgent_air.residents, urgent_air.buildings, false)
+	for resident: VaultResident in urgent_air.residents:
+		resident.needs.health = 20.0
+	var ari := _show(urgent_air)
+	_assert_true(ari.begins_with("Next: Ari low on air · YOU place Air Recycler"), "urgent low-on-air place wording is unchanged (%s)" % ari)
+	_assert_true(bool(urgent_air.player_orders._displayed_next_step.get("urgent", false)), "the low-on-air step stays urgent")
+	_dispose(urgent_air)
+
+	var kr := _spawn_game()
+	kr.begin_shift()
+	_add_completed_building(kr, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(kr, VaultBuilding.Kind.BED, Vector2i(19, 12))
+	kr.day_cycle.deserialize({"elapsed_seconds": 70.0, "current_day": 2, "completed": false})
+	kr.breach_system.advance(0.0, 70.0)
+	kr.breach_system.patch_delivered = BreachSystem.PATCH_COST
+	kr.breach_system.apply_patch_work(100.0)
+	kr.job_system.rebuild_from_state()
+	kr.day_cycle.deserialize({"elapsed_seconds": 279.5, "current_day": 7, "completed": false})
+	kr.oxygen_system.oxygen = 100.0
+	kr.step_simulation(1.0)
+	_assert_true(kr.start_keep_running(), "KEEP RUNNING starts")
+	for resident: VaultResident in kr.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.mood = 100.0
+		resident.needs.health = 100.0
+	kr.food_system.salvage = 20
+	kr.player_orders.refresh()
+	kr.keep_running_seconds += 3.0
+	var kr_text := _show(kr)
+	_assert_equal(kr_text, "Next: YOU spend 8: build Rec Console · THEY craft", "keep-running spend wording is unchanged (%s)" % kr_text)
+	_dispose(kr)
+
+	var bunks := _plateau(false, false)
+	bunks.food_system.salvage = 20
+	var bunk_text := _show(bunks)
+	_assert_true(bunk_text.begins_with("Next: YOU place ") and "bunk" in bunk_text, "a bunk place step is unchanged (%s)" % bunk_text)
+	_assert_true(_spend_text(bunks).begins_with("Spend ") and "bunk" in _spend_text(bunks), "Spend still places bunks (%s)" % _spend_text(bunks))
+	_dispose(bunks)
+
+	var finish := _plateau()
+	var queued := 0
+	for cell: Vector2i in finish.player_orders.spend_build_cells(VaultBuilding.Kind.BED):
+		if queued >= 2:
+			break
+		if finish.place_blueprint(VaultBuilding.Kind.BED, cell):
+			queued += 1
+	finish.food_system.salvage = 40
+	var finish_text := _show(finish)
+	_assert_true("finish the bunks" in finish_text, "finish-the-bunks stays Next (%s)" % finish_text)
+	_assert_equal(_spend_text(finish), "", "finish-the-bunks still hides Spend")
+	_dispose(finish)
+
+	var med := _seal_base(true, true, true)
+	med.residents[1].needs.health = 20.0
+	med.food_system.salvage = 20
+	var med_text := _show(med)
+	_assert_true("YOU place a Med Bed" in med_text and not med_text.begins_with("Next: YOU spend "), "a Medical Bed place step is unchanged (%s)" % med_text)
+	_dispose(med)
+
+	var hold := _air_game(false, 20)
+	_queue_unpaid(hold, VaultBuilding.Kind.AIR_RECYCLER, 0)
+	hold.food_system.meals = 0
+	hold.residents[1].needs.food = 0.0
+	hold.residents[1].needs.health = 5.0
+	var hold_text := _show(hold)
+	_assert_true(bool(hold.player_orders._displayed_next_step.get("hold_air_finish", false)), "pre: hold_air_finish is set")
+	_assert_true("YOU leave Haul + Craft on · THEY finish the Air Recycler" in hold_text, "hold_air_finish keeps its finish wording (%s)" % hold_text)
+	_assert_equal(_spend_text(hold), "", "hold_air_finish still hides Spend")
+	_dispose(hold)

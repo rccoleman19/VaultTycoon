@@ -289,7 +289,12 @@ func _test_spend_nudge() -> void:
 	_assert_equal(str(step.get("text", "")), "Next: YOU leave Haul + Craft on · THEY finish the Med Bed", "T3 busy passive fixture retains its existing leave-on step")
 	game.residents[0].state = "Idle"
 	step = _next_step(game)
-	_assert_equal(str(step.get("text", "")), "Next: YOU spend 8: build Rec Console · THEY craft", "T3 a non-danger leave-on step also exposes an affordable idle spend")
+	_assert_equal(str(step.get("text", "")), "Next: YOU leave Haul + Craft on · THEY finish the Med Bed", "T3 unpaid Med Bed keeps its leave-on step when spend would take its salvage")
+	_assert_equal(game.food_plan_spendable(), 0, "T3 the unfinished Med Bed already claims the 8 salvage")
+	game.food_system.salvage = 16
+	step = _next_step(game)
+	_assert_equal(game.food_plan_spendable(), 8, "T3 leftover salvage after the Med Bed commitment covers Rec")
+	_assert_equal(str(step.get("text", "")), "Next: YOU spend 8: build Rec Console · THEY craft", "T3 a leave-on step yields to idle spend only when leftover salvage covers the sink")
 	_dispose(game)
 
 	game = _nudge_wing(8)

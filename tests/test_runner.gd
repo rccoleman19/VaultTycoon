@@ -2807,6 +2807,55 @@ func _action_has_physical_key(action: StringName, physical_keycode: Key) -> bool
 	return false
 
 
+func _is_place_or_spend(tuple: Array, place: Array) -> bool:
+	# Post-seal affordable place tips may be rewritten as "YOU spend N: build X".
+	if tuple == place:
+		return true
+	if tuple.size() != 3 or place.size() != 3:
+		return false
+	if tuple[1] != place[1] or str(tuple[2]) != "select":
+		return false
+	var place_text := str(place[0])
+	var prefix := "Next: YOU place "
+	if not place_text.begins_with(prefix):
+		return false
+	var rest := place_text.substr(prefix.length())
+	if rest.begins_with("a "):
+		rest = rest.substr(2)
+	var sep := " · "
+	var idx := rest.find(sep)
+	if idx < 0:
+		return false
+	var kind := rest.substr(0, idx)
+	var they := rest.substr(idx)
+	var got := str(tuple[0])
+	if not got.begins_with("Next: YOU spend "):
+		return false
+	return got.contains(": build " + kind + they) and got.ends_with(they)
+
+
+func _same_guidance(tuple: Array, expected: Array) -> bool:
+	return tuple == expected or _is_place_or_spend(tuple, expected)
+
+
+func _is_place_or_spend_text(text: String, place_text: String) -> bool:
+	if text == place_text:
+		return true
+	var prefix := "Next: YOU place "
+	if not place_text.begins_with(prefix):
+		return false
+	var rest := place_text.substr(prefix.length())
+	if rest.begins_with("a "):
+		rest = rest.substr(2)
+	var sep := " · "
+	var idx := rest.find(sep)
+	if idx < 0:
+		return false
+	var kind := rest.substr(0, idx)
+	var they := rest.substr(idx)
+	return text.begins_with("Next: YOU spend ") and text.contains(": build " + kind + they) and text.ends_with(they)
+
+
 func _assert_true(condition: bool, message: String) -> void:
 	_assertion_count += 1
 	if not condition:

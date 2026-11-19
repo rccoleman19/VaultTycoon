@@ -278,7 +278,15 @@ func _test_refund_and_new_wing() -> void:
 	game.breach_system.apply_patch_work(100.0)
 	game.job_system.rebuild_from_state()
 	game.player_orders.refresh()
-	_assert_true(game.player_orders.upgrade_offer_button.visible and "Mk II" in game.player_orders.upgrade_offer_button.text, "after bunks + seal, Mk II offer returns (%s)" % game.player_orders.upgrade_offer_button.text)
+	var target = game.player_orders._upgrade_offer_target()
+	_assert_true(target != null and "Mk II" in game.player_orders.upgrade_offer_text(target), "after bunks + seal, a Mk II target is still available")
+	var spend := game.player_orders.upgrade_offer_button
+	var next := game.player_orders.objective_label.text
+	if "YOU spend" in next and "build Rec Console" in next:
+		_assert_true(spend.visible and "Rec Console" in spend.text, "Spend follows Next's Rec spend (%s / %s)" % [next, spend.text])
+		_assert_true("Mk II" in game.player_orders.also_text(), "Also still names the Mk II fit (%s)" % game.player_orders.also_text())
+	else:
+		_assert_true(spend.visible and "Mk II" in spend.text, "after bunks + seal, Mk II offer returns (%s)" % spend.text)
 	_dispose(game)
 
 

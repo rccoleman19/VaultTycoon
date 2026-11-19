@@ -70,7 +70,7 @@ func _walk() -> void:
 		if not _check_state(game, originals):
 			break
 		var tool_before: String = game.active_tool
-		if tuple == CHARGE:
+		if _is_place_or_spend(tuple, CHARGE):
 			_check_success(game)
 			_assert_equal(game.active_tool, tool_before, "Charge observation preserves active tool")
 			if not _failure_count:

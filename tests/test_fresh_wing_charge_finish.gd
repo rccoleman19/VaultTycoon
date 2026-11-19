@@ -99,7 +99,7 @@ func _walk() -> void:
 		if not _check_state(game, originals):
 			break
 		var tool_before: String = game.active_tool
-		if tuple == GROW:
+		if _is_place_or_spend(tuple, GROW):
 			_grow_tip_elapsed = game.day_cycle.elapsed_seconds
 			_check_grow_success(game)
 			_assert_equal(game.active_tool, tool_before, "Grow observation preserves active tool")
@@ -154,7 +154,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 		if _charge == null or _charge.complete or not game.buildings.has(_charge):
 			return _stop(game, "Charge finish without retained unfinished blueprint")
 		return _enable_supply_and_craft(game)
-	if tuple == CHARGE:
+	if _is_place_or_spend(tuple, CHARGE):
 		if _charge == null:
 			_charge_tip_elapsed = game.day_cycle.elapsed_seconds
 			_check_charge_checkpoint(game)

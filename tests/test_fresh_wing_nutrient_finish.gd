@@ -163,7 +163,7 @@ func _walk() -> void:
 		if not _check_state(game, originals):
 			break
 		var tool_before: String = game.active_tool
-		if tuple == AIR:
+		if _is_place_or_spend(tuple, AIR):
 			_air_tip_elapsed = game.day_cycle.elapsed_seconds
 			_check_air_success(game)
 			_assert_equal(game.active_tool, tool_before, "Air observation preserves active tool")
@@ -234,7 +234,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			return _stop(game, "Nutrient finish requires the retained unfinished Kitchen")
 		_nutrient_finish_observed = true
 		return _enable_supply_and_craft(game)
-	if tuple == NUTRIENT:
+	if _is_place_or_spend(tuple, NUTRIENT):
 		if _kitchen != null:
 			return _enable_supply_and_craft(game) # Repeated Nutrient tip never duplicates Kitchen.
 		_nutrient_tip_elapsed = game.day_cycle.elapsed_seconds
@@ -267,7 +267,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			return _stop(game, "Grow finish without retained unfinished blueprint")
 		_grow_finish_observed = true
 		return _enable_supply_and_craft(game)
-	if tuple == GROW:
+	if _is_place_or_spend(tuple, GROW):
 		if _grow == null:
 			_grow_tip_elapsed = game.day_cycle.elapsed_seconds
 			_check_grow_checkpoint(game)
@@ -289,7 +289,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 		if _charge == null or _charge.complete or not game.buildings.has(_charge):
 			return _stop(game, "Charge finish without retained unfinished blueprint")
 		return _enable_supply_and_craft(game)
-	if tuple == CHARGE:
+	if _is_place_or_spend(tuple, CHARGE):
 		if _charge == null:
 			_charge_tip_elapsed = game.day_cycle.elapsed_seconds
 			_check_charge_checkpoint(game)
