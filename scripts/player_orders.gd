@@ -2777,6 +2777,12 @@ func _salvage_next_step(step: Dictionary) -> Dictionary:
 	if str(_next_hold_step.get("action", "")) == "reclaim":
 		var held_kind := _next_named_build_kind(_next_hold_step)
 		held_valid = held_valid and game.can_start_reclamation() and not _next_kind_affordable(held_kind)
+	# A held "YOU spend N: build X" is invalid once X no longer fits the
+	# spendable balance, so Next re-chooses instead of lingering for the hold.
+	if str(_next_hold_step.get("action", "")) == "spend":
+		var held_kind := _spend_named_build_kind(_next_hold_step)
+		if held_kind >= 0 and not _spend_named_affordable(held_kind):
+			held_valid = false
 	if signature == _next_hold_signature and held_valid and now >= _next_hold_since and now - _next_hold_since < NEXT_HOLD_S - 0.000001:
 		# Keep current diagnosis/deadline metadata while holding presentation only.
 		for field: String in ["text", "tool", "help", "action"]:
@@ -5204,6 +5210,8 @@ func _show_fixture_upgrade(building: VaultBuilding) -> void:
 		else "Needs a powered Air Recycler"
 		if not game.is_air_ready()
 		else "Needs %d salvage (have %d)." % [cost, game.food_system.salvage]
+		if game.food_system.salvage < cost
+		else "Needs %d salvage free · %d held for queued builds (have %d)." % [cost, game.queued_build_commitment(), game.food_system.salvage]
 	)
 
 
@@ -5240,6 +5248,13 @@ func _upgrade_offer_target() -> VaultBuilding:
 		if target != null:
 			return target
 	return null
+
+
+# Spend's fallback fit is withheld while an unpaid blueprint holds the stock the fit would
+# spend: Spend hides (it neither opens an inspector whose FIT the guard refuses nor falls
+# through to another build on the same committed stock); Next names funding that blueprint.
+func _spend_fit_withheld(target: VaultBuilding) -> bool:
+	return target != null and game.queued_build_commitment() > 0 and target.get_upgrade_cost() > game.food_plan_spendable()
 
 
 func _air_ready() -> bool:
@@ -5573,10 +5588,9 @@ func upgrade_offer_cost(nudge: int) -> int:
 	return int(VaultBuilding.COSTS[nudge]) if nudge >= 0 else 0
 
 
-# The fixture a displayed "YOU spend N: build <Fixture>" Next names, or -1.
+# The fixture a "YOU spend N: build <Fixture>" Next names, or -1.
 # Mk II fits are not builds; bunks are handled by the place-bunks guards.
-func _displayed_spend_build_kind() -> int:
-	var step := _displayed_next_step
+func _spend_named_build_kind(step: Dictionary) -> int:
 	if str(step.get("action", "")) != "spend":
 		return -1
 	var text := str(step.get("text", ""))
@@ -5591,6 +5605,17 @@ func _displayed_spend_build_kind() -> int:
 		if str(VaultBuilding.KIND_NAMES[kind]) == name:
 			return kind
 	return -1
+
+
+func _displayed_spend_build_kind() -> int:
+	return _spend_named_build_kind(_displayed_next_step)
+
+
+# Named-build Spend is only offered while the kind still fits the commitment-aware
+# balance. Manual placement of an unfunded blueprint stays allowed; only the
+# one-click Spend promise is guarded (Codex #148 issuecomment-7015041480).
+func _spend_named_affordable(kind: int) -> bool:
+	return kind >= 0 and game.food_plan_spendable() >= int(VaultBuilding.COSTS.get(kind, 0))
 
 
 func _refresh_upgrade_offer() -> void:
@@ -5618,12 +5643,18 @@ func _refresh_upgrade_offer() -> void:
 		return
 	var named := _displayed_spend_build_kind()
 	if named >= 0:
-		upgrade_offer_button.visible = true
-		upgrade_offer_button.text = "Spend %d: build %s" % [int(VaultBuilding.COSTS[named]), VaultBuilding.KIND_NAMES[named]]
+		upgrade_offer_button.visible = _spend_named_affordable(named)
+		if upgrade_offer_button.visible:
+			upgrade_offer_button.text = "Spend %d: build %s" % [int(VaultBuilding.COSTS[named]), VaultBuilding.KIND_NAMES[named]]
 		_refresh_wing_orders()
 		_refresh_also()
 		return
 	var target := _upgrade_offer_target()
+	if _spend_fit_withheld(target):
+		upgrade_offer_button.visible = false
+		_refresh_wing_orders()
+		_refresh_also()
+		return
 	var nudge := _upgrade_offer_nudge_kind() if target == null else -1
 	upgrade_offer_button.visible = target != null or nudge >= 0
 	if target != null:
@@ -5651,7 +5682,7 @@ func also_text() -> String:
 			return ""
 		return "Also: begin reclamation · +%d salvage" % VaultGame.RECLAIM_START_SALVAGE
 	var target := _upgrade_offer_target()
-	if target != null and game.food_system.salvage >= target.get_upgrade_cost():
+	if target != null and game.food_plan_spendable() >= target.get_upgrade_cost():
 		return "Also: fit %s Mk II · %d" % [ALSO_NAMES.get(target.kind, "a"), target.get_upgrade_cost()]
 	return ""
 
@@ -5749,9 +5780,17 @@ func _on_upgrade_offer_pressed() -> void:
 		return
 	var named := _displayed_spend_build_kind()
 	if named >= 0:
+		if not _spend_named_affordable(named):
+			var cost := int(VaultBuilding.COSTS[named])
+			game.status_message = "Needs %d salvage free (have %d)." % [cost, maxi(0, game.food_plan_spendable())]
+			game.status_message_left = 4.0
+			refresh()
+			return
 		place_spend_build(named)
 		return
 	var target := _upgrade_offer_target()
+	if _spend_fit_withheld(target):
+		return
 	var nudge := _upgrade_offer_nudge_kind() if target == null else -1
 	if target != null:
 		game.select_building(target.building_id)

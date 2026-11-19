@@ -11,6 +11,8 @@ func _run() -> void:
 	_run_case("Shed Rec: Next and Spend name a Charge Node, not the competing Grow Tray Mk II", _test_shed_rec)
 	_run_case("Commit-aware, build: unpaid blueprints keep Air as place until stock covers both", _test_commit_build)
 	_run_case("Commit-aware, Mk II: a fit and the fallback sink respect queued commitments", _test_commit_mk2)
+	_run_case("Commit-aware, Mk II purchase: inspector, Spend and Also cannot spend a queued build's stock", _test_commit_mk2_purchase)
+	_run_case("Held spend afford: Spend hides and cannot place once the named build is unaffordable", _test_held_spend_afford)
 	_run_case("Threshold crossing: place lasts at most one hold window after it becomes affordable", _test_threshold)
 	_run_case("All five NUDGE kinds rewrite the first clause and keep the THEY suffix", _test_all_five_kinds)
 	_run_case("Food card: a non-urgent spend food build stays aligned with Next and Spend", _test_food_card)
@@ -276,6 +278,104 @@ func _test_commit_mk2() -> void:
 	_assert_true(game.food_plan_spendable() >= 18, "36 salvage covers the fit after the Charge commitment")
 	_assert_true("YOU spend 18: fit Grow Tray Mk II" in game.player_orders.objective_label.text, "with 36 salvage the Grow Tray fit returns (%s)" % game.player_orders.objective_label.text)
 	_dispose(game)
+
+
+# Codex #148 issuecomment-7014948183: Next withholding the fit is not enough; the purchase
+# itself (inspector FIT, Spend's fallback, the Also line) must respect unpaid blueprints.
+func _test_commit_mk2_purchase() -> void:
+	var game := _seal_base(true, true, true)
+	var tray: VaultBuilding = null
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_BASE
+			if tray == null:
+				tray = building
+	_add_lumens(game, 16)
+	var charge := _queue_unpaid(game, VaultBuilding.Kind.GENERATOR, 0)
+	game.food_system.salvage = 30
+	_idle(game)
+	_assert_true(tray != null and charge != null, "a fittable Grow Tray and an unpaid Charge Node")
+	_assert_equal(game.queued_build_commitment(), 18, "30: the Charge Node still owes 18")
+	_assert_equal(_target_kind(game), VaultBuilding.Kind.GROW_TRAY, "30: the Grow Tray is still the Mk II candidate")
+	_assert_false(game.can_upgrade_building(tray.building_id), "30: the fit is not available on committed stock")
+	var po := game.player_orders
+	_assert_false(po.upgrade_offer_button.visible and "Mk II" in po.upgrade_offer_button.text, "30: Spend does not offer the fit (%s)" % po.upgrade_offer_button.text)
+	_assert_false(po.upgrade_offer_button.visible, "30: Spend hides rather than spend the Charge's stock on another build (%s)" % po.upgrade_offer_button.text)
+	_assert_false(po.also_text().begins_with("Also: fit"), "30: no Also fit line (%s)" % po.also_text())
+	var charges := _count_kind(game, VaultBuilding.Kind.GENERATOR)
+	game.selected_building_id = -1
+	po._on_upgrade_offer_pressed()
+	_assert_true(game.selected_building_id != tray.building_id, "30: the Spend press does not open the tray's fit")
+	_assert_equal(_count_kind(game, VaultBuilding.Kind.GENERATOR), charges, "30: the Spend press queues no second Charge Node")
+	game.select_building(tray.building_id)
+	po.refresh()
+	_assert_true(po.fixture_upgrade_row.visible, "30: the inspector still shows the fit row")
+	_assert_true(po.fixture_upgrade_button.disabled, "30: inspector FIT is disabled")
+	_assert_equal(po.fixture_upgrade_button.tooltip_text, "Needs 18 salvage free · 18 held for queued builds (have 30).", "30: the tooltip names the held stock")
+	po._on_fixture_upgrade_pressed()
+	_assert_false(game.upgrade_building(tray.building_id), "30: the purchase is refused")
+	_assert_equal(tray.upgrade_tier, VaultBuilding.UPGRADE_TIER_BASE, "30: the tray stays Mk I")
+	_assert_equal(game.food_system.salvage, 30, "30: no salvage spent")
+	_assert_equal(game.queued_build_commitment(), 18, "30: the Charge commitment of 18 is preserved")
+	game.food_system.salvage = 36
+	_expire_hold(game)
+	_assert_true(game.can_upgrade_building(tray.building_id), "36: the fit is available")
+	_assert_true(po.upgrade_offer_button.visible and "Mk II" in po.upgrade_offer_button.text or "fit Grow Tray Mk II" in po.objective_label.text, "36: the fit is offered again (%s / %s)" % [po.upgrade_offer_button.text, po.objective_label.text])
+	game.select_building(tray.building_id)
+	po.refresh()
+	_assert_false(po.fixture_upgrade_button.disabled, "36: inspector FIT is enabled")
+	po._on_fixture_upgrade_pressed()
+	_assert_equal(tray.upgrade_tier, VaultBuilding.UPGRADE_TIER_MAX, "36: the inspector purchase fits the tray")
+	_assert_equal(game.food_system.salvage, 18, "36: 18 salvage left")
+	_assert_true(game.food_system.salvage >= game.queued_build_commitment(), "36: the 18 left still covers the Charge commitment")
+	_dispose(game)
+
+
+# Codex #148 issuecomment-7015041480: a held "YOU spend N: build X" must not keep
+# Spend live, or place, after spendable salvage drops below N.
+func _test_held_spend_afford() -> void:
+	var game := _air_game(false, 14)
+	game.user_paused = true
+	var text := _show(game)
+	_assert_equal(text, "Next: YOU spend 14: build Air Recycler · THEY craft it", "14: Next names the Air spend (%s)" % text)
+	_assert_equal(_spend_text(game), "Spend 14: build Air Recycler", "14: Spend offers the Air Recycler (%s)" % _spend_text(game))
+	_assert_equal(game.food_plan_spendable(), 14, "14: spendable covers Air")
+
+	# Drop salvage while the spend step is still displayed. Refresh the button
+	# only, so Next still names the spend: Spend must hide (button guard).
+	game.food_system.salvage = 13
+	_assert_equal(game.food_plan_spendable(), 13, "13: spendable is short of Air")
+	game.player_orders._refresh_upgrade_offer()
+	_assert_equal(_spend_text(game), "", "13: Spend hides once the named build is unaffordable")
+
+	# Click must not place even if the button were still live (click guard).
+	var before := _count_kind(game, VaultBuilding.Kind.AIR_RECYCLER)
+	game.player_orders._on_upgrade_offer_pressed()
+	_assert_equal(_count_kind(game, VaultBuilding.Kind.AIR_RECYCLER), before, "13: a Spend press queues no Air Recycler")
+	_assert_true(game.food_plan_spendable() >= 0, "13: spendable stays non-negative (%d)" % game.food_plan_spendable())
+	_assert_equal(game.food_system.salvage, 13, "13: stock is unchanged")
+	_assert_true("Needs 14 salvage free" in game.status_message, "13: the press explains the shortfall (%s)" % game.status_message)
+	_dispose(game)
+
+	# Hold is invalid: a full refresh re-chooses immediately, with no 2s linger.
+	var held := _air_game(false, 14)
+	held.user_paused = true
+	var held_text := _show(held)
+	_assert_equal(held_text, "Next: YOU spend 14: build Air Recycler · THEY craft it", "hold pre: Next names the Air spend (%s)" % held_text)
+	held.food_system.salvage = 13
+	var after := _show(held)
+	_assert_false(after.begins_with("Next: YOU spend "), "13: the held spend is dropped once it is unaffordable (%s)" % after)
+	_assert_true("YOU place Air Recycler" in after, "13: Next returns to the place wording (%s)" % after)
+	_dispose(held)
+
+	# At 14, a press still queues one.
+	var ok := _air_game(false, 14)
+	ok.user_paused = true
+	_show(ok)
+	var start := _count_kind(ok, VaultBuilding.Kind.AIR_RECYCLER)
+	_press(ok)
+	_assert_equal(_count_kind(ok, VaultBuilding.Kind.AIR_RECYCLER), start + 1, "14: a Spend press still queues one Air Recycler")
+	_dispose(ok)
 
 
 func _test_threshold() -> void:
