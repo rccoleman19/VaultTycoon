@@ -2783,9 +2783,13 @@ func _salvage_next_step(step: Dictionary) -> Dictionary:
 		var held_kind := _spend_named_build_kind(_next_hold_step)
 		if held_kind >= 0 and not _spend_named_affordable(held_kind):
 			held_valid = false
+	# A held Day-7 Charge is invalid once a queued Charge already covers the
+	# power blocker (Codex #148 issuecomment-7107358882).
+	if not _day7_charge_live(_next_hold_step):
+		held_valid = false
 	if signature == _next_hold_signature and held_valid and now >= _next_hold_since and now - _next_hold_since < NEXT_HOLD_S - 0.000001:
 		# Keep current diagnosis/deadline metadata while holding presentation only.
-		for field: String in ["text", "tool", "help", "action"]:
+		for field: String in ["text", "tool", "help", "action", "day7_charge"]:
 			if _next_hold_step.has(field):
 				step[field] = _next_hold_step[field]
 			else:
@@ -2976,9 +2980,16 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		step["action"] = "spend"
 		return step
 	var plan_sink := salvage_survival_sink(postseal_spendable) if idle else -1
+	var day7_charge := false
 	if plan_sink < 0 and hold_day7:
 		plan_sink = _day7_hold_nudge_kind(postseal_spendable)
-	return _next_spend_build(step, plan_sink, prefix) if plan_sink >= 0 else step
+		day7_charge = plan_sink >= 0
+	if plan_sink < 0:
+		return step
+	step = _next_spend_build(step, plan_sink, prefix)
+	if day7_charge:
+		step["day7_charge"] = true
+	return step
 
 
 # A single Mk I tray can feed a small crew before Air unlocks the next fits.
@@ -5392,6 +5403,14 @@ func _day7_hold_nudge_kind(spendable: int) -> int:
 	return VaultBuilding.Kind.GENERATOR if spendable >= int(VaultBuilding.COSTS[VaultBuilding.Kind.GENERATOR]) else -1
 
 
+# A Day-7 hold Charge offer is live only while the power blocker that named it
+# still exists, counting queued Charge Nodes (planned spare). Other steps pass.
+func _day7_charge_live(step: Dictionary) -> bool:
+	if not bool(step.get("day7_charge", false)):
+		return true
+	return _day7_hold_nudge_kind(game.food_plan_spendable()) == VaultBuilding.Kind.GENERATOR
+
+
 func salvage_nudge_kind() -> int:
 	if game.ended or not game.breach_system.is_sealed():
 		return -1
@@ -5693,7 +5712,7 @@ func _refresh_upgrade_offer() -> void:
 		return
 	var named := _displayed_spend_build_kind()
 	if named >= 0:
-		upgrade_offer_button.visible = _spend_named_affordable(named)
+		upgrade_offer_button.visible = _spend_named_affordable(named) and _day7_charge_live(_displayed_next_step)
 		if upgrade_offer_button.visible:
 			upgrade_offer_button.text = "Spend %d: build %s" % [int(VaultBuilding.COSTS[named]), VaultBuilding.KIND_NAMES[named]]
 		_refresh_wing_orders()
@@ -5830,6 +5849,9 @@ func _on_upgrade_offer_pressed() -> void:
 		return
 	var named := _displayed_spend_build_kind()
 	if named >= 0:
+		if not _day7_charge_live(_displayed_next_step):
+			refresh()
+			return
 		if not _spend_named_affordable(named):
 			var cost := int(VaultBuilding.COSTS[named])
 			game.status_message = "Needs %d salvage free (have %d)." % [cost, maxi(0, game.food_plan_spendable())]

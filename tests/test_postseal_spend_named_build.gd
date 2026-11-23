@@ -28,6 +28,7 @@ func _run() -> void:
 	_run_case("Hold Day 7, commit-aware short: raw 22 / spendable 17 keeps the hold", _test_hold_day7_commit_short)
 	_run_case("Hold Day 7, committed stock: salvage 18 covering a Charge does not name Mk II", _test_hold_day7_mk2_committed_stock)
 	_run_case("Hold Day 7, 17 to 18 threshold: the fit appears after one hold window", _test_hold_day7_threshold)
+	_run_case("Hold Day 7, 36 salvage repeat click: a queued Charge clears the power blocker", _test_hold_day7_charge_repeat_click)
 	print("POSTSEAL SPEND NAMED BUILD: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -868,5 +869,53 @@ func _test_hold_day7_mk2_committed_stock() -> void:
 	_assert_false(game.player_orders._has_idle_crew(), "pre: crew is not idle")
 	var text := _show(game)
 	_assert_equal(text, "Next: YOU designate needs · THEY hold Day 7", "committed stock does not name a Mk II fit (%s)" % text)
+	_dispose(game)
+
+
+# Codex #148 issuecomment-7107358882: 36 free salvage and planned spare 1 (a second
+# kitchen is short by 1). The first Spend queues a Charge (spare 1 -> 8); without
+# advancing sim time the held Next and Spend must stop offering Charge, and a
+# second press must queue nothing. 18 salvage masked this (no free stock left).
+func _test_hold_day7_charge_repeat_click() -> void:
+	var game := _hold_day7_game()
+	var tray2 := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(27, 11))
+	tray2.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+	game.power_grid.recalculate(game.buildings)
+	_set_spare_to(game, 1)
+	game.food_system.salvage = 36
+	game.food_system.raw_food = 0
+	game.user_paused = true
+	_assert_equal(game.player_orders._upgrade_offer_target(), null, "pre: no Mk II target remains")
+	_assert_equal(game.food_plan_spendable(), 36, "pre: 36 free salvage")
+	_assert_false(game.player_orders._has_idle_crew(), "pre: crew is not idle")
+	var before := _count_kind(game, VaultBuilding.Kind.GENERATOR)
+	var text := _show(game)
+	_assert_true("YOU spend 18: build Charge Node" in text, "spare 1 names Charge (%s)" % text)
+	_assert_equal(_spend_text(game), "Spend 18: build Charge Node", "Spend agrees with Charge (%s)" % _spend_text(game))
+	_press(game)
+	_assert_equal(_count_kind(game, VaultBuilding.Kind.GENERATOR), before + 1, "the first press queues one Charge Node")
+	_assert_equal(game.queued_build_commitment(), 18, "the queued Charge owes 18")
+	_assert_equal(game.food_plan_spendable(), 18, "18 salvage is still free")
+	_assert_true(game.player_orders._planned_power_spare() >= int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.KITCHEN]), "the queued Charge covers a second kitchen (spare=%d)" % game.player_orders._planned_power_spare())
+	_busy_crew(game)
+	text = _show(game)
+	_assert_false("Charge Node" in text, "no time advanced: Next stops offering Charge (%s)" % text)
+	_assert_false("Charge Node" in _spend_text(game), "no time advanced: Spend stops offering Charge (%s)" % _spend_text(game))
+	_press(game)
+	_assert_equal(_count_kind(game, VaultBuilding.Kind.GENERATOR), before + 1, "a second press queues no second Charge Node")
+	_assert_equal(game.queued_build_commitment(), 18, "commitment stays 18 after the second press")
+	# Same frame, stale displayed Day-7 Charge step: Spend visibility and a
+	# direct click must each recheck the blocker.
+	var stale := {"text": "Next: YOU spend 18: build Charge Node · THEY craft", "action": "spend", "tool": "select", "day7_charge": true}
+	game.player_orders._displayed_next_step = stale.duplicate(true)
+	game.player_orders._refresh_upgrade_offer()
+	_assert_false(game.player_orders.upgrade_offer_button.visible, "a stale Day-7 Charge step hides Spend (%s)" % _spend_text(game))
+	game.player_orders._displayed_next_step = stale.duplicate(true)
+	game.player_orders._on_upgrade_offer_pressed()
+	_assert_equal(_count_kind(game, VaultBuilding.Kind.GENERATOR), before + 1, "a click on a stale Charge offer queues nothing")
+	_assert_equal(game.queued_build_commitment(), 18, "a stale click commits nothing")
 	_dispose(game)
 
