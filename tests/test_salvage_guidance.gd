@@ -368,7 +368,11 @@ func _test_fallback_funded_complete_cancelled() -> void:
 	var charge := game.get_building_at(Vector2i(27, 12))
 	game.food_system.salvage = 18
 	_assert_false(charge.is_supplied(), "funded fallback has stock but awaits delivery")
-	_assert_step(game, FALLBACK_SPEND_GROW_NEXT, "select", FALLBACK_SPEND_GROW_HELP)
+	# Stock that exactly covers the unsupplied Charge is not free for a Mk II fit
+	# (food_plan_spendable is 0). Hold Day 7 can name that fit before the Charge is
+	# queued; this fixture's 3 s idle wait is longer than NEXT_HOLD_S, so Next must
+	# not keep the pre-queue Mk II offer once that window has elapsed.
+	_assert_step(game, FALLBACK_DAY_SEVEN_NEXT, "select", FALLBACK_DAY_SEVEN_HELP)
 	game.food_system.salvage = 0
 	_assert_fallback_fund(game, 18, 6)
 	charge.add_delivery(18)

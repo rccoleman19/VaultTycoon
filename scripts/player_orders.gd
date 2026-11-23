@@ -2949,7 +2949,11 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		step["action"] = "reclaim"
 		step["help"] = str(step.get("help", "")) + "\nReclamation: +%d salvage now, +%d every %d s, %d times" % [VaultGame.RECLAIM_START_SALVAGE, VaultGame.RECLAIM_DELIVERY, roundi(VaultGame.RECLAIM_INTERVAL), VaultGame.RECLAIM_DELIVERIES]
 		return step
-	if danger or not idle or not (_is_default_step(step) or body.begins_with("YOU leave ")):
+	# Hold Day 7 may name an affordable Mk II fit or a power-blocked Charge
+	# without waiting for a 3 s idle blip (05 s4242 Day-7 tail; Also/Spend already
+	# showed the fit). Finish-the-X "YOU leave" steps still require idle.
+	var hold_day7 := _is_hold_day7_step(step) and game.breach_system.is_sealed() and not game.ended and not game.keep_running
+	if danger or (not idle and not hold_day7) or not (_is_default_step(step) or body.begins_with("YOU leave ")):
 		return step
 	# Bunks the crew still need are the player's real next action: neither a Mk II
 	# fit nor a salvage nudge overwrites them, or Next flashes the fit or nudged build
@@ -2972,6 +2976,8 @@ func _choose_salvage_next_step(step: Dictionary) -> Dictionary:
 		step["action"] = "spend"
 		return step
 	var plan_sink := salvage_survival_sink(postseal_spendable) if idle else -1
+	if plan_sink < 0 and hold_day7:
+		plan_sink = _day7_hold_nudge_kind(postseal_spendable)
 	return _next_spend_build(step, plan_sink, prefix) if plan_sink >= 0 else step
 
 
@@ -5344,6 +5350,46 @@ func salvage_survival_sink(spendable: int) -> int:
 			return candidate
 	var fallback := salvage_nudge_kind()
 	return fallback if fallback >= 0 and int(VaultBuilding.COSTS[fallback]) <= spendable else -1
+
+
+# The late-game default step. Not a place, so _affordable_place_as_spend cannot
+# rewrite it; the idle-free Mk II / Charge path keys off this text exactly.
+func _is_hold_day7_step(step: Dictionary) -> bool:
+	return str(step.get("text", "")).begins_with("Next: YOU designate needs · THEY hold Day 7")
+
+
+# Hold Day 7 only: name a Charge Node when power is the only thing blocking a
+# second Nutrient Station or an Air-ready second Grow Tray, and Charge is
+# affordable on the commit-aware budget. Check every such candidate (a spare
+# of 2 covers the kitchen but not a tray). Ignores the raw-pile gate so the
+# offer does not flicker as Cook dips raw below NUDGE_RAW_PILE. Does not itself
+# offer the kitchen or tray. Leaves an affordable missing Rec alone.
+func _day7_hold_nudge_kind(spendable: int) -> int:
+	if game.ended or not game.breach_system.is_sealed() or game.keep_running:
+		return -1
+	if game.annex_waiting_for_room() and game.annex_room_short() > 0:
+		return -1
+	if (
+		_count_kind(VaultBuilding.Kind.RECREATION_CONSOLE) == 0
+		and spendable >= int(VaultBuilding.COSTS[VaultBuilding.Kind.RECREATION_CONSOLE])
+		and _planned_power_spare() >= int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.RECREATION_CONSOLE])
+	):
+		return -1
+	var blocked := false
+	if _count_kind(VaultBuilding.Kind.KITCHEN) < 2 and _planned_power_spare() < int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.KITCHEN]):
+		blocked = true
+	if (
+		not blocked
+		and _count_kind(VaultBuilding.Kind.GROW_TRAY) < 2
+		and _air_ready()
+		and _planned_power_spare() < int(VaultBuilding.POWER_DEMAND[VaultBuilding.Kind.GROW_TRAY])
+	):
+		blocked = true
+	if not blocked:
+		return -1
+	if _blueprints_awaiting_salvage() >= NUDGE_MAX_UNFUNDED:
+		return -1
+	return VaultBuilding.Kind.GENERATOR if spendable >= int(VaultBuilding.COSTS[VaultBuilding.Kind.GENERATOR]) else -1
 
 
 func salvage_nudge_kind() -> int:

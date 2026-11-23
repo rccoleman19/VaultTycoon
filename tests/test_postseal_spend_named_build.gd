@@ -18,6 +18,16 @@ func _run() -> void:
 	_run_case("All five NUDGE kinds rewrite the first clause and keep the THEY suffix", _test_all_five_kinds)
 	_run_case("Food card: a non-urgent spend food build stays aligned with Next and Spend", _test_food_card)
 	_run_case("Negatives: urgent, pre-seal, unaffordable, keep-running, bunks, Med Bed, hold-Air", _test_negatives)
+	_run_case("Hold Day 7, Mk II, crew busy: Next and Spend name the fit without an idle wait", _test_hold_day7_mk2_busy)
+	_run_case("Hold Day 7, Mk II short: spendable 17 keeps the designate hold", _test_hold_day7_mk2_short)
+	_run_case("Hold Day 7, power-blocked Charge, crew busy, raw 0: Next and Spend name Charge", _test_hold_day7_charge_busy)
+	_run_case("Hold Day 7, Charge unaffordable: spendable 17 keeps the designate hold", _test_hold_day7_charge_short)
+	_run_case("Hold Day 7, power covers a second kitchen: no invented kitchen or Charge spend", _test_hold_day7_power_covers_kitchen)
+	_run_case("Hold Day 7, tray power-blocked at spare 2: Charge is named", _test_hold_day7_charge_tray_blocked)
+	_run_case("Hold Day 7, affordable Rec outranks a power-blocked Charge", _test_hold_day7_rec_outranks_charge)
+	_run_case("Hold Day 7, commit-aware short: raw 22 / spendable 17 keeps the hold", _test_hold_day7_commit_short)
+	_run_case("Hold Day 7, committed stock: salvage 18 covering a Charge does not name Mk II", _test_hold_day7_mk2_committed_stock)
+	_run_case("Hold Day 7, 17 to 18 threshold: the fit appears after one hold window", _test_hold_day7_threshold)
 	print("POSTSEAL SPEND NAMED BUILD: %d cases, %d assertions, %d failures" % [_case_count, _assertion_count, _failure_count])
 	quit(1 if _failure_count else 0)
 
@@ -608,3 +618,255 @@ func _test_negatives() -> void:
 	_assert_true("YOU leave Haul + Craft on · THEY finish the Air Recycler" in hold_text, "hold_air_finish keeps its finish wording (%s)" % hold_text)
 	_assert_equal(_spend_text(hold), "", "hold_air_finish still hides Spend")
 	_dispose(hold)
+
+
+func _busy_crew(game: VaultGame) -> void:
+	for resident: VaultResident in game.residents:
+		resident.state = "Sleeping"
+		resident.drafted = false
+
+
+func _hold_day7_game() -> VaultGame:
+	var game := _seal_base(true, true, true)
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.mood = 100.0
+		resident.needs.health = 100.0
+	game.food_system.meals = 100
+	game.food_system.raw_food = 0
+	game.oxygen_system.oxygen = 100.0
+	_busy_crew(game)
+	return game
+
+
+func _tighten_power(game: VaultGame, below: int) -> void:
+	var i := 0
+	while game.player_orders._planned_power_spare() >= below and i < 40:
+		_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(16 + (i % 8), 11 - int(i / 8)))
+		game.power_grid.recalculate(game.buildings)
+		i += 1
+	_assert_true(game.player_orders._planned_power_spare() < below, "grid spare is below %d (spare=%d after %d lumens)" % [below, game.player_orders._planned_power_spare(), i])
+
+
+func _set_spare_to(game: VaultGame, target: int) -> void:
+	var i := 0
+	while game.player_orders._planned_power_spare() > target and i < 40:
+		_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(16 + (i % 8), 11 - int(i / 8)))
+		game.power_grid.recalculate(game.buildings)
+		i += 1
+	_assert_equal(game.player_orders._planned_power_spare(), target, "grid spare is %d (got %d after %d lumens)" % [target, game.player_orders._planned_power_spare(), i])
+
+
+func _test_hold_day7_mk2_busy() -> void:
+	var game := _hold_day7_game()
+	var tray: VaultBuilding = null
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_BASE
+			tray = building
+	game.food_system.salvage = 18
+	_assert_false(game.player_orders._has_idle_crew(), "pre: crew is not idle")
+	_assert_true(tray != null, "pre: a Grow Tray can take Mk II")
+	_assert_equal(game.food_plan_spendable(), 18, "pre: spendable covers the fit")
+	var text := _show(game)
+	_assert_false(game.player_orders._has_idle_crew(), "after refresh the crew is still not idle")
+	_assert_true("YOU spend 18: fit Grow Tray Mk II" in text, "busy hold Day 7 names the Grow Tray fit (%s)" % text)
+	_assert_false("hold Day 7" in text, "busy hold Day 7 is rewritten (%s)" % text)
+	_assert_true(_spend_text(game).find("Grow Tray Mk II") >= 0 or "Mk II" in _spend_text(game), "Spend offers the Grow Tray fit (%s)" % _spend_text(game))
+	_assert_true(game.player_orders.also_text().begins_with("Also: fit Grow Tray Mk II"), "Also names the Grow Tray fit (%s)" % game.player_orders.also_text())
+	game.select_building(tray.building_id)
+	game.player_orders.refresh()
+	game.player_orders._on_fixture_upgrade_pressed()
+	_assert_equal(tray.upgrade_tier, VaultBuilding.UPGRADE_TIER_MAX, "a press fits the tray")
+	_assert_equal(game.food_system.salvage, 0, "the fit spent 18")
+	_dispose(game)
+
+
+func _test_hold_day7_mk2_short() -> void:
+	var game := _hold_day7_game()
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_BASE
+	game.food_system.salvage = 17
+	_assert_false(game.player_orders._has_idle_crew(), "pre: crew is not idle")
+	var text := _show(game)
+	_assert_equal(text, "Next: YOU designate needs · THEY hold Day 7", "17 salvage keeps the designate hold (%s)" % text)
+	_assert_false(game.player_orders.also_text().begins_with("Also: fit"), "17: no Also fit line (%s)" % game.player_orders.also_text())
+	var tier := VaultBuilding.UPGRADE_TIER_BASE
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			tier = building.upgrade_tier
+			game.select_building(building.building_id)
+			game.player_orders.refresh()
+			game.player_orders._on_fixture_upgrade_pressed()
+	_assert_equal(tier, VaultBuilding.UPGRADE_TIER_BASE, "17: no tray is fitted")
+	_assert_equal(game.food_system.salvage, 17, "17: no salvage spent")
+	_dispose(game)
+
+
+func _test_hold_day7_charge_busy() -> void:
+	var game := _hold_day7_game()
+	# A second Grow Tray, already Mk II, so no fit remains. Do not claim wing
+	# orders, so Charge / Air Mk II stay locked.
+	var tray2 := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(27, 11))
+	tray2.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+	game.power_grid.recalculate(game.buildings)
+	_tighten_power(game, 2)
+	game.food_system.salvage = 18
+	game.food_system.raw_food = 0
+	_assert_equal(game.player_orders._upgrade_offer_target(), null, "pre: no Mk II target remains")
+	_assert_equal(game.player_orders.salvage_nudge_kind(), -1, "pre: raw 0 hides the regular salvage nudge")
+	_assert_true(game.player_orders._planned_power_spare() < 2, "pre: power cannot cover a second kitchen")
+	_assert_false(game.player_orders._has_idle_crew(), "pre: crew is not idle")
+	var before := _count_kind(game, VaultBuilding.Kind.GENERATOR)
+	var text := _show(game)
+	_assert_false(game.player_orders._has_idle_crew(), "after refresh the crew is still not idle")
+	_assert_true("YOU spend 18: build Charge Node" in text, "busy hold Day 7 names Charge (%s)" % text)
+	_assert_equal(_spend_text(game), "Spend 18: build Charge Node", "Spend agrees with Charge (%s)" % _spend_text(game))
+	# Raw crossing NUDGE_RAW_PILE must not drop or flicker the Charge spend.
+	for raw in [0, 6, 0]:
+		game.food_system.raw_food = raw
+		game.day_cycle.elapsed_seconds += PlayerOrders.NEXT_HOLD_S + 0.1
+		_busy_crew(game)
+		game.player_orders.refresh()
+		_assert_true("YOU spend 18: build Charge Node" in game.player_orders.objective_label.text, "raw %d keeps the Charge spend (%s)" % [raw, game.player_orders.objective_label.text])
+		_assert_equal(_spend_text(game), "Spend 18: build Charge Node", "raw %d: Spend still agrees (%s)" % [raw, _spend_text(game)])
+	_press(game)
+	_assert_equal(_count_kind(game, VaultBuilding.Kind.GENERATOR), before + 1, "a Spend press queues a Charge Node")
+	_assert_equal(game.queued_build_commitment(), 18, "the queued Charge still owes 18")
+	_assert_equal(game.food_plan_spendable(), 0, "free stock is now held for the Charge")
+	_dispose(game)
+
+
+func _test_hold_day7_charge_short() -> void:
+	var game := _hold_day7_game()
+	var tray2 := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(27, 11))
+	tray2.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+	game.power_grid.recalculate(game.buildings)
+	_tighten_power(game, 2)
+	game.food_system.salvage = 17
+	game.food_system.raw_food = 0
+	var before := _count_kind(game, VaultBuilding.Kind.GENERATOR)
+	var text := _show(game)
+	_assert_equal(text, "Next: YOU designate needs · THEY hold Day 7", "17 salvage keeps the designate hold (%s)" % text)
+	_press(game)
+	_assert_equal(_count_kind(game, VaultBuilding.Kind.GENERATOR), before, "17: no Charge Node is queued")
+	_assert_equal(game.food_system.salvage, 17, "17: no salvage spent")
+	_dispose(game)
+
+
+func _test_hold_day7_power_covers_kitchen() -> void:
+	var game := _hold_day7_game()
+	var tray2 := _add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(27, 11))
+	tray2.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+	game.power_grid.recalculate(game.buildings)
+	_assert_true(game.player_orders._planned_power_spare() >= 2, "pre: spare covers a second kitchen (spare=%d)" % game.player_orders._planned_power_spare())
+	game.food_system.salvage = 18
+	game.food_system.raw_food = 0
+	var before_charge := _count_kind(game, VaultBuilding.Kind.GENERATOR)
+	var before_kitchen := _count_kind(game, VaultBuilding.Kind.KITCHEN)
+	var text := _show(game)
+	_assert_equal(text, "Next: YOU designate needs · THEY hold Day 7", "with spare power and no raw pile, hold Day 7 stays (%s)" % text)
+	_assert_false("Charge Node" in text or "Nutrient Station" in text, "no invented kitchen or Charge spend (%s)" % text)
+	_press(game)
+	_assert_equal(_count_kind(game, VaultBuilding.Kind.GENERATOR), before_charge, "no Charge Node is queued")
+	_assert_equal(_count_kind(game, VaultBuilding.Kind.KITCHEN), before_kitchen, "no Nutrient Station is queued")
+	_dispose(game)
+
+
+func _test_hold_day7_charge_tray_blocked() -> void:
+	# Spare 2 covers a second kitchen (demand 2) but not a second tray (demand 3).
+	var game := _hold_day7_game()
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_MAX
+	game.power_grid.recalculate(game.buildings)
+	_set_spare_to(game, 2)
+	game.food_system.salvage = 18
+	game.food_system.raw_food = 0
+	_assert_equal(game.player_orders._upgrade_offer_target(), null, "pre: no Mk II target remains")
+	_assert_equal(_count_kind(game, VaultBuilding.Kind.GROW_TRAY), 1, "pre: only one Grow Tray")
+	_assert_true(game.player_orders._planned_power_spare() >= 2, "pre: spare covers a kitchen")
+	_assert_true(game.player_orders._planned_power_spare() < 3, "pre: spare does not cover a second tray")
+	var text := _show(game)
+	_assert_true("YOU spend 18: build Charge Node" in text, "a tray-blocked grid names Charge (%s)" % text)
+	_dispose(game)
+
+
+func _test_hold_day7_rec_outranks_charge() -> void:
+	var game := _seal_base(true, true, false)
+	for resident: VaultResident in game.residents:
+		resident.needs.food = 100.0
+		resident.needs.rest = 100.0
+		resident.needs.mood = 39.0
+		resident.needs.health = 100.0
+	game.food_system.meals = 100
+	game.food_system.raw_food = 0
+	game.oxygen_system.oxygen = 100.0
+	_busy_crew(game)
+	_set_spare_to(game, 1)
+	game.food_system.salvage = 18
+	_assert_true(game.player_orders._planned_power_spare() >= 1, "pre: spare covers Rec")
+	var text := _show(game)
+	_assert_false("Charge Node" in text, "an affordable Rec is not displaced by Charge (%s)" % text)
+	_assert_true("Rec Console" in text or "hold Day 7" in text, "Next stays with Rec or the designate hold (%s)" % text)
+	_dispose(game)
+
+
+func _test_hold_day7_commit_short() -> void:
+	var game := _hold_day7_game()
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_BASE
+	_queue_unpaid(game, VaultBuilding.Kind.LAMP, 0)
+	game.food_system.salvage = 22
+	_assert_equal(game.queued_build_commitment(), 5, "pre: the Lumen owes 5")
+	_assert_equal(game.food_plan_spendable(), 17, "pre: spendable is 17 after the Lumen commitment")
+	_assert_false(game.player_orders._has_idle_crew(), "pre: crew is not idle")
+	var text := _show(game)
+	_assert_equal(text, "Next: YOU designate needs · THEY hold Day 7", "raw 22 / spendable 17 keeps the designate hold (%s)" % text)
+	_assert_false(game.player_orders.also_text().begins_with("Also: fit"), "17 free: no Also fit line (%s)" % game.player_orders.also_text())
+	_dispose(game)
+
+
+func _test_hold_day7_threshold() -> void:
+	var game := _hold_day7_game()
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_BASE
+	game.food_system.salvage = 17
+	var text := _show(game)
+	_assert_equal(text, "Next: YOU designate needs · THEY hold Day 7", "17: hold Day 7 stays (%s)" % text)
+	game.food_system.salvage = 18
+	_busy_crew(game)
+	game.day_cycle.elapsed_seconds += PlayerOrders.NEXT_HOLD_S + 0.1
+	_busy_crew(game)
+	game.player_orders.refresh()
+	_assert_false(game.player_orders._has_idle_crew(), "18: crew is still not idle")
+	_assert_true("YOU spend 18: fit Grow Tray Mk II" in game.player_orders.objective_label.text, "18 after one hold window names the fit (%s)" % game.player_orders.objective_label.text)
+	_dispose(game)
+
+func _test_hold_day7_mk2_committed_stock() -> void:
+	var game := _hold_day7_game()
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.GROW_TRAY:
+			building.upgrade_tier = VaultBuilding.UPGRADE_TIER_BASE
+	_queue_unpaid(game, VaultBuilding.Kind.GENERATOR, 0)
+	game.food_system.salvage = 18
+	_assert_equal(game.queued_build_commitment(), 18, "the queued Charge owes 18")
+	_assert_equal(game.food_plan_spendable(), 0, "stock that covers the Charge is not free")
+	_assert_false(game.player_orders._has_idle_crew(), "pre: crew is not idle")
+	var text := _show(game)
+	_assert_equal(text, "Next: YOU designate needs · THEY hold Day 7", "committed stock does not name a Mk II fit (%s)" % text)
+	_dispose(game)
+
