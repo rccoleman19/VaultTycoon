@@ -16,6 +16,7 @@ func _run() -> void:
 	await _run_frame_case("opening DETAILS shows its readouts at the top, by hand or on an urgency", _test_details_scroll_to_top)
 	await _run_frame_case("pre-seal DETAILS still shows every readout and FOCUS HATCH at once", _test_pre_seal_details)
 	await _run_frame_case("the right panel holds its width and the Mk II offer fits it", _test_panel_width)
+	await _run_frame_case("the Food plan card shows its whole line, cost included, at 1280x720", _test_food_plan_fit)
 
 	print("")
 	if _failure_count == 0:
@@ -59,6 +60,9 @@ func _new_game() -> VaultGame:
 # A completed tray, Charge and Air, sealed the way a crew does (patched during WARNING).
 func _sealed_game() -> VaultGame:
 	var game := _new_game()
+	# Opening bunks satisfied so Spend/Also can offer Grow Mk II.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
 	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(24, 12))
 	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(26, 12))
@@ -230,11 +234,18 @@ func _test_details_scroll_to_top() -> void:
 func _test_pre_seal_details() -> void:
 	var game := _new_game()
 	var orders := game.player_orders
+	# Genuine fresh opening at 1280x720: no completed bunks, so the place-1-bunk Spend
+	# row is present. The hatch readout must still stay on-screen.
 	orders.refresh()
 	await _set_details(game, false)
 	var collapsed_height := orders.right_scroll.size.y
 	_assert_scroll_usable(orders, "pre-seal collapsed")
 	await _set_details(game, true)
+	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 0, "the fresh opening has no completed bunks")
+	# This branch's opening Next is place 1 bunk, so Spend's bunk row is part of the real layout.
+	# Base still starts on mark-rock; the hatch-on-screen check below covers that control.
+	if "place 1 bunk" in orders.objective_label.text:
+		_assert_true(orders.upgrade_offer_button.visible and "place 1 bunk" in orders.upgrade_offer_button.text, "the opening Spend row is present (%s)" % (orders.upgrade_offer_button.text if orders.upgrade_offer_button.visible else "<hidden>"))
 	_assert_scroll_usable(orders, "pre-seal DETAILS open")
 	_assert_true(orders.right_scroll.size.y >= collapsed_height, "pre-seal DETAILS does not shrink the scroll (%.1f vs %.1f)" % [orders.right_scroll.size.y, collapsed_height])
 	_assert_on_screen(orders, orders.crew_mood_label, "the crew mood readout")
@@ -254,6 +265,8 @@ func _test_pre_seal_details() -> void:
 	_assert_true(orders.details_box.visible, "the hatch warning opens DETAILS")
 	_assert_equal(orders.right_scroll.scroll_vertical, 0, "the warning open scrolls to the readouts")
 	_assert_scroll_usable(orders, "hatch warning DETAILS open")
+	var food_card: Control = orders.find_child("FoodPlanCard", true, false)
+	_assert_true(food_card == null or not food_card.is_visible_in_tree(), "the Food plan card is hidden during the hatch warning")
 	var readouts := {
 		"crew mood": orders.crew_mood_label,
 		"power grid": orders.power_detail_label,
@@ -269,12 +282,15 @@ func _test_pre_seal_details() -> void:
 	_assert_equal(orders.details_box.get_child(orders.breach_label.get_index() - 1).get_index(), 0, "during the warning the hatch block leads DETAILS")
 	game.breach_system.patch_delivered = BreachSystem.PATCH_COST
 	game.breach_system.apply_patch_work(100.0)
+	# Opening bunks satisfied so Spend names Rec, not the place-1 bunk hold.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	orders.refresh()
 	await _layout()
 	_assert_true(game.breach_system.is_sealed(), "the hatch seals")
 	_assert_equal(orders.breach_label.get_index() - 1, orders.oxygen_bar.get_index() + 1, "once sealed the hatch block returns below VAULT ATMOSPHERE")
 	_assert_equal(orders.breach_focus_button.get_index(), orders.breach_bar.get_index() + 1, "in its own order")
-	_assert_equal(orders.upgrade_offer_button.text if orders.upgrade_offer_button.visible else "<hidden>", "Spend 48: build Rec Console", "sealed with no tray to fit: the idle-salvage nudge (QA-d #4)")
+	_assert_equal(orders.upgrade_offer_button.text if orders.upgrade_offer_button.visible else "<hidden>", "Spend 8: build Rec Console", "sealed with no tray to fit: the idle-salvage nudge (QA-d #4)")
 	_dispose(game)
 
 
@@ -305,4 +321,26 @@ func _test_panel_width() -> void:
 	var content_width := orders.right_scroll.size.x - orders.right_scroll.get_v_scroll_bar().size.x
 	_assert_true(row.get_combined_minimum_size().x <= content_width, "the lighting row's minimum (%.0f px) fits beside the scroll bar (%.0f px)" % [row.get_combined_minimum_size().x, content_width])
 	_assert_true(orders.lighting_overlay_button.get_global_rect().end.x <= orders.right_scroll.get_global_rect().end.x, "[L] MAP OFF stays inside the rail")
+	_dispose(game)
+
+
+func _test_food_plan_fit() -> void:
+	var game := _new_game()
+	game.food_system.salvage = 48
+	game.power_grid.recalculate(game.buildings)
+	var orders := game.player_orders
+	orders.refresh()
+	await _layout()
+	var button: Button = orders.find_child("FoodPlanButton", true, false)
+	_assert_true(button != null and button.is_visible_in_tree(), "the Food plan card shows on the opening wing")
+	if button == null:
+		_dispose(game)
+		return
+	_assert_true(button.text.ends_with("· 40"), "the card line carries its cost: %s" % button.text)
+	var font := button.get_theme_font("font")
+	var font_size := button.get_theme_font_size("font_size")
+	var style := button.get_theme_stylebox("normal")
+	var need := font.get_string_size(button.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x + style.get_content_margin(SIDE_LEFT) + style.get_content_margin(SIDE_RIGHT)
+	_assert_true(need <= button.size.x, "the whole card line fits its button (%.1f needed, %.1f wide): %s" % [need, button.size.x, button.text])
+	_assert_true(_right_panel(orders).get_global_rect().encloses(button.get_global_rect()), "the card button sits inside the right panel")
 	_dispose(game)

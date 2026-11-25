@@ -77,6 +77,8 @@ func _test_worse_win() -> void:
 	game.residents[0].needs.health = 0.0
 	game.residents[0].kill()
 	_assert_equal(int(game.player_orders.crew_grade()["stars"]), 2, "one crew lost: two stars")
+	_assert_equal(game.outcome, "death", "one crew loss opens the resumable recap without recording a win")
+	_resume_death_recap(game, "worse later win")
 	_win(game)
 	_assert_equal(int(game.wing_records().get_record(4242).best_stars), 3, "the best grade is kept")
 	_assert_equal(game.player_orders.outcome_record.text, "BEST ★★★", "no NEW RECORD for a worse win")
@@ -85,6 +87,8 @@ func _test_worse_win() -> void:
 	game = _game(0x0BAD)
 	game.residents[0].needs.health = 0.0
 	game.residents[0].kill()
+	_assert_equal(game.outcome, "death", "the first crew loss also requires Resume before a later win")
+	_resume_death_recap(game, "first two-star win")
 	_win(game)
 	_assert_equal(game.player_orders.outcome_record.text, "BEST ★★☆ · NEW RECORD", "a first 2-star win on another wing is a new record")
 	_dispose(game)
@@ -128,16 +132,19 @@ func _test_load_no_write() -> void:
 func _test_loss() -> void:
 	_clean()
 	var game := _game(77)
+	_assert_false(game.best_enabled(), "root-level test store leaves Best disabled: legacy record text remains")
 	game.day_cycle.current_day = 3
 	game._finish_loss()
 	_assert_equal(game.wing_records().get_record(77), {"ever_won": false, "best_stars": null, "best_day": 3, "annex": false}, "the loss is recorded with its day")
 	_assert_equal(game.player_orders.outcome_record.text, "FURTHEST DAY 3 · NEW RECORD", "loss shows the furthest day")
+	_assert_true(game.player_orders.outcome_record.is_visible_in_tree(), "without Best the original furthest-day line is visible")
 	_assert_equal(game.player_orders.outcome_title.text, "WING LOST", "loss title unchanged")
 	_dispose(game)
 	game = _game(77)
 	game.day_cycle.current_day = 2
 	game._finish_loss()
 	_assert_equal(game.player_orders.outcome_record.text, "FURTHEST DAY 3", "an earlier loss keeps the furthest day")
+	_assert_true(game.player_orders.outcome_record.is_visible_in_tree(), "without Best the earlier record remains visible")
 	_dispose(game)
 	_clean()
 

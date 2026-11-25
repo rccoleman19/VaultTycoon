@@ -57,11 +57,16 @@ func _test_offer() -> void:
 	_assert_false(game.comfort_pending(), "not on the win panel")
 	_assert_false(game.player_orders.comfort_box.visible, "no card on the win panel")
 	game.start_keep_running()
+	# This vault has no powered Air Recycler, so salvage-aware Next would lead with reclamation.
+	# The fixture is about the keep-running pointer: start it as already taken (no salvage paid).
+	game.reclaim_active = true
 	for resident: VaultResident in game.residents:
 		resident.needs.food = 100.0
 		resident.needs.rest = 100.0
 		resident.needs.mood = 100.0
 		resident.needs.health = 100.0
+	# Nothing banked yet: with salvage in hand, Next offers the spend nudge (build Rec Console) instead.
+	game.food_system.salvage = 0
 	game.food_system.meals = 20
 	game.player_orders.refresh()
 	_assert_true(game.comfort_pending(), "offered once the vault keeps running")
@@ -143,30 +148,30 @@ func _test_injured_alert() -> void:
 	_add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, game._annex_free_cells(1)[0])
 	_add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, game._annex_free_cells(1)[0])
 	game.player_orders.refresh()
-	_assert_false(game.player_orders.alert_label.text.contains("INJURED"), "a Med Bed alone no longer raises INJURED: %s" % game.player_orders.alert_label.text)
+	_assert_false("  ·  ".join(game.player_orders.all_alerts).contains("INJURED"), "a Med Bed alone no longer raises INJURED: %s" % "  ·  ".join(game.player_orders.all_alerts))
 	game.residents[0].needs.health = 97.0
 	game.player_orders.refresh()
-	_assert_false(game.player_orders.alert_label.text.contains("INJURED"), "97 HP is below Med Bed care; no alert")
+	_assert_false("  ·  ".join(game.player_orders.all_alerts).contains("INJURED"), "97 HP is below Med Bed care; no alert")
 	game.residents[0].needs.health = 90.0
 	game.player_orders.refresh()
-	_assert_true(game.player_orders.alert_label.text.contains("INJURED 1"), "90 HP is treatable: INJURED 1")
+	_assert_true("  ·  ".join(game.player_orders.all_alerts).contains("INJURED 1"), "90 HP is treatable: INJURED 1")
 	# #107 x keep running: no Med Bed keeps #107's wording; a starving resident is not counted.
 	for building: VaultBuilding in game.buildings.duplicate():
 		if building.kind == VaultBuilding.Kind.MEDICAL_BED:
 			game.buildings.erase(building)
 			building.queue_free()
 	game.player_orders.refresh()
-	_assert_true(game.player_orders.alert_label.text.contains("INJURED 1 · NO MED BED"), "no Med Bed keeps #107's wording: %s" % game.player_orders.alert_label.text)
+	_assert_true("  ·  ".join(game.player_orders.all_alerts).contains("INJURED 1 · NO MED BED"), "no Med Bed keeps #107's wording: %s" % "  ·  ".join(game.player_orders.all_alerts))
 	game.residents[0].needs.food = 10.0
 	game.player_orders.refresh()
-	_assert_false(game.player_orders.alert_label.text.contains("INJURED"), "a starving resident is not a Med Bed patient")
+	_assert_false("  ·  ".join(game.player_orders.all_alerts).contains("INJURED"), "a starving resident is not a Med Bed patient")
 	_dispose(game)
 	# Pre-win stays as it was: any Med Bed shows the line.
 	game = _spawn_game()
 	game.begin_shift()
 	_add_completed_building(game, VaultBuilding.Kind.MEDICAL_BED, Vector2i(game.map_grid.get_floor_cells()[0]))
 	game.player_orders.refresh()
-	_assert_true(game.player_orders.alert_label.text.contains("INJURED 0"), "pre-win alert unchanged")
+	_assert_true("  ·  ".join(game.player_orders.all_alerts).contains("INJURED 0"), "pre-win alert unchanged")
 	_dispose(game)
 
 

@@ -268,6 +268,9 @@ func _row_width(orders: PlayerOrders) -> float:
 
 func _test_ui_rows() -> void:
 	var game := _base_game(10)
+	# Bunks covered: with none, the opening bunk step (shared by Spend) owns the offer.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	var orders := game.player_orders
 	_seal(game)
 	orders.refresh()
@@ -327,7 +330,10 @@ func _test_playthrough() -> void:
 			game.acknowledge_breach_warning(true)
 		if game.breach_system.is_sealed():
 			orders.refresh()
-			if grow_at < 0.0 and orders.upgrade_offer_button.visible:
+			if grow_at < 0.0 and orders.upgrade_offer_button.visible and "Rec Console" in orders.upgrade_offer_button.text:
+				# Low crew mood with no Rec Console: Spend offers the Rec first (rec-offer-low-mood).
+				orders.upgrade_offer_button.pressed.emit()
+			elif grow_at < 0.0 and orders.upgrade_offer_button.visible:
 				orders.upgrade_offer_button.pressed.emit()
 				orders.refresh()
 				if not orders.fixture_upgrade_button.disabled:

@@ -29,6 +29,10 @@ var reserved_cell_check := Callable()
 var layout_seed := 0
 var layout_pocket_count := 0
 var vein_cells: Dictionary = {}
+# Game owns the saved cache state; MapGrid enforces its excavation gate.
+var supply_cache_cell := Vector2i(-1, -1)
+var supply_cache_open := false
+var supply_cache_visible := false
 
 
 func _ready() -> void:
@@ -44,6 +48,9 @@ func setup(cancel_check: Callable, reserved_check := Callable(), zone_check := C
 
 func new_wing(wing_seed := 0) -> void:
 	topology_revision += 1
+	supply_cache_cell = Vector2i(-1, -1)
+	supply_cache_open = false
+	supply_cache_visible = false
 	cells.clear()
 	cells.resize(WIDTH * HEIGHT)
 	cells.fill(Tile.ROCK)
@@ -79,7 +86,7 @@ func is_walkable(cell: Vector2i) -> bool:
 
 
 func is_diggable(cell: Vector2i) -> bool:
-	return is_inside(cell) and not is_border(cell) and get_tile(cell) == Tile.ROCK
+	return is_inside(cell) and not is_border(cell) and get_tile(cell) == Tile.ROCK and (cell != supply_cache_cell or supply_cache_open)
 
 
 func can_queue_dig(cell: Vector2i) -> bool:
@@ -457,6 +464,10 @@ func _draw() -> void:
 		var center := cell_to_world(cell)
 		draw_line(center + Vector2(-5, -5), center + Vector2(5, 5), Color("e8a13b"), 1.5)
 		draw_line(center + Vector2(5, -5), center + Vector2(-5, 5), Color("e8a13b"), 1.5)
+	if supply_cache_visible:
+		var cache_mark := hex_polygon(supply_cache_cell, 3.0)
+		draw_polyline(cache_mark + PackedVector2Array([cache_mark[0]]), Color("efc56b"), 3.0, true)
+		draw_rect(Rect2(cell_to_world(supply_cache_cell) - Vector2(5, 4), Vector2(10, 8)), Color("efc56b"), false, 2.0)
 	for cell: Vector2i in stockpile_cells:
 		var zone := hex_polygon(cell, 3.0)
 		draw_colored_polygon(zone, Color(0.3, 0.75, 0.85, 0.20))

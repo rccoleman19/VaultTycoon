@@ -1,7 +1,7 @@
 extends "res://tests/test_runner.gd"
 
 const HATCH_WATCH := ["Next: YOU watch hatch · THEY auto-patch", "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft.", "select"]
-const TICK_CAP := 799
+const TICK_CAP := 999
 const CHARGE := ["Next: YOU place a Charge Node · THEY supply/build", "Designate CHARGE. Haul + Craft auto-claim the blueprint. Adds +7 power.", "generator"]
 const FINISH_CHARGE := ["Next: YOU leave Haul + Craft on · THEY finish the Charge Node", "Keep Haul + Craft above OFF so crew supply and finish the Charge Node blueprint.", "select"]
 const GROW := ["Next: YOU place Grow Tray · THEY haul output", "Designate GROW and keep it powered. Haul defaults move raw food to stock.", "grow"]
@@ -12,6 +12,7 @@ const DIG_NEXT := [
 	["Next: YOU keep marking digs [E] · THEY dig/haul alone", "Keep designating connected rock. They dig then haul rubble without draft. PRIORITIES [P] only to specialize.", "dig"],
 ]
 const PLACE_CRISIS := ["Next: YOU place bunks · THEY craft", "Place bunks so tired undrafted crew have a bed.", "bed"]
+const PLACE_ONE := ["Next: YOU place 1 bunk · THEY craft from Craft", "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.", "bed"]
 const PLACE_TWO := ["Next: YOU place 2 bunks · THEY craft from Craft", "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them.", "bed"]
 const FINISH := ["Next: YOU leave Haul + Craft on · THEY finish the bunks", "Keep Haul + Craft above OFF so crew supply and finish the bunk blueprints.", "select"]
 # Disclosed deterministic empty chamber floor, matching the sibling walks.
@@ -68,6 +69,27 @@ func _run() -> void:
 	quit(1 if _failure_count else 0)
 
 
+# This deterministic ledger walk deliberately never buys the optional salvage actions
+# (reclamation, spend). Record that the new advice is shown, then drive the underlying
+# chain step it replaced, so the walk's exact milestones are unchanged.
+var _salvage_advice_seen: Dictionary = {}
+
+
+func _walk_next(game: VaultGame) -> Dictionary:
+	var displayed: Dictionary = game.player_orders._primary_next_step()
+	var action := str(displayed.get("action", ""))
+	if action not in ["reclaim", "spend"]:
+		return displayed
+	var text := str(displayed.get("text", ""))
+	if not _salvage_advice_seen.has(text):
+		_salvage_advice_seen[text] = true
+		_assert_equal(str(displayed.get("tool", "")), "select", "salvage advice preserves Select during the nonacting ledger walk")
+	_assert_false(game.reclaim_active, "ignoring salvage advice never starts reclamation")
+	var selected: Dictionary = game.player_orders._primary_next_step_chain({})
+	_assert_false(selected.is_empty(), "salvage advice retains a selected underlying action")
+	return selected
+
+
 func _walk() -> void:
 	var game := _spawn_game()
 	game.begin_shift()
@@ -115,7 +137,7 @@ func _walk() -> void:
 		if game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged:
 			if not _resume_warning(game):
 				break
-		var step: Dictionary = game.player_orders._primary_next_step()
+		var step: Dictionary = _walk_next(game)
 		var tuple := [step.text, step.help, step.tool]
 		if tuple != _last_tuple:
 			_history.append("tick=%d elapsed=%.1f: %s" % [_tick, game.day_cycle.elapsed_seconds, str(tuple)])
@@ -123,7 +145,7 @@ func _walk() -> void:
 		if not _check_state(game, originals):
 			break
 		var tool_before: String = game.active_tool
-		if tuple == NUTRIENT:
+		if _is_place_or_spend(tuple, NUTRIENT):
 			_nutrient_tip_elapsed = game.day_cycle.elapsed_seconds
 			_check_nutrient_success(game)
 			_assert_equal(game.active_tool, tool_before, "Nutrient observation preserves active tool")
@@ -171,7 +193,7 @@ func _walk() -> void:
 		if not _check_state(game, originals):
 			break
 	if not _failure_count:
-		_stop(game, "799-tick cap without powered Grow/Nutrient milestone")
+		_stop(game, "999-tick cap without powered Grow/Nutrient milestone")
 	_dispose(game)
 
 
@@ -185,11 +207,11 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			return _stop(game, "Grow finish without retained unfinished blueprint")
 		_grow_finish_observed = true
 		return _enable_supply_and_craft(game)
-	if tuple == GROW:
+	if _is_place_or_spend(tuple, GROW):
 		if _grow == null:
 			_grow_tip_elapsed = game.day_cycle.elapsed_seconds
 			_check_grow_checkpoint(game)
-			_assert_true(_grow_tip_elapsed < 60.0, "Grow tip/placement strictly before 60s")
+			_assert_true(_grow_tip_elapsed < 80.0, "Grow tip/placement before 80s (1-bunk opening re-baseline; measured ~74s)")
 			if _failure_count:
 				return false
 			if not game.place_blueprint(VaultBuilding.Kind.GROW_TRAY, GROW_CELL):
@@ -197,7 +219,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			_grow = game.get_building_at(GROW_CELL)
 			_grow_placements += 1
 			_assert_true(_grow != null and not _grow.complete and _grow.get_cost() == 12, "one real incomplete Grow blueprint costing 12")
-			var after: Dictionary = game.player_orders._primary_next_step()
+			var after: Dictionary = _walk_next(game)
 			_assert_equal([after.text, after.help, after.tool], FINISH_GROW, "Grow placement immediately gives exact finish tuple")
 			return _failure_count == 0
 		if _grow.complete:
@@ -207,7 +229,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 		if _charge == null or _charge.complete or not game.buildings.has(_charge):
 			return _stop(game, "Charge finish without retained unfinished blueprint")
 		return _enable_supply_and_craft(game)
-	if tuple == CHARGE:
+	if _is_place_or_spend(tuple, CHARGE):
 		if _charge == null:
 			_charge_tip_elapsed = game.day_cycle.elapsed_seconds
 			_check_charge_checkpoint(game)
@@ -219,7 +241,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			_charge_placements += 1
 			_assert_true(_charge != null and not _charge.complete and not _charge.is_emergency_core, "one real incomplete non-Core Charge blueprint")
 			_assert_true(game.day_cycle.elapsed_seconds < 60.0, "Charge placed strictly before 60s")
-			var after: Dictionary = game.player_orders._primary_next_step()
+			var after: Dictionary = _walk_next(game)
 			_assert_equal([after.text, after.help, after.tool], FINISH_CHARGE, "Charge placement immediately gives exact finish tuple")
 			return _failure_count == 0
 		if _charge.complete:
@@ -235,7 +257,7 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			game.job_system.queue_dig(cell)
 			return true
 		return true # All twelve already marked; time only for unfinished work.
-	if tuple == PLACE_CRISIS or tuple == PLACE_TWO:
+	if tuple == PLACE_CRISIS or tuple == PLACE_TWO or tuple == PLACE_ONE:
 		if _grow != null:
 			if _third_bunk != null or _bunks.size() == 3:
 				return _stop(game, "fourth bunk request forbidden")
@@ -258,9 +280,11 @@ func _act(game: VaultGame, tuple: Array) -> bool:
 			_assert_true(_third_bunk != null and not _third_bunk.complete and _third_bunk.get_cost() == 8, "exactly one real incomplete third bunk costing 8")
 			return _failure_count == 0
 		# Opening place-2 and mid-dig crises still place only the original pair.
-		if _bunks.size() != 0:
+		# Opening offers ONE bunk (hard max); a later pre-Grow tired crisis places the second.
+		if _bunks.size() >= 2 or (tuple == PLACE_ONE and _bunks.size() != 0):
 			return _stop(game, "additional bunk request before Grow placement forbidden")
-		for cell in BUNK_CELLS:
+		while _bunks.size() < (1 if tuple == PLACE_ONE else 2):
+			var cell: Vector2i = BUNK_CELLS[_bunks.size()]
 			if game.get_building_at(cell) != null or not game.place_blueprint(VaultBuilding.Kind.BED, cell):
 				return _stop(game, "real opening bunk placement rejected at %s: %s" % [cell, game.status_message])
 			_bunks.append(game.get_building_at(cell))
@@ -292,8 +316,8 @@ func _uncredited_rubble(game: VaultGame) -> int:
 
 
 func _check_state(game: VaultGame, originals: Array[VaultResident]) -> bool:
-	if game.day_cycle.elapsed_seconds >= 80.0 or _open_count > 0 or game.breach_system.phase == BreachSystem.Phase.OPEN or game.breach_system.serialize().open_emitted:
-		return _stop(game, "OPEN event/phase or elapsed >=80s")
+	if game.day_cycle.elapsed_seconds >= 100.0 or _open_count > 0 or game.breach_system.phase == BreachSystem.Phase.OPEN or game.breach_system.serialize().open_emitted:
+		return _stop(game, "OPEN event/phase or elapsed >=100s (1-bunk Grow~74 leave room for Nutrient)")
 	var expected_warning := game.breach_system.phase == BreachSystem.Phase.WARNING and not game.breach_system.warning_acknowledged and not _warning_resumed and _warning_count == 1
 	if game.ended or game.tutorial_open or game.player_orders.is_help_open() or game.player_orders.is_work_priorities_open() or game.player_orders.is_briefing_open():
 		return _stop(game, "unexpected modal/ended")
@@ -389,8 +413,11 @@ func _check_charge_checkpoint(game: VaultGame) -> void:
 		_assert_equal(game.map_grid.get_tile(cell), MapGrid.Tile.FLOOR, "target genuinely excavated: %s" % cell)
 	_assert_equal(game.map_grid.get_floor_cells().size(), 132, "exact twelve-floor expansion")
 	_assert_equal(_bunks.size(), 2, "exactly two placed bunks")
-	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 2, "two complete bunks")
+	# Hard max 1 opening bunk (Director 2026-11-05): the second may still be crafting.
+	_assert_true(game.get_completed_building_count(VaultBuilding.Kind.BED) >= 1, "opening bunk complete")
 	for bunk in _bunks:
+		if bunk != _bunks[0] and not bunk.complete:
+			continue
 		_assert_true(bunk.complete and bunk.delivered == 8 and bunk.construction_left <= 0.0 and _crafted.has(bunk.building_id), "bunk genuinely supplied and crafted")
 	_assert_true(_rubble_deliveries > 0, "observed real rubble stock delivery")
 	_assert_equal(game.food_system.salvage + _uncredited_rubble(game), 68, "48 + twelve dig yields - two paid bunks")
@@ -412,15 +439,15 @@ func _check_grow_checkpoint(game: VaultGame) -> void:
 	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.GENERATOR, true), 1, "one completed non-Core Charge")
 	_assert_equal(game.power_grid.supply, 9, "grid supply corroborates 2 to 9")
 	_assert_equal(game.buildings.size(), 6, "only starters, two bunks, one Charge; no Grow")
-	_assert_equal(game.get_completed_building_count(VaultBuilding.Kind.BED), 2, "two bunks remain complete")
+	_assert_true(game.get_completed_building_count(VaultBuilding.Kind.BED) >= 1, "opening bunk remains complete")
 	_assert_equal(game.food_system.salvage + _uncredited_rubble(game) + game.breach_system.patch_delivered + game.job_system.get_breach_supply_in_transit(), 50, "68 minus 18 Charge, including any hatch salvage")
 	_assert_equal(_open_count, 0, "no OPEN event")
 	_assert_equal(_warning_count, 1 if _warning_resumed else 0, "at most one real warning Resume; never manufacture warning")
 
 
 func _check_nutrient_success(game: VaultGame) -> void:
-	_assert_true(_grow_tip_elapsed >= _charge_complete_elapsed and _grow_tip_elapsed < 60.0, "Charge then Grow placed before WARNING")
-	_assert_true(_grow_complete_elapsed >= _grow_tip_elapsed and _grow_complete_elapsed <= _nutrient_tip_elapsed and _nutrient_tip_elapsed < 80.0, "Grow complete then exact Nutrient before 80s")
+	_assert_true(_grow_tip_elapsed >= _charge_complete_elapsed and _grow_tip_elapsed < 80.0, "Charge then Grow; Grow may follow hatch watch after 1-bunk opening (~74s)")
+	_assert_true(_grow_complete_elapsed >= _grow_tip_elapsed and _grow_complete_elapsed <= _nutrient_tip_elapsed and _nutrient_tip_elapsed < 95.0, "Grow complete then exact Nutrient before 95s (1-bunk re-baseline; measured ~87s)")
 	_assert_true(_grow_finish_observed, "driver observed and handled exact Grow finish tuple")
 	_assert_equal(_grow_placements, 1, "exactly one Grow placement")
 	_assert_true(_grow != null and _grow.complete and _grow.delivered == 12 and _grow.construction_left <= 0.0, "Grow fully supplied and crafted complete")

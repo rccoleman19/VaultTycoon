@@ -53,8 +53,9 @@ var delivered := 0
 var construction_left := 6.0
 var powered := false
 var manually_disabled := false
-# Meta perks P3: FLOODLIGHT's Lumen sheds first (OPTIONAL). Derived from the wing's perk, never saved.
+# Perk Lumen flags are derived from the wing's perk, never saved.
 var shed_first := false
+var self_powered := false
 var is_emergency_core := false
 var production_progress := 0.0
 var reserved_by := -1
@@ -133,6 +134,8 @@ func get_power_demand() -> int:
 
 
 func get_base_power_demand() -> int:
+	if self_powered:
+		return 0
 	if kind == Kind.AIR_RECYCLER and upgrade_tier >= UPGRADE_TIER_MAX:
 		return AIR_MK2_POWER
 	return int(POWER_DEMAND.get(kind, 0))

@@ -90,7 +90,7 @@ func _test_reclaim_gate() -> void:
 	_seal(game)
 	_assert_true(game.can_start_reclamation(), "offered after the seal")
 	game.player_orders.refresh()
-	_assert_equal(game.player_orders.reclaim_button.text, "Begin reclamation · +18 salvage", "button names the payout")
+	_assert_equal(game.player_orders.reclaim_button.text, "Reclamation available · +18 salvage", "button names availability and the payout")
 	_assert_false(game.player_orders.reclaim_button.disabled, "button live")
 	game.food_system.salvage = 0
 	game.player_orders.reclaim_button.pressed.emit()
@@ -218,6 +218,9 @@ func _offer(game: VaultGame) -> String:
 func _offer_game() -> VaultGame:
 	var game := _spawn_game()
 	game.begin_shift()
+	# Opening bunks satisfied so idle salvage nudges Rec/Nutrient/Mk II, not bunks.
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(18, 12))
+	_add_completed_building(game, VaultBuilding.Kind.BED, Vector2i(19, 12))
 	_add_completed_building(game, VaultBuilding.Kind.GROW_TRAY, Vector2i(22, 12))
 	_add_completed_building(game, VaultBuilding.Kind.GENERATOR, Vector2i(24, 12))
 	_add_completed_building(game, VaultBuilding.Kind.AIR_RECYCLER, Vector2i(26, 12))
@@ -268,6 +271,7 @@ func _test_offer_order() -> void:
 func _test_salvage_nudge() -> void:
 	var game := _offer_game()
 	_seal(game)
+	game.food_system.meals = 15
 	_of_kind(game, VaultBuilding.Kind.GROW_TRAY).upgrade_tier = 2
 	_of_kind(game, VaultBuilding.Kind.GENERATOR).upgrade_tier = 2
 	game._check_wing_orders()
@@ -276,27 +280,28 @@ func _test_salvage_nudge() -> void:
 	game.food_system.salvage = 7
 	_assert_equal(_offer(game), "<hidden>", "7 salvage: nothing useful is affordable")
 	game.food_system.salvage = 28
-	_assert_equal(_offer(game), "Spend 28: build Rec Console", "no Rec Console yet: the nudge names one")
-	game.player_orders._on_upgrade_offer_pressed()
-	_assert_equal(game.active_tool, "rec", "and picks its tool")
+	_assert_equal(_offer(game), "Spend 8: build Rec Console", "no Rec Console yet: the nudge names one")
+	_assert_false(bool(game.player_orders._displayed_next_step.get("urgent", false)), "Next is not urgent at the Rec nudge")
+	_assert_true(_press_spend_queues(game, VaultBuilding.Kind.RECREATION_CONSOLE), "and queues it")
 	game.food_system.raw_food = 6
-	_assert_equal(_offer(game), "Spend 28: build Nutrient Station", "a raw pile of 6 asks for a second Nutrient Station first")
-	game.player_orders._on_upgrade_offer_pressed()
-	_assert_equal(game.active_tool, "kitchen", "and picks its tool")
+	_assert_equal(_offer(game), "Spend 10: build Nutrient Station", "a raw pile of 6 asks for a second Nutrient Station first")
+	_assert_true(_press_spend_queues(game, VaultBuilding.Kind.KITCHEN), "and queues it")
 	game.food_system.raw_food = 0
 	_add_completed_building(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12))
 	game.power_grid.recalculate(game.buildings)
-	_assert_equal(_offer(game), "Spend 28: build Grow Tray", "then a second Grow Tray")
+	_assert_equal(_offer(game), "Spend 12: build Grow Tray", "then a second Grow Tray")
+	_assert_false(bool(game.player_orders._displayed_next_step.get("urgent", false)), "Next is not urgent at the Grow nudge")
 	_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 13))
 	_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(21, 13))
 	_add_completed_building(game, VaultBuilding.Kind.LAMP, Vector2i(21, 14))
 	game.power_grid.recalculate(game.buildings)
 	_assert_equal(game.player_orders._planned_power_spare(), 0, "12 supply, 12 planned demand")
-	_assert_equal(_offer(game), "Spend 28: build Charge Node", "no room for a tray's 3 power: a Charge Node first")
-	game.player_orders._on_upgrade_offer_pressed()
-	_assert_equal(game.active_tool, "generator", "and picks its tool")
+	_assert_equal(_offer(game), "Spend 18: build Charge Node", "no room for a tray's 3 power: a Charge Node first")
+	_assert_true(_press_spend_queues(game, VaultBuilding.Kind.GENERATOR), "and queues it")
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.GENERATOR, Vector2i(25, 13)), "a planned Charge Node")
-	_assert_equal(_offer(game), "Spend 28: build Grow Tray", "a planned Charge Node counts: the tray again")
+	# The planned Charge owes 18; Spend only offers what free stock covers (Codex #148 issuecomment-7019217243).
+	game.food_system.salvage = 30
+	_assert_equal(_offer(game), "Spend 12: build Grow Tray", "a planned Charge Node counts: the tray again")
 	_assert_true(game.place_blueprint(VaultBuilding.Kind.GROW_TRAY, Vector2i(23, 13)), "a planned second tray")
 	_assert_equal(_offer(game), "<hidden>", "two trays, a Rec Console, no pile: nothing to nudge")
 	_dispose(game)
@@ -389,15 +394,15 @@ func _test_nudge_cap() -> void:
 	game.power_grid.recalculate(game.buildings)
 	game.food_system.raw_food = 6
 	game.food_system.salvage = 40
-	_assert_equal(_offer(game), "Spend 40: build Nutrient Station", "nothing pending: a raw pile nudges a Nutrient Station")
+	_assert_equal(_offer(game), "Spend 10: build Nutrient Station", "nothing pending: a raw pile nudges a Nutrient Station")
 	var rec := _blueprint(game, VaultBuilding.Kind.RECREATION_CONSOLE, Vector2i(20, 12))
-	_assert_equal(_offer(game), "Spend 40: build Nutrient Station", "one blueprint waiting for salvage: still nudges")
+	_assert_equal(_offer(game), "Spend 10: build Nutrient Station", "one blueprint waiting for salvage: still nudges")
 	var lamp := _blueprint(game, VaultBuilding.Kind.LAMP, Vector2i(23, 13))
 	_assert_equal(game.player_orders.salvage_nudge_kind(), -1, "two waiting for salvage: the nudge waits")
 	_assert_equal(_offer(game), "<hidden>", "and the offer hides")
 	lamp.delivered = lamp.get_cost()
 	_assert_false(lamp.needs_supply(), "the Lamp is fully supplied (only assembly left)")
-	_assert_equal(_offer(game), "Spend 40: build Nutrient Station", "supplied blueprints stop counting: the nudge returns")
+	_assert_equal(_offer(game), "Spend 10: build Nutrient Station", "supplied blueprints stop counting: the nudge returns")
 	rec.delivered = rec.get_cost()
 	_add_completed_building(game, VaultBuilding.Kind.KITCHEN, Vector2i(20, 13))
 	game.power_grid.recalculate(game.buildings)

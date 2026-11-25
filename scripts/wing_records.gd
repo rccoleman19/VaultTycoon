@@ -75,6 +75,15 @@ func annex_badge_sublevels() -> int:
 	return levels.size()
 
 
+# Annex blueprints B3: true once a record carries both the Annex badge and a best grade of at least stars.
+func has_annex_badge_with_stars(stars: int) -> bool:
+	var wings: Dictionary = read().wings
+	for key: String in wings:
+		if bool(wings[key].annex) and wings[key].best_stars != null and int(wings[key].best_stars) >= stars:
+			return true
+	return false
+
+
 func has_win_on(sublevel: int) -> bool:
 	var wings: Dictionary = read().wings
 	for key: String in wings:

@@ -474,7 +474,7 @@ func _test_step3() -> void:
 	_assert_equal(_card(game), "<hidden>", "card hidden between step 2 and the seal")
 	_seal(game)
 	_assert_true(game.idle_start_bunks_pending(), "pending after the seal")
-	_assert_equal(_card(game), "IDLE START · after the seal · bunks | Begin reclamation · 2 bunks", "the step-3 card")
+	_assert_equal(_card(game), "IDLE START · after the seal · bunks | Queue 2 bunks", "the affordable step-3 card")
 	var salvage := game.food_system.salvage
 	game.player_orders.idle_start_button.pressed.emit()
 	_assert_true(game.reclaim_active, "one tap starts reclamation")

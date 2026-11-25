@@ -3,6 +3,10 @@ extends "res://tests/test_runner.gd"
 const TICK_CAP := 250
 const HOLD_TICKS := 200 # Exactly 20.0s; total driver cap is 250 + 200 = 450.
 const DESIGNATE_HINT := ["Next: YOU designate needs · THEY hold Day 7", "select", "Keep designating dig/build/stockpile. Defaults keep food, power, and air running."]
+const PASSIVE_FOOD_HELP := [
+	"Meals are short. The powered Nutrient Station can cook.",
+	"Meals are short. Leave Cook on. The powered Nutrient Station is waiting on raw food.",
+]
 const STAGED_ELAPSED := 55.0
 const OPEN_AT := BreachSystem.WARNING_AT_SECONDS + BreachSystem.GRACE_SECONDS
 const WATCH_HINT := ["Next: YOU watch hatch · THEY auto-patch", "select", "When the hatch warns, undrafted Haul + Craft claim supply/patch without draft."]
@@ -66,7 +70,9 @@ func _test_staged_hatch() -> void:
 	_assert_equal(game.food_system.take_salvage(16), 16, "completed bunks pay full costs")
 	_assert_equal(game.food_system.salvage, 68, "dig/bunk prep leaves 68 salvage")
 	# Paid completed Charge/Grow/Kitchen/Air; retain Core, enabled Lumen, Bay.
-	# No extra generators or changes to residents' needs, positions, or work.
+	# Keep original food, positions, and work. Stage the two spare crew to
+	# reach the existing bunks just after seal, with Ari rested through the
+	# bounded hold, so ordinary sleep and food work occupy the whole crew.
 	for fixture in [[VaultBuilding.Kind.GENERATOR, 18], [VaultBuilding.Kind.GROW_TRAY, 12], [VaultBuilding.Kind.KITCHEN, 10], [VaultBuilding.Kind.AIR_RECYCLER, 14]]:
 		var cell := _free_floor_cell(game)
 		_assert_true(cell != Vector2i(-1, -1), "staged fixture has free floor")
@@ -74,6 +80,9 @@ func _test_staged_hatch() -> void:
 		_assert_equal(game.food_system.take_salvage(int(fixture[1])), fixture[1], "staged fixture pays full cost")
 	game.food_system.raw_food = 0
 	game.food_system.meals = 4
+	game.residents[0].needs.rest = 65.0
+	game.residents[2].needs.rest = 45.0
+	game.residents[3].needs.rest = 45.0
 	game.power_grid.recalculate(game.buildings)
 	game.oxygen_system.refresh_rates(game.residents, game.buildings, game.breach_system.is_open())
 	game.begin_shift()
@@ -199,8 +208,8 @@ func _check_running(game: VaultGame, originals: Array[VaultResident]) -> bool:
 		return _fail_playthrough(game, "Day-7 completion forbidden in bounded slice")
 	if _seal_tick >= 0:
 		_last_step = game.player_orders._primary_next_step()
-		if [_last_step.text, _last_step.tool, _last_step.help] != DESIGNATE_HINT:
-			return _fail_playthrough(game, "hold requires exact designate tuple; crisis/unknown Next forbidden")
+		if not _is_safe_hold_step(game, _last_step):
+			return _fail_playthrough(game, "hold requires exact designate, verified passive food, or bounded preventative Rec; immediate crisis/unknown Next forbidden")
 		if not game.breach_system.is_sealed() or game.active_tool != "select":
 			return _fail_playthrough(game, "hold must remain SEALED with select restored")
 		_hold_min_oxygen = minf(_hold_min_oxygen, game.oxygen_system.oxygen)
@@ -237,6 +246,60 @@ func _check_running(game: VaultGame, originals: Array[VaultResident]) -> bool:
 				return _fail_playthrough(game, "%s must remain enabled, powered, unshed" % building.get_display_name())
 	if game.power_grid.supply != 9 or game.power_grid.demand != 9 or game.power_grid.served != 9 or game.power_grid.shed_count != 0:
 		return _fail_playthrough(game, "all nine power must be served without shedding")
+	return true
+
+
+func _is_safe_hold_step(game: VaultGame, step: Dictionary) -> bool:
+	if [step.get("text"), step.get("tool"), step.get("help")] == DESIGNATE_HINT:
+		return true
+	# The runway warning can lead a functioning food chain before a need meter
+	# becomes critical. Check the exact named tuple and its functioning food
+	# chain before allowing passive Cook or preventative care during this slice.
+	if not bool(step.get("urgent", false)) or step.get("cause", "") != "food" or step.get("kind", "") != "food":
+		return false
+	var resident := game.get_resident_by_id(int(step.get("resident_id", -1)))
+	if resident == null or not resident.alive or resident.drafted:
+		return false
+	if (
+		game.get_powered_building_count(VaultBuilding.Kind.GROW_TRAY) != 1
+		or game.get_powered_building_count(VaultBuilding.Kind.KITCHEN) != 1
+		or not game.player_orders._has_eligible_worker("cook")
+		or not game.player_orders._has_eligible_worker("haul")
+	):
+		return false
+	if step.get("text", "") == "Next: %s starving · YOU leave Cook on · THEY cook" % resident.resident_name:
+		return step.get("tool", "") == "select" and step.get("help", "") in PASSIVE_FOOD_HELP
+	# Until a resident is inside their own 60 s runway the same passive food
+	# step is shown unnamed: same YOU/THEY action, flagged food_unnamed.
+	if step.get("text", "") == "Next: food runway short · YOU leave Cook on · THEY cook":
+		return bool(step.get("food_unnamed", false)) and step.get("tool", "") == "select" and step.get("help", "") in PASSIVE_FOOD_HELP
+	# Rec steps never take the unnamed prefix; while no resident is inside their
+	# own 60 s runway the same Rec step is shown without a name (food_unnamed).
+	var rec_text := "Next: %s starving · YOU place a Rec Console · THEY recover mood" % resident.resident_name
+	if bool(step.get("food_unnamed", false)):
+		rec_text = "Next: YOU place a Rec Console · THEY recover mood"
+	if [step.get("text"), step.get("tool"), step.get("help")] != [
+		rec_text,
+		"rec", "Place a Rec Console so crew can recover mood.",
+	]:
+		return false
+	# Rec can be forecast before the first mood break. This 20-second pressure
+	# slice may finish its ongoing dig/haul while that suggestion is preventative:
+	# no Rec is already waiting, nobody is breaking or injured, and even without
+	# another meal/rest decision the remaining slice stays above its need guards.
+	if _seal_tick < 0 or _hold_ticks <= 0 or _hold_ticks > HOLD_TICKS:
+		return false
+	for building: VaultBuilding in game.buildings:
+		if building.kind == VaultBuilding.Kind.RECREATION_CONSOLE:
+			return false
+	var remaining := float(HOLD_TICKS - _hold_ticks) * VaultGame.SIMULATION_TICK
+	for crew: VaultResident in game.residents:
+		if not crew.alive or crew.drafted or crew.needs.health < 100.0 or crew.stress_break_left > 0.0 or crew.needs.mood <= ResidentNeeds.BREAK_MOOD_THRESHOLD:
+			return false
+		if crew.needs.food - 60.0 * crew.needs.food_drain_scale * remaining / DayCycle.SECONDS_PER_DAY < 20.0:
+			return false
+		if crew.needs.rest - 34.0 * remaining / DayCycle.SECONDS_PER_DAY < 15.0:
+			return false
 	return true
 
 
@@ -355,7 +418,7 @@ func _hold_designate_pressure(game: VaultGame, originals: Array[VaultResident]) 
 	_assert_approximately(game.day_cycle.elapsed_seconds, _seal_elapsed + 20.0, 0.00001, "one clock advances exactly seal+20s")
 	_assert_equal(game.day_cycle.current_day, 3, "bounded hold reaches Day 3")
 	_last_step = game.player_orders._primary_next_step()
-	_assert_equal([_last_step.text, _last_step.tool, _last_step.help], DESIGNATE_HINT, "end retains exact designate tuple")
+	_assert_true(_is_safe_hold_step(game, _last_step), "end retains exact designate, verified passive food, or bounded preventative Rec")
 	_assert_equal(game.active_tool, "select", "select restored throughout simulation and at end")
 	if not _failure_count:
 		print("Post-seal designate pressure PASS seal_tick=%d seal_elapsed=%.1fs hold_ticks=%d elapsed=%.1fs Day=%d salvage_delta=%d salvage_at_dig_complete=%d min_food=%.2f min_rest=%.2f min_O2=%.6f dig=%s zone=%s" % [

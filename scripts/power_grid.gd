@@ -47,7 +47,7 @@ func recalculate(buildings: Array[VaultBuilding]) -> void:
 
 	for building in buildings:
 		previous_states[building.building_id] = building.powered
-		building.powered = false
+		building.powered = building.complete and building.self_powered and not building.manually_disabled
 		if building.complete:
 			supply += building.get_power_output()
 			if building.is_power_consumer() and building.manually_disabled:

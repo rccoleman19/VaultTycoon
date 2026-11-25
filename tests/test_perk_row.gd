@@ -150,6 +150,8 @@ func _test_record_line() -> void:
 	game._finish_loss()
 	_assert_true(game.player_orders.record_line(false).ends_with(" · with PROVISIONING"), "a perk run's line ends with the perk: %s" % game.player_orders.record_line(false))
 	_assert_true(game.player_orders.outcome_record.text.contains("with PROVISIONING"), "and the outcome shows it")
+	_assert_false(game.best_enabled(), "Best is disabled for this legacy record-only fixture")
+	_assert_true(game.player_orders.outcome_record.is_visible_in_tree(), "without Best the original record and perk suffix remain visible")
 	var record := game.wing_records().get_record(0x0777)
 	_assert_equal(record.keys().size(), 4, "records keep their four fields")
 	_dispose(game)

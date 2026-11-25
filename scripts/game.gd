@@ -46,14 +46,22 @@ const PERK_GROW_NOOK := "grow_nook"
 const GROW_NOOK_CELL := Vector2i(26, 17)
 const GROW_NOOK_MEALS_COST := 2
 const GROW_NOOK_BADGES := 2
+# B3 RELAY LUMEN, earned by an Annex badge on a 3-star win (a record with best_stars 3 and annex): one
+# built Lumen on a far corner tile of the start room that lights the dig front, at no cost or power load.
+# Ladder QA vs NONE: built for 10 salvage
+# it lost 1 game on 05 and 2 on 04; for 5 salvage it lost 2 on 03; as a free unbuilt plan it lost 2 on 05.
+const PERK_RELAY_LUMEN := "relay_lumen"
+const RELAY_LUMEN_CELL := Vector2i(18, 13)
+const RELAY_LUMEN_STARS := 3
 const PERKS := {
 	PERK_PROVISIONING: {"name": "PROVISIONING", "unlock_level": 7, "detail": "+4 meals, -8 salvage"},
 	PERK_FLOODLIGHT: {"name": "FLOODLIGHT", "unlock_level": 5, "detail": "+1 lit Lumen (sheds first), -6 salvage"},
 	PERK_VOLUNTEER: {"name": "VOLUNTEER", "unlock_level": 3, "detail": "+1 resident, -8 salvage"},
 	PERK_BUNKROOM: {"name": "BUNKROOM", "unlock_annex": 1, "detail": "blueprint: +1 Bunk, -14 salvage"},
 	PERK_GROW_NOOK: {"name": "GROW NOOK", "unlock_annex": GROW_NOOK_BADGES, "detail": "blueprint: Grow Tray plan, -2 meals"},
+	PERK_RELAY_LUMEN: {"name": "RELAY LUMEN", "unlock_annex_stars": RELAY_LUMEN_STARS, "detail": "blueprint: +1 low Lumen, free"},
 }
-const PERK_ORDER := [PERK_PROVISIONING, PERK_FLOODLIGHT, PERK_VOLUNTEER, PERK_BUNKROOM, PERK_GROW_NOOK]
+const PERK_ORDER := [PERK_PROVISIONING, PERK_FLOODLIGHT, PERK_VOLUNTEER, PERK_BUNKROOM, PERK_GROW_NOOK, PERK_RELAY_LUMEN]
 # The player's choice for the next wings (kept across NEW WING / REPLAY / stepping).
 var equipped_perk := ""
 # The perk this wing started with ("" = NONE); saved, shown on the outcome.
@@ -80,6 +88,13 @@ const SUBLEVEL_MODIFIERS := {
 # whenever the main loop runs a script (tests, QA drivers) unless records_path is injected, so no
 # test or tool ever touches the player's user://wing_records.json.
 var records_path := ""
+var best_path := ""
+var _wing_best: WingBest = null
+# Transient finish result; never part of a save or checkpoint.
+var finish_best := {}
+var save_path := SaveLoad.DEFAULT_PATH
+# Day recovery uses its own atomic slot, never the player's manual/autosave slot.
+var checkpoint_path := SaveLoad.CHECKPOINT_PATH
 var _wing_records: WingRecords = null
 # Records + ladder C3: this run's record as written at the finish transition, for the outcome
 # panel's NEW RECORD mark. Transient: never saved, cleared by NEW WING and LOAD.
@@ -155,7 +170,16 @@ var outcome := "":
 		outcome = value
 		if day_cycle != null:
 			day_cycle.wing_lost = value == "loss"
-var status_message := "Select DIG and mark rock beside the chamber."
+const DEATH_RECAP_KEY := "death_recap"
+const DEATH_RECAP_VERSION := 1
+var death_recap := {}
+# Presentation-only serials distinguish feedback after an outcome from the last live message.
+var _status_message_serial := 0
+var _outcome_status_serial := 0
+var status_message := "Select DIG and mark rock beside the chamber.":
+	set(value):
+		status_message = value
+		_status_message_serial += 1
 var status_message_left := 0.0
 
 # Wing orders (QA 2026-10-18c #3, slice 2): post-seal goals whose rewards unlock Mk II fits.
@@ -167,6 +191,14 @@ const ORDER_STOCK_MEALS_TARGET := 16
 var wing_orders_claimed: Array[String] = []
 # Post-seal reclamation (QA-d #2): a player-started, finite salvage income after the seal.
 const RECLAIM_KEY := "post_seal_reclamation"
+# One finite expedition; the existing Dig and rubble-haul jobs pay its labor cost.
+const SUPPLY_CACHE_KEY := "day4_supply_cache"
+const SUPPLY_CACHE_AT := 3.0 * DayCycle.SECONDS_PER_DAY
+const SUPPLY_CACHE_SALVAGE := 6
+const SUPPLY_CACHE_MEALS := 2
+var supply_cache_enabled := false
+var supply_cache_announced := false
+var supply_cache_claimed := false
 # QA-d #8 idle start: a two-step card for a wing nobody has touched by 30 s. Step 1 queues the standard
 # opening (digs, two bunks, Charge Node, Nutrient Station, Grow Tray); step 2 is the Air Recycler.
 const IDLE_START_KEY := "idle_start"
@@ -196,10 +228,17 @@ const RECLAIM_DELIVERY := 18
 const RECLAIM_INTERVAL := 30.0
 const RECLAIM_DELIVERIES := 6
 var reclaim_active := false
+# A player tap on the reclaim button pauses reclamation the Cook started (not saved: a load resumes).
+var reclaim_paused := false
 var keep_running := false
 var keep_running_seconds := 0.0
 # Annex (north star slice 2): one keep-running project fed with meals above a reserve plus salvage.
 const ANNEX_KEY := "annex"
+# Cook auto food step ownership survives Save/LOAD: the Cook's blueprint ids (so a Cancel after LOAD
+# still vetoes), the vetoed kinds, the once-per-shortage flag and Cook-started reclamation state.
+# Written only when the Cook has acted; older saves without it load as before (no ownership).
+const COOK_AUTO_KEY := "cook_auto"
+const COOK_AUTO_VERSION := 1
 const ANNEX_VERSION := 1
 const ANNEX_MEALS := 30
 const ANNEX_SALVAGE := 150
@@ -307,6 +346,24 @@ func wing_records() -> WingRecords:
 	return _wing_records
 
 
+func wing_best() -> WingBest:
+	if _wing_best == null:
+		_wing_best = WingBest.new()
+	_wing_best.path = best_path
+	if _wing_best.path.is_empty():
+		_wing_best.path = records_path.get_base_dir().path_join("wing_best.json") if records_path != "" else WingBest.DEFAULT_PATH
+	return _wing_best
+
+
+func best_enabled() -> bool:
+	if not records_enabled():
+		return false
+	# Root-level injected record filenames would otherwise resolve to the real sidecar.
+	# Scripted tests/tools must inject best_path or use a dedicated records directory.
+	var loop := Engine.get_main_loop()
+	return loop == null or loop.get_script() == null or ProjectSettings.globalize_path(wing_best().path) != ProjectSettings.globalize_path(WingBest.DEFAULT_PATH)
+
+
 func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_sublevel := WingRecords.BASE_SUBLEVEL) -> void:
 	var seed_value := clampi(start_seed, LEGACY_WING_SEED, MAX_WING_SEED)
 	var level := WingRecords.BASE_SUBLEVEL if seed_value == LEGACY_WING_SEED else clampi(start_sublevel, WingRecords.DEEPEST_SUBLEVEL, WingRecords.BASE_SUBLEVEL)
@@ -320,6 +377,7 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 	next_building_id = 1
 	map_grid.new_wing(seed_value)
 	job_system.reset()
+	_reset_supply_cache(true, seed_value)
 	power_grid.reset()
 	lighting_system.reset()
 	food_system.reset()
@@ -332,7 +390,10 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 	player_orders.show_wing_id(wing_seed)
 	ended = false
 	outcome = ""
+	death_recap = {}
+	player_orders.clear_survival_tips()
 	finish_record = {}
+	finish_best = {}
 	active_tool = "select"
 	map_grid.preview_tool = active_tool
 	selected_resident_id = -1
@@ -342,6 +403,7 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 	wing_orders_claimed.clear()
 	_reset_reclamation()
 	_reset_keep_running()
+	_reset_cook_auto()
 	_spawn_starting_fixture(VaultBuilding.Kind.GENERATOR, Vector2i(24, 15), true)
 	# Ladder QA: 04 DARK START with no Lumen at all was 1/6 (mood 0 by 60 s); an unbuilt one is 6/6.
 	if sublevel == 4:
@@ -395,20 +457,31 @@ func new_game(show_tutorial := false, start_seed := LEGACY_WING_SEED, start_subl
 
 
 func begin_shift() -> void:
+	if ended or outcome == "death":
+		return
 	tutorial_open = false
 	user_paused = false
 	player_orders.show_briefing(false)
 	status_message = "YOU designate dig/build. THEY auto-claim Dig/Haul/Craft/Cook from defaults (P optional)."
 	status_message_left = 10.0
+	if day_cycle.elapsed_seconds == 0.0:
+		_save_day_checkpoint()
 
 
 
 
 func _simulation_step(delta_seconds: float) -> void:
-	if ended:
+	if ended or outcome == "death":
 		return
+	# Clock restoration can skip day_started, even with a completed Day 7 clock.
+	# Reconcile before work; the announcement latch preserves canceled expeditions.
+	_reveal_supply_cache()
 	power_grid.recalculate(buildings)
 	job_system.reconcile_recreation_state()
+	# Sample the actual live Next selector before damage can kill its named resident.
+	# This runs for manual/headless steps too, independently of UI refreshes.
+	player_orders.record_survival_tip(delta_seconds)
+	_advance_cook_auto_food(delta_seconds)
 	for resident in residents:
 		if not resident.alive:
 			continue
@@ -424,6 +497,8 @@ func _simulation_step(delta_seconds: float) -> void:
 			job_system.is_actively_recreating(resident) or (resident.stress_break_left > 0.0 and not resident.drafted),
 			oxygen_system.is_low(),
 		)
+		if outcome in ["death", "loss"]:
+			return
 	_update_dark_alert(delta_seconds)
 	var next_elapsed := minf(
 		day_cycle.elapsed_seconds + delta_seconds,
@@ -448,6 +523,8 @@ func _simulation_step(delta_seconds: float) -> void:
 		buildings,
 		phase_before_step == BreachSystem.Phase.OPEN,
 	)
+	if outcome in ["death", "loss"]:
+		return
 	if get_alive_count() <= 0:
 		_finish_loss()
 		return
@@ -486,12 +563,13 @@ func is_simulation_paused() -> bool:
 		user_paused
 		or tutorial_open
 		or ended
+		or outcome == "death"
 		or (player_orders != null and player_orders.is_briefing_open())
 	)
 
 
 func toggle_pause() -> void:
-	if tutorial_open or ended or player_orders.is_help_open():
+	if tutorial_open or ended or outcome == "death" or player_orders.is_help_open():
 		return
 	if user_paused and breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged:
 		acknowledge_breach_warning(true)
@@ -500,7 +578,7 @@ func toggle_pause() -> void:
 
 
 func set_speed(speed: int) -> void:
-	if player_orders.is_briefing_open():
+	if player_orders.is_briefing_open() or outcome == "death":
 		return
 	simulation_speed = clampi(speed, 1, 3)
 	if not tutorial_open and not ended:
@@ -511,6 +589,9 @@ func set_speed(speed: int) -> void:
 
 
 func set_tool(tool: String) -> void:
+	# Ended wings have no tool actions; keep outcome guidance or fresh LOAD feedback.
+	if ended:
+		return
 	active_tool = tool if tool in ["select", "dig", "cancel", "bed", "lamp", "generator", "grow", "kitchen", "stockpile", "air", "rec", "medical", "zone"] else "select"
 	status_message = _tool_help(active_tool)
 	status_message_left = 4.0
@@ -519,7 +600,7 @@ func set_tool(tool: String) -> void:
 
 
 func issue_order(cell: Vector2i) -> bool:
-	if ended or tutorial_open or player_orders.is_help_open() or not map_grid.is_inside(cell):
+	if ended or outcome == "death" or tutorial_open or player_orders.is_help_open() or not map_grid.is_inside(cell):
 		return false
 	if active_tool == "select":
 		return _select_at(cell)
@@ -551,6 +632,7 @@ func issue_order(cell: Vector2i) -> bool:
 			return true
 		var blueprint := get_building_at(cell)
 		if blueprint != null and not blueprint.complete:
+			_cook_auto_note_cancel(blueprint)
 			return _remove_building(blueprint, blueprint.delivered, "Blueprint canceled; delivered salvage refunded.")
 		return false
 	if BUILD_KIND_BY_TOOL.has(active_tool):
@@ -596,6 +678,10 @@ func get_powered_building_count(kind: int) -> int:
 		if building.complete and building.powered and building.kind == kind:
 			count += 1
 	return count
+
+
+func is_air_ready() -> bool:
+	return get_powered_building_count(VaultBuilding.Kind.AIR_RECYCLER) > 0
 
 
 func refresh_lighting(force := false) -> bool:
@@ -676,6 +762,8 @@ func toggle_building_enabled(building_id: int) -> bool:
 
 # Mid-game salvage sink (QA 2026-10-18c #3, slice 1). Unlocked by a sealed hatch; one explicit
 # purchase, paid in full from stored salvage, installs instantly and keeps the growth fraction.
+# Paid from spendable salvage: stock still owed to queued blueprints is not free (Codex #148
+# issuecomment-7014948183), so a fit cannot starve a placed Charge Node or Air Recycler.
 func can_upgrade_building(building_id: int) -> bool:
 	var building := get_building_by_id(building_id)
 	return (
@@ -684,7 +772,8 @@ func can_upgrade_building(building_id: int) -> bool:
 		and is_upgrade_unlocked(building.kind)
 		and not ended
 		and breach_system.is_sealed()
-		and food_system.salvage >= building.get_upgrade_cost()
+		and is_air_ready()
+		and food_plan_spendable() >= building.get_upgrade_cost()
 	)
 
 
@@ -738,6 +827,7 @@ func is_upgrade_unlocked(kind: int) -> bool:
 
 func _reset_reclamation() -> void:
 	reclaim_active = false
+	reclaim_paused = false
 	reclaim_elapsed = 0.0
 	reclaim_paid = 0
 
@@ -766,7 +856,7 @@ func reclaim_seconds_to_next() -> float:
 
 
 func _advance_reclamation(delta_seconds: float) -> void:
-	if not reclaim_active or ended or reclaim_paid >= RECLAIM_DELIVERIES:
+	if not reclaim_active or reclaim_paused or ended or reclaim_paid >= RECLAIM_DELIVERIES:
 		return
 	reclaim_elapsed += delta_seconds
 	while reclaim_paid < RECLAIM_DELIVERIES and reclaim_elapsed >= float(reclaim_paid + 1) * RECLAIM_INTERVAL - 0.0001:
@@ -943,7 +1033,7 @@ func get_resident_by_id(resident_id: int) -> VaultResident:
 
 
 func toggle_resident_draft(resident_id: int) -> bool:
-	if tutorial_open or ended or player_orders.is_help_open() or player_orders.is_work_priorities_open():
+	if tutorial_open or ended or outcome == "death" or player_orders.is_help_open() or player_orders.is_work_priorities_open():
 		return false
 	if breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged:
 		return false
@@ -972,7 +1062,7 @@ func toggle_resident_draft(resident_id: int) -> bool:
 
 
 func issue_selected_resident_context_order(cell: Vector2i) -> bool:
-	if ended or tutorial_open or player_orders.is_help_open() or player_orders.is_work_priorities_open() or not map_grid.is_inside(cell):
+	if ended or outcome == "death" or tutorial_open or player_orders.is_help_open() or player_orders.is_work_priorities_open() or not map_grid.is_inside(cell):
 		return false
 	var resident := get_resident_by_id(selected_resident_id)
 	if resident == null or not resident.alive:
@@ -1080,16 +1170,16 @@ func get_completed_building_count(kind: int, exclude_core := false) -> int:
 	return count
 
 
-func save_game(show_message := true, path := SaveLoad.DEFAULT_PATH) -> bool:
-	var result := save_load.save_snapshot(create_snapshot(), path)
+func save_game(show_message := true, path := "") -> bool:
+	var result := save_load.save_snapshot(create_snapshot(), save_path if path == "" else path)
 	if show_message:
 		status_message = str(result.message)
 		status_message_left = 4.0
 	return bool(result.ok)
 
 
-func load_game(path := SaveLoad.DEFAULT_PATH) -> bool:
-	var result := save_load.load_snapshot(path)
+func load_game(path := "") -> bool:
+	var result := save_load.load_snapshot(save_path if path == "" else path)
 	status_message = str(result.message)
 	status_message_left = 5.0
 	if not bool(result.ok):
@@ -1097,11 +1187,14 @@ func load_game(path := SaveLoad.DEFAULT_PATH) -> bool:
 	if not apply_snapshot(result.snapshot):
 		status_message = "The save did not contain a valid vault wing."
 		return false
+	if ended:
+		# A restored outcome keeps its actions; only failed LOADs need fresh feedback.
+		_outcome_status_serial = _status_message_serial
 	player_orders.show_work_priorities(false)
 	tutorial_open = false
 	user_paused = true
 	player_orders.show_briefing(false)
-	if ended:
+	if ended or outcome == "death":
 		player_orders.show_outcome(outcome == "win", get_alive_count())
 	else:
 		player_orders.hide_outcome()
@@ -1111,6 +1204,15 @@ func load_game(path := SaveLoad.DEFAULT_PATH) -> bool:
 # Post-seal reclamation: an additive, versioned key, written only once the player started it.
 func create_snapshot() -> Dictionary:
 	var snapshot := _create_base_snapshot()
+	if supply_cache_enabled:
+		snapshot[SUPPLY_CACHE_KEY] = {
+			"version": 1,
+			"position": [map_grid.supply_cache_cell.x, map_grid.supply_cache_cell.y],
+			"announced": supply_cache_announced,
+			"claimed": supply_cache_claimed,
+		}
+	if not death_recap.is_empty():
+		snapshot[DEATH_RECAP_KEY] = death_recap.duplicate(true)
 	if reclaim_active:
 		snapshot[RECLAIM_KEY] = {"version": RECLAIM_VERSION, "elapsed": reclaim_elapsed, "paid": reclaim_paid}
 	if idle_start_stage == 1:
@@ -1126,6 +1228,9 @@ func create_snapshot() -> Dictionary:
 			"reserve": annex_reserve,
 			"done": annex_done,
 		}
+	var cook_state := _cook_auto_snapshot()
+	if not cook_state.is_empty():
+		snapshot[COOK_AUTO_KEY] = cook_state
 	return snapshot
 
 
@@ -1170,6 +1275,14 @@ func _create_base_snapshot() -> Dictionary:
 func apply_snapshot(snapshot: Dictionary) -> bool:
 	if not _is_snapshot_shape_valid(snapshot):
 		return false
+	_reset_supply_cache(snapshot.has(SUPPLY_CACHE_KEY), _snapshot_wing_seed(snapshot))
+	if supply_cache_enabled:
+		var cache_position: Array = snapshot[SUPPLY_CACHE_KEY].position
+		map_grid.supply_cache_cell = Vector2i(int(cache_position[0]), int(cache_position[1]))
+		supply_cache_announced = snapshot[SUPPLY_CACHE_KEY].announced
+		supply_cache_claimed = snapshot[SUPPLY_CACHE_KEY].claimed
+		map_grid.supply_cache_open = supply_cache_announced
+		map_grid.supply_cache_visible = supply_cache_announced and not supply_cache_claimed
 	if not map_grid.deserialize(snapshot.map):
 		return false
 	lighting_system.reset()
@@ -1220,6 +1333,9 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 		reclaim_paid = int(snapshot[RECLAIM_KEY].paid)
 	idle_start_stage = int(snapshot[IDLE_START_KEY].stage) if snapshot.has(IDLE_START_KEY) else 0
 	_reset_keep_running()
+	_reset_cook_auto()
+	if snapshot.has(COOK_AUTO_KEY):
+		_restore_cook_auto(snapshot[COOK_AUTO_KEY])
 	if snapshot.has(KEEP_RUNNING_KEY):
 		keep_running = true
 		keep_running_seconds = float(snapshot[KEEP_RUNNING_KEY].seconds)
@@ -1234,7 +1350,17 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	_idle_start_floor_count = -1
 	ended = bool(snapshot.get("ended", false))
 	outcome = str(snapshot.get("outcome", ""))
+	death_recap = snapshot.get(DEATH_RECAP_KEY, {}).duplicate(true)
+	if not death_recap.is_empty():
+		# JSON parses numbers as floats; restore the recap's integer schema just
+		# as the resident/building deserializers restore their integer fields.
+		death_recap["version"] = int(death_recap.version)
+		death_recap["resident_id"] = int(death_recap.resident_id)
+		if death_recap.has("elapsed_seconds"):
+			death_recap["elapsed_seconds"] = float(death_recap.elapsed_seconds)
+	player_orders.clear_survival_tips()
 	finish_record = {}
+	finish_best = {}
 	var camera_data: Array = snapshot.get("camera", [])
 	if camera_data.size() >= 3:
 		world_camera.position = Vector2(float(camera_data[0]), float(camera_data[1]))
@@ -1246,6 +1372,8 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	job_system.rebuild_from_state(snapshot.get("jobs", {}))
 	job_system.restore_manual_orders()
 	job_system.reconcile_recreation_state()
+	for resident in residents:
+		resident.restore_hatch_continuation()
 	oxygen_system.refresh_rates(residents, buildings, breach_system.is_open())
 	# short_of_air is derived, not saved: rebuild it so a paused load shows the right work speed.
 	var thin_air := oxygen_system.is_low()
@@ -1261,11 +1389,14 @@ func apply_snapshot(snapshot: Dictionary) -> bool:
 	player_orders.show_breach_warning(
 		breach_system.phase == BreachSystem.Phase.WARNING and not breach_system.warning_acknowledged
 	)
-	if ended:
+	if ended or outcome == "death":
+		user_paused = true
 		if outcome == "win":
 			player_orders.show_outcome(true, get_alive_count())
 		else:
-			player_orders.show_outcome(false, 0)
+			player_orders.show_outcome(false, get_alive_count())
+	else:
+		player_orders.hide_outcome()
 	return true
 
 
@@ -1315,7 +1446,11 @@ func unlocked_perks_for(seed_value: int) -> Array:
 		return unlocked
 	var store := wing_records()
 	for id: String in PERK_ORDER:
-		if store.annex_badge_sublevels() >= int(PERKS[id].unlock_annex) if PERKS[id].has("unlock_annex") else store.has_win_on(int(PERKS[id].unlock_level)):
+		var perk: Dictionary = PERKS[id]
+		if perk.has("unlock_annex_stars"):
+			if store.has_annex_badge_with_stars(int(perk.unlock_annex_stars)):
+				unlocked.append(id)
+		elif store.annex_badge_sublevels() >= int(perk.unlock_annex) if perk.has("unlock_annex") else store.has_win_on(int(perk.unlock_level)):
 			unlocked.append(id)
 	return unlocked
 
@@ -1340,14 +1475,21 @@ func _apply_perk_start() -> void:
 		PERK_GROW_NOOK:
 			_spawn_starting_blueprint(VaultBuilding.Kind.GROW_TRAY, GROW_NOOK_CELL, true)
 			food_system.meals = maxi(0, food_system.meals - GROW_NOOK_MEALS_COST)
+		PERK_RELAY_LUMEN:
+			_spawn_starting_fixture(VaultBuilding.Kind.LAMP, RELAY_LUMEN_CELL, false)
 	_mark_floodlight()
 
 
-# FLOODLIGHT's starter Lumen sheds first; re-derived from the wing's perk on NEW WING and LOAD. Matched by
-# id and cell, so a Lumen the player later builds on that cell keeps its normal priority.
+# Perk Lumen flags are re-derived on NEW WING and LOAD. Only RELAY LUMEN is self-powered;
+# FLOODLIGHT still sheds first. Match id and cell so a replacement Lumen keeps normal demand/priority.
 func _mark_floodlight() -> void:
+	var cell := FLOODLIGHT_CELL if wing_perk == PERK_FLOODLIGHT else RELAY_LUMEN_CELL
 	for building: VaultBuilding in buildings:
-		building.shed_first = wing_perk == PERK_FLOODLIGHT and building.building_id == FLOODLIGHT_BUILDING_ID and building.kind == VaultBuilding.Kind.LAMP and building.cell == FLOODLIGHT_CELL
+		building.shed_first = wing_perk in [PERK_FLOODLIGHT, PERK_RELAY_LUMEN] and building.building_id == FLOODLIGHT_BUILDING_ID and building.kind == VaultBuilding.Kind.LAMP and building.cell == cell
+		building.self_powered = wing_perk == PERK_RELAY_LUMEN and building.shed_first
+		if building.self_powered:
+			# Older saves could disable this Lumen while it was still a grid consumer.
+			building.manually_disabled = false
 
 
 # Only {"version": 1, "id": <known perk>} on a seeded wing; NONE is never written.
@@ -1424,6 +1566,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	if not map_data is Dictionary or not resident_data is Array or not building_data is Array:
 		return false
 	if not MapGrid.is_stockpile_data_valid(map_data):
+		return false
+	if not _is_supply_cache_snapshot_valid(snapshot):
 		return false
 	if not job_system.is_serialized_food_haul_data_valid(jobs_data, map_data):
 		return false
@@ -1537,6 +1681,8 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 			return false
 		if bool(annex.done) and (int(annex.meals) < ANNEX_MEALS or int(annex.salvage) < ANNEX_SALVAGE):
 			return false
+	if snapshot.has(COOK_AUTO_KEY) and not _valid_cook_auto_snapshot(snapshot[COOK_AUTO_KEY]):
+		return false
 	if snapshot.has("wing_orders"):
 		var orders: Variant = snapshot.wing_orders
 		if not orders is Dictionary or not orders.get("claimed") is Array:
@@ -1574,6 +1720,19 @@ func _is_snapshot_shape_valid(snapshot: Dictionary) -> bool:
 	var saved_outcome := str(snapshot.get("outcome", ""))
 	if saved_ended != (saved_outcome in ["win", "loss"]):
 		return false
+	if saved_outcome == "death" and (living_residents <= 0 or not snapshot.has(DEATH_RECAP_KEY)):
+		return false
+	if snapshot.has(DEATH_RECAP_KEY):
+		if saved_outcome not in ["death", "loss"]:
+			return false
+		var recap: Dictionary = snapshot[DEATH_RECAP_KEY]
+		var named_dead_resident := false
+		for entry: Dictionary in resident_data:
+			if int(entry.get("id", -1)) == int(recap.resident_id) and not bool(entry.get("alive", true)) and str(entry.get("name", "")) == str(recap.name):
+				named_dead_resident = true
+				break
+		if not named_dead_resident:
+			return false
 	if saved_outcome == "loss" and living_residents > 0:
 		return false
 	if saved_outcome == "win":
@@ -1609,6 +1768,18 @@ func _is_snapshot_schema_valid(snapshot: Dictionary) -> bool:
 			return false
 	if not _snapshot_fields_valid(snapshot, {"next_building_id": _SNAPSHOT_INT, "ended": _SNAPSHOT_BOOL, "outcome": _SNAPSHOT_STRING}):
 		return false
+	if snapshot.has(DEATH_RECAP_KEY):
+		var recap: Variant = snapshot[DEATH_RECAP_KEY]
+		if not recap is Dictionary or not _is_integer_in_range(recap.get("version"), DEATH_RECAP_VERSION, DEATH_RECAP_VERSION):
+			return false
+		if not _is_integer_in_range(recap.get("resident_id"), 1, 2_147_483_647):
+			return false
+		for key: String in ["name", "cause", "time", "tip"]:
+			if not recap.has(key) or typeof(recap[key]) != TYPE_STRING:
+				return false
+		# Additive in v1: older death recaps have no simulated timestamp.
+		if not _snapshot_fields_valid(recap, {"elapsed_seconds": _SNAPSHOT_NUMBER}):
+			return false
 	if snapshot.has("camera"):
 		if not snapshot.camera is Array:
 			return false
@@ -1864,6 +2035,13 @@ func _issue_drafted_move(resident: VaultResident, cell: Vector2i) -> bool:
 
 
 func _input(event: InputEvent) -> void:
+	if outcome == "death" and (
+		event.is_action_pressed("pause_game")
+		or event.is_action_pressed("cancel_order")
+		or event.is_action_pressed("work_priorities")
+	):
+		get_viewport().set_input_as_handled()
+		return
 	if player_orders != null and player_orders.is_briefing_open():
 		if player_orders.is_help_open() and event.is_action_pressed("cancel_order"):
 			player_orders.show_briefing(false)
@@ -1883,6 +2061,9 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if outcome == "death":
+		get_viewport().set_input_as_handled()
+		return
 	if player_orders.is_briefing_open():
 		if player_orders.is_help_open() and event.is_action_pressed("cancel_order"):
 			player_orders.show_briefing(false)
@@ -1993,9 +2174,9 @@ func acknowledge_breach_warning(resume_response: bool) -> void:
 
 
 func _update_camera(delta: float) -> void:
-	if player_orders != null and (
+	if outcome == "death" or (player_orders != null and (
 		player_orders.is_work_priorities_open() or player_orders.is_briefing_open()
-	):
+	)):
 		_dragging_camera = false
 		return
 	var direction := Input.get_vector("camera_left", "camera_right", "camera_up", "camera_down")
@@ -2111,16 +2292,235 @@ func _is_reserved_cell(cell: Vector2i) -> bool:
 
 
 func _on_resident_died(resident: VaultResident) -> void:
+	if ended:
+		return
 	job_system.release_resident(resident)
-	user_paused = true
-	status_message = "%s has died. The shift has been paused." % resident.resident_name
+	death_recap = player_orders.death_recap_for(resident)
+	death_recap["version"] = DEATH_RECAP_VERSION
+	status_message = "%s has died. Review the death recap." % resident.resident_name
 	status_message_left = 8.0
 	if get_alive_count() <= 0:
 		_finish_loss()
+	else:
+		_finish_death()
+
+
+func _finish_death() -> void:
+	if ended:
+		return
+	# This recap is a recoverable interruption, not a finished or won wing.
+	ended = false
+	outcome = "death"
+	user_paused = true
+	status_message = "%s has died. Review the death recap." % str(death_recap.get("name", "A resident"))
+	status_message_left = 8.0
+	player_orders.show_outcome(false, get_alive_count())
+
+
+# Possibility, not a forecast: victory needs day 7 complete, a sealed breach and
+# breathable oxygen. Optional wing orders never gate it. With no living crew it
+# is impossible; endless keep-running crew can always continue. Otherwise only
+# a proven food wipe before day 7 rules victory out. Air, work, power and hatch
+# forecasts can change with player fixes / fewer mouths, so uncertainty is true.
+func can_still_win_shift() -> bool:
+	if get_alive_count() <= 0:
+		return false
+	if keep_running:
+		return true
+	var seconds_left := maxf(0.0, DayCycle.SECONDS_PER_DAY * DayCycle.DAYS_TO_SURVIVE - day_cycle.elapsed_seconds)
+	return not player_orders._food_wipe_before(seconds_left)
+
+
+func resume_after_death() -> bool:
+	# Enforce the same decision for callers that bypass the recap button.
+	if outcome != "death" or not can_still_win_shift():
+		return false
+	outcome = ""
+	ended = false
+	death_recap = {}
+	user_paused = false
+	player_orders.hide_outcome()
+	status_message = "Shift resumed. Protect the surviving residents."
+	status_message_left = 5.0
+	return true
+
+
+func _save_day_checkpoint() -> bool:
+	return bool(save_load.save_snapshot(create_snapshot(), checkpoint_path).ok)
+
+
+# Read-only: inspect the same snapshot Retry will apply, including backup recovery.
+func day_checkpoint_retry_status() -> Dictionary:
+	var result := save_load.load_snapshot(checkpoint_path)
+	result["reason"] = "No day checkpoint available"
+	if not bool(result.ok):
+		return result
+	var snapshot: Dictionary = result.snapshot
+	result.ok = false
+	if not _is_snapshot_shape_valid(snapshot):
+		return result
+	if _snapshot_wing_seed(snapshot) != wing_seed:
+		result.reason = "No checkpoint for this wing"
+		return result
+	if _snapshot_sublevel(snapshot) != sublevel:
+		result.reason = "No checkpoint for this wing"
+		return result
+	if snapshot.has(KEEP_RUNNING_KEY) != keep_running:
+		result.reason = "Checkpoint is from another time"
+		return result
+	var checkpoint_elapsed := float(snapshot[KEEP_RUNNING_KEY].seconds) if keep_running else float(snapshot.get("day", {}).get("elapsed_seconds", 0.0))
+	var current_elapsed := keep_running_seconds if keep_running else day_cycle.elapsed_seconds
+	if checkpoint_elapsed > current_elapsed:
+		result.reason = "Checkpoint is from a later time"
+		return result
+	result.ok = true
+	result.reason = ""
+	return result
+
+
+func can_retry_day_checkpoint() -> bool:
+	return bool(day_checkpoint_retry_status().ok)
+
+
+func retry_day_checkpoint() -> bool:
+	var result := day_checkpoint_retry_status()
+	# Callers can bypass the disabled recap button. Refuse before changing any state.
+	if not bool(result.ok):
+		return false
+	if not apply_snapshot(result.snapshot):
+		status_message = "Could not restore the day checkpoint."
+		status_message_left = 5.0
+		return false
+	# Pause is not serialized: all serialized fields remain exactly as checkpointed.
+	tutorial_open = false
+	user_paused = true
+	outcome = ""
+	ended = false
+	death_recap = {}
+	player_orders.show_briefing(false)
+	player_orders.show_work_priorities(false)
+	player_orders.hide_outcome()
+	status_message = "Day checkpoint restored. Resume when ready."
+	status_message_left = 5.0
+	return true
+
+
+# Pick only initial rock, independent of the current excavation state and RNG stream.
+static func supply_cache_position_for(seed_value: int) -> Vector2i:
+	var pockets: Array = MapGrid.generate_layout(seed_value)["pockets"]
+	var candidates: Array[Vector2i] = []
+	for x in range(MapGrid.CHAMBER.position.x, MapGrid.CHAMBER.end.x):
+		var cell := Vector2i(x, MapGrid.CHAMBER.end.y)
+		if cell not in pockets:
+			candidates.append(cell)
+	# Seeded pockets are small; retain a deterministic perimeter fallback.
+	if candidates.is_empty():
+		for y in range(MapGrid.CHAMBER.position.y + 2, MapGrid.CHAMBER.end.y):
+			var cell := Vector2i(MapGrid.CHAMBER.position.x - 1, y)
+			if cell not in pockets:
+				candidates.append(cell)
+	return candidates[BreachSystem.seed_hash(seed_value, 404) % candidates.size()]
+
+
+func _reset_supply_cache(enabled: bool, seed_value: int) -> void:
+	supply_cache_enabled = enabled
+	supply_cache_announced = false
+	supply_cache_claimed = false
+	map_grid.supply_cache_cell = supply_cache_position_for(seed_value) if enabled else Vector2i(-1, -1)
+	map_grid.supply_cache_open = false
+	map_grid.supply_cache_visible = false
+
+
+func _reveal_supply_cache() -> void:
+	if not supply_cache_enabled or supply_cache_announced or day_cycle.elapsed_seconds < SUPPLY_CACHE_AT:
+		return
+	# Latch before checkpoints. Canceled designations are never silently re-created.
+	supply_cache_announced = true
+	map_grid.supply_cache_open = true
+	map_grid.supply_cache_visible = not supply_cache_claimed
+	if map_grid.queue_dig(map_grid.supply_cache_cell):
+		job_system.queue_dig(map_grid.supply_cache_cell)
+	map_grid.queue_redraw()
+
+
+func supply_cache_alert() -> String:
+	if not supply_cache_enabled or not supply_cache_announced or supply_cache_claimed or keep_running:
+		return ""
+	# Cancel only works while the dig mark exists; exposed supplies need Haul.
+	if not map_grid.dig_marks.has(map_grid.supply_cache_cell) and not map_grid.is_walkable(map_grid.supply_cache_cell):
+		return ""
+	var advice := "Dig/Haul queued; CANCEL to skip"
+	if not map_grid.dig_marks.has(map_grid.supply_cache_cell):
+		advice = "dug out; YOU turn Haul on to collect"
+		for resident: VaultResident in residents:
+			if resident.alive and not resident.drafted and resident.get_work_priority("haul") != VaultResident.PRIORITY_DISABLED:
+				advice = "dug out; a hauler collects it (Haul on)"
+				break
+	return "DAY-4 CACHE (%d,%d): %d salvage + %d %s · %s" % [
+		map_grid.supply_cache_cell.x, map_grid.supply_cache_cell.y,
+		SUPPLY_CACHE_SALVAGE, SUPPLY_CACHE_MEALS, "meal" if SUPPLY_CACHE_MEALS == 1 else "meals", advice]
+
+
+func claim_supply_cache(resident: VaultResident) -> bool:
+	if not supply_cache_enabled or supply_cache_claimed or not supply_cache_announced or day_cycle.elapsed_seconds < SUPPLY_CACHE_AT:
+		return false
+	if resident == null or not resident.alive or resident.get_cell(map_grid) != map_grid.supply_cache_cell:
+		return false
+	if not map_grid.is_walkable(map_grid.supply_cache_cell) or resident.current_job_type != JobSystem.JobType.HAUL_RUBBLE:
+		return false
+	var job := job_system._find_job(resident.current_job_id)
+	if job.is_empty() or job.target != map_grid.supply_cache_cell:
+		return false
+	# Latch before emitting inventory signals; reaching the cache pays exactly once.
+	supply_cache_claimed = true
+	map_grid.supply_cache_visible = false
+	food_system.add_salvage(SUPPLY_CACHE_SALVAGE)
+	food_system.add_meals(SUPPLY_CACHE_MEALS)
+	map_grid.queue_redraw()
+	return true
+
+
+func _is_supply_cache_snapshot_valid(snapshot: Dictionary) -> bool:
+	if not snapshot.has(SUPPLY_CACHE_KEY):
+		return true
+	var data: Variant = snapshot[SUPPLY_CACHE_KEY]
+	if not data is Dictionary or not _is_integer_in_range(data.get("version"), 1, 1):
+		return false
+	if typeof(data.get("announced")) != TYPE_BOOL or typeof(data.get("claimed")) != TYPE_BOOL:
+		return false
+	var position: Variant = data.get("position")
+	if not position is Array or position.size() != 2:
+		return false
+	if not _is_integer_in_range(position[0], 1, MapGrid.WIDTH - 2) or not _is_integer_in_range(position[1], 1, MapGrid.HEIGHT - 2):
+		return false
+	# Position is saved authority, including when an older wing's seed/layout is
+	# migrated. Require the same chamber perimeter used by placement.
+	var cell := Vector2i(int(position[0]), int(position[1]))
+	var south_edge := cell.y == MapGrid.CHAMBER.end.y and cell.x >= MapGrid.CHAMBER.position.x and cell.x < MapGrid.CHAMBER.end.x
+	var west_edge := cell.x == MapGrid.CHAMBER.position.x - 1 and cell.y >= MapGrid.CHAMBER.position.y + 2 and cell.y < MapGrid.CHAMBER.end.y
+	if not south_edge and not west_edge:
+		return false
+	var elapsed := float(snapshot.get("day", {}).get("elapsed_seconds", 0.0))
+	# A restored clock can be saved before the next simulation step reveals the
+	# cache. The announcement is a latch, not a derived property of the clock.
+	if (data.announced and elapsed < SUPPLY_CACHE_AT) or (data.claimed and not data.announced):
+		return false
+	var tile := int(snapshot.map.cells[cell.y * MapGrid.WIDTH + cell.x])
+	if data.claimed and tile != MapGrid.Tile.FLOOR:
+		return false
+	if not data.announced:
+		if tile != MapGrid.Tile.ROCK:
+			return false
+		for mark: Variant in snapshot.map.get("dig_marks", []):
+			if mark is Array and mark.size() >= 2 and mark[0] == cell.x and mark[1] == cell.y:
+				return false
+	return true
 
 
 func _on_day_started(_day: int) -> void:
-	if not ended:
+	if not ended and outcome != "death":
+		_reveal_supply_cache()
+		_save_day_checkpoint()
 		save_game(false)
 		if breach_system.is_response_active() or (breach_system.is_sealed() and status_message_left > 0.0):
 			return
@@ -2171,10 +2571,15 @@ func _on_breach_sealed() -> void:
 	status_message_left = 8.0
 
 
+func has_post_outcome_status() -> bool:
+	return status_message_left > 0.0 and _status_message_serial > _outcome_status_serial
+
+
 func _finish_win() -> void:
-	if ended or keep_running:
+	if ended or keep_running or outcome == "death":
 		return
 	ended = true
+	_outcome_status_serial = _status_message_serial
 	outcome = "win"
 	user_paused = true
 	_record_finish(true)
@@ -2187,6 +2592,7 @@ func _finish_loss() -> void:
 	if ended:
 		return
 	ended = true
+	_outcome_status_serial = _status_message_serial
 	outcome = "loss"
 	user_paused = true
 	_record_finish(false)
@@ -2201,6 +2607,7 @@ func _finish_loss() -> void:
 # a loss the day reached. A failed or refused write never blocks the outcome.
 func _record_finish(won: bool) -> void:
 	finish_record = {}
+	finish_best = {}
 	if not records_enabled():
 		return
 	var store := wing_records()
@@ -2208,6 +2615,14 @@ func _record_finish(won: bool) -> void:
 	var previous := store.get_record(wing_seed, level)
 	var stars: Variant = int(player_orders.crew_grade()["stars"]) if won else null
 	var day := clampi(keep_running_day() if keep_running else day_cycle.current_day, 1, WingRecords.MAX_DAY)
+	if best_enabled():
+		var survivors: Array[String] = []
+		for resident: VaultResident in residents:
+			if resident.alive:
+				survivors.append(resident.resident_name)
+		# The normal clock freezes at the seal win; endless days continue from day 8.
+		var elapsed := DayCycle.DAYS_TO_SURVIVE * DayCycle.SECONDS_PER_DAY + keep_running_seconds if keep_running else day_cycle.elapsed_seconds
+		finish_best = wing_best().submit(wing_seed, level, WingBest.run_from(outcome, day, elapsed, survivors))
 	var unlocked_before := store.unlocked_sublevel()
 	if store.record(wing_seed, won, stars, day, level):
 		finish_record = {"previous": previous, "current": store.get_record(wing_seed, level)}
@@ -2259,6 +2674,7 @@ func start_keep_running() -> bool:
 	player_orders.hide_outcome()
 	status_message = "Keep running: the seal win is recorded. The vault carries on."
 	status_message_left = 5.0
+	_save_day_checkpoint()
 	save_game(false)
 	return true
 
@@ -2276,6 +2692,7 @@ func _advance_keep_running(delta_seconds: float) -> void:
 	if keep_running_day() != day_before:
 		_maybe_feast()
 		_record_progress()
+		_save_day_checkpoint()
 		save_game(false)
 
 
@@ -2401,6 +2818,369 @@ func apply_comfort() -> bool:
 
 
 const COMFORT_STATUS := "Comfort queued: Rec Console, Med Bed and their power and light."
+
+
+# Food plan (QA-d #8 Lever 1): one tap queues the food chain an idle vault never builds:
+# a Charge Node only when planned power cannot carry the missing pieces, then a Nutrient
+# Station, then a Grow Tray. Gated while the live hatch still needs its patch salvage.
+const FOOD_PLAN_KINDS := [VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GROW_TRAY]
+const FOOD_PLAN_STATUS := "Food plan queued: Nutrient Station, Grow Tray and their power."
+
+
+func food_plan_pending() -> bool:
+	if ended:
+		return false
+	for kind: int in FOOD_PLAN_KINDS:
+		if _count_buildings(kind) == 0:
+			return true
+	return false
+
+
+func food_plan_kinds() -> Array[int]:
+	var kinds: Array[int] = []
+	var demand := 0
+	for kind: int in FOOD_PLAN_KINDS:
+		if _count_buildings(kind) == 0:
+			kinds.append(kind)
+			demand += int(VaultBuilding.POWER_DEMAND.get(kind, 0))
+	if not kinds.is_empty() and _planned_power_spare() < demand:
+		kinds.push_front(VaultBuilding.Kind.GENERATOR)
+	return kinds
+
+
+func food_plan_cost() -> int:
+	var cost := 0
+	for kind in food_plan_kinds():
+		cost += int(VaultBuilding.COSTS[kind])
+	return cost
+
+
+# Salvage the unsealed hatch still needs for its patch (0 once sealed or fully supplied).
+func food_plan_patch_owed() -> int:
+	return maxi(0, BreachSystem.PATCH_COST - breach_system.patch_delivered - job_system.get_breach_supply_in_transit())
+
+
+# Salvage left for the food plan once the hatch reserve and every queued blueprint's unpaid
+# cost are set aside (placing a blueprint debits nothing until its supply is picked up, so
+# back-to-back partial taps must not both count the same stock).
+func food_plan_spendable() -> int:
+	return food_system.salvage - food_plan_patch_owed() - queued_build_commitment()
+
+
+# Stock still promised to unfinished blueprints: cost minus delivered minus in transit
+# (salvage in transit has already left stock).
+func queued_build_commitment() -> int:
+	var owed := 0
+	for building in buildings:
+		if building.complete:
+			continue
+		owed += maxi(0, building.get_cost() - building.delivered - job_system.get_build_supply_in_transit(building.building_id))
+	return owed
+
+
+# What the card offers right now: the whole plan when it fits the spendable salvage, otherwise
+# the next single food build that does. A Next-named food build (lead_kind) leads, so the card
+# and Next never name different builds. Empty when nothing is affordable (the card is held).
+func food_plan_offer(lead_kind: int = -1) -> Array[int]:
+	var offer: Array[int] = []
+	if not food_plan_pending():
+		return offer
+	var kinds := food_plan_kinds()
+	var spendable := food_plan_spendable()
+	if (lead_kind < 0 or kinds.has(lead_kind)) and spendable >= food_plan_cost():
+		if lead_kind >= 0:
+			kinds.erase(lead_kind)
+			kinds.push_front(lead_kind)
+		return kinds
+	var step := lead_kind
+	if step < 0:
+		for kind: int in FOOD_PLAN_KINDS:
+			if _count_buildings(kind) == 0:
+				step = kind
+				break
+	if step >= 0 and spendable >= int(VaultBuilding.COSTS[step]):
+		offer.append(step)
+	return offer
+
+
+func food_plan_offer_cost(lead_kind: int = -1) -> int:
+	var cost := 0
+	for kind in food_plan_offer(lead_kind):
+		cost += int(VaultBuilding.COSTS[kind])
+	return cost
+
+
+# One affordability check for both the card's enabled state and the click.
+func food_plan_gate_open(lead_kind: int = -1) -> bool:
+	return not food_plan_offer(lead_kind).is_empty()
+
+
+func apply_food_plan(lead_kind: int = -1) -> bool:
+	if not food_plan_gate_open(lead_kind):
+		return false
+	var kinds := food_plan_offer(lead_kind)
+	var cells := _annex_free_cells(kinds.size())
+	if cells.size() < kinds.size():
+		status_message = "No free floor for the food plan; place a Nutrient Station and Grow Tray by hand."
+		status_message_left = 4.0
+		return false
+	for index in kinds.size():
+		place_blueprint(kinds[index], cells[index])
+	status_message = FOOD_PLAN_STATUS
+	status_message_left = 5.0
+	return true
+
+
+# Cook auto food step: an idle vault never places a fixture, so with food short the Cook takes one
+# food step per shortage episode (re-armed once cook_food_short() clears): one tap's worth, the whole
+# missing chain (Charge Node when planned power is short, Station, Grow Tray) or nothing, since a
+# lone piece raises no food. Paid only from food_plan_spendable() (salvage minus the hatch reserve
+# and queued unpaid costs). Never while anyone is critical (air critical, or a fed resident at
+# <= COOK_AUTO_MEDICAL_HP). Air/power order (QA-d #8): after the seal (before it only for a resident
+# at 0 food, never in a WARNING/OPEN hatch), never while an Air Recycler is unfinished or air is low
+# without a powered recycler. After the seal, when only salvage blocks the step, the Cook starts
+# reclamation (alert "Cook started reclamation"). The player wins: a player food blueprint makes the
+# Cook wait, cancelling a Cook blueprint stops that kind, and a reclaim-button tap pauses the Cook's
+# reclamation.
+const COOK_AUTO_ALERT := "Cook queued %s"
+const COOK_AUTO_CHECK_SECONDS := 1.0
+const COOK_AUTO_CHAIN := [VaultBuilding.Kind.GENERATOR, VaultBuilding.Kind.KITCHEN, VaultBuilding.Kind.GROW_TRAY]
+var cook_auto_building_id := -1
+var cook_auto_building_ids: Array[int] = []
+var cook_auto_vetoed: Dictionary = {}
+var cook_auto_episode_used := false
+var cook_auto_started_reclaim := false
+var _cook_auto_reclaim_alert_left := 0.0
+var _cook_auto_wait := 0.0
+
+
+func _reset_cook_auto() -> void:
+	cook_auto_building_id = -1
+	cook_auto_building_ids.clear()
+	cook_auto_vetoed.clear()
+	cook_auto_episode_used = false
+	cook_auto_started_reclaim = false
+	_cook_auto_reclaim_alert_left = 0.0
+	_cook_auto_wait = 0.0
+
+
+func _cook_auto_snapshot() -> Dictionary:
+	if cook_auto_building_ids.is_empty() and cook_auto_vetoed.is_empty() and not cook_auto_episode_used \
+			and not cook_auto_started_reclaim and not reclaim_paused:
+		return {}
+	var vetoed: Array = []
+	for kind: Variant in cook_auto_vetoed:
+		vetoed.append(int(kind))
+	vetoed.sort()
+	return {
+		"version": COOK_AUTO_VERSION,
+		"ids": cook_auto_building_ids.duplicate(),
+		"vetoed": vetoed,
+		"episode": cook_auto_episode_used,
+		"started_reclaim": cook_auto_started_reclaim,
+		"paused": reclaim_paused,
+		"alert_left": _cook_auto_reclaim_alert_left,
+	}
+
+
+func _valid_cook_auto_snapshot(data: Variant) -> bool:
+	if not data is Dictionary or not _is_integer_in_range(data.get("version"), COOK_AUTO_VERSION, COOK_AUTO_VERSION):
+		return false
+	for list_key in ["ids", "vetoed"]:
+		if not data.get(list_key) is Array:
+			return false
+		for value: Variant in data[list_key]:
+			if not _is_integer_in_range(value, 0, 1 << 30):
+				return false
+	for flag in ["episode", "started_reclaim", "paused"]:
+		if typeof(data.get(flag)) != TYPE_BOOL:
+			return false
+	var left: Variant = data.get("alert_left")
+	return typeof(left) in [TYPE_INT, TYPE_FLOAT] and is_finite(float(left)) and float(left) >= 0.0 \
+		and float(left) <= COOK_AUTO_RECLAIM_ALERT_SECONDS
+
+
+# Restore runs after buildings and reclamation are restored; ids that no longer exist are dropped.
+func _restore_cook_auto(data: Dictionary) -> void:
+	for id: Variant in data.ids:
+		if get_building_by_id(int(id)) != null:
+			cook_auto_building_ids.append(int(id))
+	cook_auto_building_id = cook_auto_building_ids[0] if not cook_auto_building_ids.is_empty() else -1
+	for kind: Variant in data.vetoed:
+		cook_auto_vetoed[int(kind)] = true
+	cook_auto_episode_used = bool(data.episode)
+	cook_auto_started_reclaim = bool(data.started_reclaim) and reclaim_active
+	reclaim_paused = bool(data.paused) and reclaim_active
+	_cook_auto_reclaim_alert_left = float(data.alert_left) if cook_auto_started_reclaim else 0.0
+
+
+func _advance_cook_auto_food(delta_seconds: float) -> void:
+	_cook_auto_reclaim_alert_left = maxf(0.0, _cook_auto_reclaim_alert_left - delta_seconds)
+	_cook_auto_wait -= delta_seconds
+	if _cook_auto_wait > 0.0:
+		return
+	_cook_auto_wait = COOK_AUTO_CHECK_SECONDS
+	if not ended and not player_orders.cook_food_short():
+		cook_auto_episode_used = false
+	var kinds := cook_auto_plan()
+	if kinds.is_empty() and _cook_auto_wants_reclamation():
+		if start_reclamation():
+			cook_auto_started_reclaim = true
+			_cook_auto_reclaim_alert_left = COOK_AUTO_RECLAIM_ALERT_SECONDS
+		kinds = cook_auto_plan()
+	if kinds.is_empty():
+		return
+	var cells := _annex_free_cells(kinds.size())
+	if cells.size() < kinds.size():
+		return
+	var message := status_message
+	var left := status_message_left
+	var placed: Array[int] = []
+	for index in kinds.size():
+		var before := buildings.size()
+		if place_blueprint(kinds[index], cells[index]) and buildings.size() > before:
+			placed.append(buildings[-1].building_id)
+	if placed.is_empty():
+		return
+	cook_auto_episode_used = true
+	cook_auto_building_ids = placed
+	cook_auto_building_id = placed[0]
+	status_message = message
+	status_message_left = left
+
+
+# The first build the Cook would queue right now, or -1.
+func cook_auto_step() -> int:
+	var kinds := cook_auto_plan()
+	return -1 if kinds.is_empty() else kinds[0]
+
+
+# The Cook's one food step for this shortage episode: every missing food-plan build plus a
+# Charge Node when planned power cannot carry them, queued together or not at all (a lone
+# Charge Node or an unfed Station raises no food). Empty when gated (see the block comment).
+func cook_auto_plan() -> Array[int]:
+	var empty: Array[int] = []
+	var kinds := _cook_auto_needed()
+	if kinds.is_empty() or food_plan_spendable() < _cook_auto_cost(kinds):
+		return empty
+	return kinds
+
+
+func _cook_auto_needed() -> Array[int]:
+	var empty: Array[int] = []
+	if ended or alive_count_is_zero() or cook_auto_episode_used or not player_orders.cook_food_short():
+		return empty
+	if cook_auto_crew_critical():
+		return empty
+	if not breach_system.is_sealed() and (breach_system.phase != BreachSystem.Phase.DORMANT or not _cook_auto_anyone_starving()):
+		return empty
+	if annex_waiting_for_room():
+		return empty
+	for building in buildings:
+		if building.complete:
+			continue
+		if building.kind == VaultBuilding.Kind.AIR_RECYCLER or COOK_AUTO_CHAIN.has(building.kind):
+			return empty
+	if oxygen_system.is_low() and not is_air_ready():
+		return empty
+	if not food_plan_pending():
+		return empty
+	var kinds := food_plan_kinds()
+	for kind in kinds:
+		if cook_auto_vetoed.has(kind):
+			return empty
+	return kinds
+
+
+func _cook_auto_cost(kinds: Array[int]) -> int:
+	var cost := 0
+	for kind in kinds:
+		cost += int(VaultBuilding.COSTS[kind])
+	return cost
+
+
+# After the seal, when the step is gated only by salvage, the Cook starts reclamation (free:
+# +18 now and +18 every 30 s) rather than leave the crew starving with an unreachable Grow Tray.
+func _cook_auto_wants_reclamation() -> bool:
+	var kinds := _cook_auto_needed()
+	return not kinds.is_empty() and breach_system.is_sealed() and can_start_reclamation()
+
+
+# "Cook started reclamation" shows for COOK_AUTO_RECLAIM_ALERT_SECONDS after the Cook starts it.
+const COOK_AUTO_RECLAIM_ALERT := "Cook started reclamation"
+const COOK_AUTO_RECLAIM_ALERT_SECONDS := 10.0
+
+
+func cook_auto_reclaim_alert() -> String:
+	if ended or not cook_auto_started_reclaim or reclaim_paused or _cook_auto_reclaim_alert_left <= 0.0:
+		return ""
+	return COOK_AUTO_RECLAIM_ALERT
+
+
+# The player's tap wins: the reclaim button pauses reclamation the Cook started (it stays active,
+# so the Cook cannot start it again), and a second tap resumes it as the player's own choice.
+func cook_reclaim_tappable() -> bool:
+	return not ended and reclaim_active and (reclaim_paused or cook_auto_started_reclaim) and reclaim_paid < RECLAIM_DELIVERIES
+
+
+func toggle_cook_reclamation() -> bool:
+	if not cook_reclaim_tappable():
+		return false
+	if reclaim_paused:
+		reclaim_paused = false
+		status_message = "Reclamation resumed."
+	else:
+		reclaim_paused = true
+		cook_auto_started_reclaim = false
+		_cook_auto_reclaim_alert_left = 0.0
+		status_message = "Reclamation paused; the Cook will not restart it."
+	status_message_left = 4.0
+	return true
+
+
+# Option (a): no Cook build while anyone is critical: air at the critical line, or a living
+# resident at or below COOK_AUTO_MEDICAL_HP health while not starving (starvation is what the
+# food step treats, so it does not count as a medical emergency).
+const COOK_AUTO_MEDICAL_HP := 50.0
+
+
+func cook_auto_crew_critical() -> bool:
+	if oxygen_system.is_critical():
+		return true
+	for resident in residents:
+		if resident.alive and resident.needs.food > 0.0 and resident.needs.health <= COOK_AUTO_MEDICAL_HP:
+			return true
+	return false
+
+
+# Before the seal the Cook acts only for a resident already at 0 food, and still holds the patch reserve.
+func _cook_auto_anyone_starving() -> bool:
+	for resident in residents:
+		if resident.alive and resident.needs.food <= 0.0:
+			return true
+	return false
+
+
+func alive_count_is_zero() -> bool:
+	return get_alive_count() <= 0
+
+
+# One alert line while the Cook's own blueprint is still unbuilt; "" otherwise.
+func cook_auto_alert() -> String:
+	if ended:
+		return ""
+	for building_id in cook_auto_building_ids:
+		var building := get_building_by_id(building_id)
+		if building != null and not building.complete:
+			return COOK_AUTO_ALERT % building.get_display_name()
+	return ""
+
+
+func _cook_auto_note_cancel(building: VaultBuilding) -> void:
+	if building != null and cook_auto_building_ids.has(building.building_id):
+		cook_auto_vetoed[building.kind] = true
+		cook_auto_building_ids.erase(building.building_id)
+		cook_auto_building_id = cook_auto_building_ids[0] if not cook_auto_building_ids.is_empty() else -1
 
 
 # Feast (north star slice 5): surplus meals become morale. At each keep-running day rollover, with

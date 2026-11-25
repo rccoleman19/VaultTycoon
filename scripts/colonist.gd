@@ -29,6 +29,8 @@ const TRAIT_EFFECTS := {
 	"PATCHER": "Patch +15%",
 }
 const TRAIT_SALT := 300
+# Stable JobSystem kinds, kept local to avoid a class-loading dependency cycle.
+const _HATCH_JOB_TYPES: Array[int] = [5, 6]
 
 var resident_id := 0
 var resident_name := "Resident"
@@ -65,6 +67,7 @@ var _path: Array[Vector2i] = []
 var _path_index := 0
 var _path_destination := Vector2i(-999, -999)
 var _occupancy_cell := Vector2i(-999, -999)
+var _loaded_hatch_continuation: Dictionary = {}
 var _recreation_effect_was_running := false
 # DARKNESS alert dwell (presentation only; mood uses the live cell). Not saved.
 var dark_alert_flagged := false
@@ -146,7 +149,41 @@ static func is_serialized_work_data_valid(data: Variant) -> bool:
 			for work_type: String in WORK_TYPES:
 				if permissions.has(work_type) and bool(permissions[work_type]) != (int(priorities[work_type]) != PRIORITY_DISABLED):
 					return false
-	return is_serialized_manual_order_data_valid(saved)
+	return is_serialized_manual_order_data_valid(saved) and is_serialized_hatch_continuation_valid(saved)
+
+
+static func is_serialized_hatch_continuation_valid(data: Dictionary) -> bool:
+	# Older saves rebuild their hatch route lazily, as before.
+	if not data.has("hatch_continuation"):
+		return true
+	var continuation: Variant = data.hatch_continuation
+	if not continuation is Dictionary or not bool(data.get("alive", true)) or bool(data.get("drafted", false)):
+		return false
+	if not _is_integer_in_range(continuation.get("job_type"), _HATCH_JOB_TYPES[0], _HATCH_JOB_TYPES[1]):
+		return false
+	if typeof(continuation.get("job_phase")) != TYPE_STRING or typeof(continuation.get("state")) != TYPE_STRING:
+		return false
+	if continuation.job_phase not in (["pickup", "target"] if int(continuation.job_type) == _HATCH_JOB_TYPES[0] else ["target"]):
+		return false
+	var path: Variant = continuation.get("path")
+	if not path is Array or path.size() > MapGrid.WIDTH * MapGrid.HEIGHT:
+		return false
+	for cell: Variant in path:
+		if not _is_serialized_route_cell(cell):
+			return false
+	return (
+		_is_integer_in_range(continuation.get("path_index"), 0, path.size())
+		and _is_serialized_route_cell(continuation.get("path_destination"), true)
+		and _is_serialized_route_cell(continuation.get("occupancy_cell"), true)
+	)
+
+
+static func _is_serialized_route_cell(value: Variant, allow_unset := false) -> bool:
+	if not value is Array or value.size() != 2:
+		return false
+	if allow_unset and _is_integer_in_range(value[0], -999, -999) and _is_integer_in_range(value[1], -999, -999):
+		return true
+	return _is_integer_in_range(value[0], 0, MapGrid.WIDTH - 1) and _is_integer_in_range(value[1], 0, MapGrid.HEIGHT - 1)
 
 
 static func is_serialized_manual_order_data_valid(data: Variant) -> bool:
@@ -409,7 +446,7 @@ func serialize() -> Dictionary:
 	if has_manual_move_order():
 		saved_manual_destination = [manual_destination.x, manual_destination.y]
 	var saved_forced_order: Dictionary = forced_order.duplicate(true) if is_forced_job else {}
-	return {
+	var saved := {
 		"id": resident_id,
 		"name": resident_name,
 		"position": [position.x, position.y],
@@ -430,6 +467,20 @@ func serialize() -> Dictionary:
 		"manual_destination": saved_manual_destination,
 		"forced_order": saved_forced_order,
 	}
+	if alive and not drafted and current_job_id >= 0 and current_job_type in _HATCH_JOB_TYPES:
+		var saved_path: Array = []
+		for cell: Vector2i in _path:
+			saved_path.append([cell.x, cell.y])
+		saved.hatch_continuation = {
+			"job_type": current_job_type,
+			"job_phase": job_phase,
+			"state": state,
+			"path": saved_path,
+			"path_index": _path_index,
+			"path_destination": [_path_destination.x, _path_destination.y],
+			"occupancy_cell": [_occupancy_cell.x, _occupancy_cell.y],
+		}
+	return saved
 
 
 func deserialize(data: Dictionary) -> void:
@@ -482,7 +533,30 @@ func deserialize(data: Dictionary) -> void:
 	if alive and not drafted and saved_forced_order is Dictionary and not saved_forced_order.is_empty():
 		is_forced_job = true
 		forced_order = saved_forced_order.duplicate(true)
+	_loaded_hatch_continuation = data.get("hatch_continuation", {}).duplicate(true)
+	if not _loaded_hatch_continuation.is_empty():
+		# Keep the occupied hex through job rebuilding and any get_cell() calls.
+		# Position alone cannot recover this latch halfway across a hex edge.
+		var occupied: Array = _loaded_hatch_continuation.occupancy_cell
+		_occupancy_cell = Vector2i(int(occupied[0]), int(occupied[1]))
 	queue_redraw()
+
+
+func restore_hatch_continuation() -> void:
+	var continuation := _loaded_hatch_continuation
+	_loaded_hatch_continuation = {}
+	if continuation.is_empty() or current_job_id < 0 or current_job_type != int(continuation.job_type):
+		return
+	# Runtime job IDs and reservations were reconstructed first. Only the live
+	# responder's movement and readout continue from the saved hatch assignment.
+	job_phase = str(continuation.job_phase)
+	state = str(continuation.state)
+	_path.clear()
+	for cell: Array in continuation.path:
+		_path.append(Vector2i(int(cell[0]), int(cell[1])))
+	_path_index = int(continuation.path_index)
+	var destination: Array = continuation.path_destination
+	_path_destination = Vector2i(int(destination[0]), int(destination[1]))
 
 
 func _apply_starting_work_priorities() -> void:

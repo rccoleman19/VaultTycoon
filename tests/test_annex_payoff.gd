@@ -29,6 +29,9 @@ func _running() -> VaultGame:
 	game.oxygen_system.oxygen = 100.0
 	game.step_simulation(1.0)
 	game.start_keep_running()
+	# This vault has no powered Air Recycler, so salvage-aware Next would lead with reclamation.
+	# The fixture is about the keep-running pointer: start it as already taken (no salvage paid).
+	game.reclaim_active = true
 	for resident: VaultResident in game.residents:
 		resident.needs.food = 100.0
 		resident.needs.rest = 100.0
@@ -90,7 +93,7 @@ func _test_celebration() -> void:
 	_finish(game)
 	game.player_orders.refresh()
 	_assert_true(game.status_message.begins_with("ANNEX OPEN: Eko moves in"), "status toast: %s" % game.status_message)
-	_assert_true(game.player_orders.alert_label.text.contains("NEW CREW · EKO MOVES IN"), "alert names the arrival")
+	_assert_true("  ·  ".join(game.player_orders.all_alerts).contains("NEW CREW · EKO MOVES IN"), "alert names the arrival")
 	_assert_equal(game.player_orders.alert_label.get_theme_color("font_color"), Color("75d4b4"), "a lone welcome reads green")
 	_assert_true(game.player_orders.annex_box.visible, "the card stays as a stable marker")
 	_assert_equal(game.player_orders.annex_header.text, "ANNEX OPEN · 5 crew · vault stable", "stable header")
@@ -98,7 +101,7 @@ func _test_celebration() -> void:
 	_assert_equal(game.player_orders.objective_label.text, "Next: YOU enjoy a stable vault · THEY run all of it", "stable Next")
 	game.step_simulation(31.0)
 	game.player_orders.refresh()
-	_assert_false(game.player_orders.alert_label.text.contains("NEW CREW"), "the welcome fades after 30 s")
+	_assert_false("  ·  ".join(game.player_orders.all_alerts).contains("NEW CREW"), "the welcome fades after 30 s")
 	_dispose(game)
 
 

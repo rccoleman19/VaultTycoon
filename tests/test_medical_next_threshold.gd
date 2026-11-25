@@ -3,7 +3,7 @@ extends SceneTree
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
 const SEEK_HP := 95.0
 const JUST_ABOVE := 95.0001
-const DIG := ["Next: YOU mark rock [E] · THEY dig on Dig defaults", "dig", "DIG [E] designates rock. Undrafted crew auto-claim Dig (default rank 3). Draft is optional."]
+const DIG := ["Next: YOU place 1 bunk · THEY craft from Craft", "bed", "Place BUNK blueprints on carved floor. Undrafted Craft priority finishes them."]  # opening bunk is the honest DORMANT tip (OPENING_BUNKS=1)
 const PLACE := ["Next: YOU place a Med Bed · THEY treat", "medical", "Place a Med Bed so the injured can be treated."]
 const ENABLE := ["Next: YOU enable a Med Bed · THEY treat", "select", "Select a completed Med Bed and click ENABLE so the injured can be treated."]
 const FINISH := ["Next: YOU leave Haul + Craft on · THEY finish the Med Bed", "select", "Keep Haul + Craft above OFF so crew supply and finish the Med Bed blueprint."]
@@ -62,7 +62,8 @@ func _spawn_game() -> VaultGame:
 		resident.sleeping = false
 		resident.bed_id = -1
 		resident.medical_bed_id = -1
-	game.food_system.meals = game.get_alive_count()
+	# Isolate the HP boundary from food construction lead and its warning margin.
+	game.food_system.meals = 16
 	_assert_step(game, DIG)
 	return game
 
@@ -141,7 +142,9 @@ func _test_fallthrough() -> void:
 	var game := _spawn_game()
 	game.residents[0].needs.rest = 28.0
 	game.residents[0].needs.health = JUST_ABOVE
-	_assert_step(game, BUNKS)
+	# Opening bunk (DIG/PLACE_ONE) is the honest tip until one bunk exists; tired
+	# "place bunks" only appears after the opening bunk is satisfied.
+	_assert_step(game, DIG)
 	game.residents[0].needs.health = SEEK_HP
 	_assert_step(game, PLACE)
 	game.free()
@@ -197,7 +200,7 @@ func _test_stranded() -> void:
 	_assert_equal(bed.reserved_by, -1, "enabled bed remains free")
 	_assert_equal(resident.needs.health, 97.0, "97 HP does not heal passively")
 	game.player_orders.refresh()
-	_assert_equal(game.player_orders.alert_label.text.contains("INJURED 1"), true, "HUD still counts damage above seek threshold")
+	_assert_equal("  ·  ".join(game.player_orders.all_alerts).contains("INJURED 1"), true, "HUD still counts damage above seek threshold")
 	game.free()
 
 
@@ -207,6 +210,12 @@ func _test_food() -> void:
 	resident.needs.health = SEEK_HP
 	resident.needs.food = 35.0
 	game.food_system.meals = 0
+	# Other crew cover the pending food. This patient must not claim its Haul
+	# job, whose deliberate food-work priority would hide the admission gate.
+	game.set_work_priority(resident.resident_id, "haul", VaultResident.PRIORITY_DISABLED)
+	# Pending meals cover the food runway without being edible at this zero-time
+	# admission checkpoint. A distant pickup cannot finish in advance(0.0).
+	game.job_system.queue_meals(Vector2i(27, 19), 16)
 	_assert_step(game, PLACE)
 	var bed := _add_completed(game, VaultBuilding.Kind.MEDICAL_BED, resident.get_cell(game.map_grid))
 	game.job_system.advance(0.0)
